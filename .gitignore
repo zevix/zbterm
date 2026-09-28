@@ -1,3 +1,9 @@
 out/
 node_modules/
+renderer/vendor/
+*.tgz
 todo
+debug_main.log
+.cache/
+.project
+.pydevproject

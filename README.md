@@ -1,640 +1,672 @@
-# hello-pear-electron <a name="hello-pear-electron"></a>
+<p align="center">
+  <img src="renderer/logo.svg" width="300" title="ZBTerm">
+</p>
+<h1 align="center">ZBTerm</h1>
+<h3 align="center">Secure terminal recording, playback and peer-to-peer sharing</h3>
+<h3 align="center">built on the Pear/Electron stack</h3>
 
-> Pear Hello World for Electron with `pear-runtime`
+<p align="center">
+  <a href="https://vimeo.com/1209702239">
+  <img src="assets/flatpak-screenshot.png" title="Demo Video">
+  </a>
+</p>
 
-End-to-end boilerplate for embedding [pear-runtime][pear-runtime] into [Electron][electron] apps and deploying peer-to-peer application updates.
 
-- Peer-to-Peer Over-the-Air updates with update-restart
-- Embedded [bare][bare] runtime workers
-- Application storage management
-- Staged deployment pipeline with multisig production releases
+## Hilights
+- Interactive PTY-backed shells, with encrypted terminal output recorded to a
+  local session catalog and played back with a scrubber.
+- Peer-to-peer live sharing of a running terminal (host and one or more
+  viewers) over Hyperswarm, with per-link permission caps and optional relay
+  fallback for NAT traversal.
+- A localhost REST API for debugging and automation.
+
+ZBTerm uses [Hypercore](https://docs.pears.com/reference/building-blocks/hypercore/)/[Hyperbee](https://docs.pears.com/reference/building-blocks/hyperbee/) for encrypted session history
+storage and [Hyperswarm](https://docs.pears.com/reference/building-blocks/hyperswarm/) for real-time peer-to-peer communication,
+demonstrating the power, extreme performance, simplicity and versatility of
+the Pear/Bare platform.
+
+Note: ZBTerm is not affiliated with Holepunch.to or pears.com
+
+For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+## Current version status
+
+### Implemented
+- Multiple profiles for sharing on the same machine (great for testing)
+- Multiple active sessions that can be switched between
+- Single-user invitation key (no approval required)
+- Multi-user invitation key (approval required; no real guarantee of viewer identity)
+- Keyboard sharing for all users — off by default, toggleable by the host
+- Time slider with activity indicators for going back in time
+- New viewers see the live view immediately; history downloads in the background with a visual indicator
+- Host can look back through history while viewers keep watching the live output
+- High-res mode for more frequent screen updates, togglable at any time
+- Encryption of data at rest and in transit
+- Ended sessions can be extended at any time by the host
+- Key rotation on user join and exit
+- Debugging and instrumentation REST server for e2e tests and live debugging
+
+### Half-baked / unexposed features
+- Role-based authorization (unused except for keyboard access)
+- Multi-device support (unused)
+- Headless relay service for cloud hosting — fallback for network configurations that aren't P2P-friendly
+
+### Future Roadmap
+
+Managed in Zeev's [private notes](anytype://object?objectId=bafyreia2xdux2xrhiftnqgpxaybeebohbqctnu3f5u5d45xxb24lf6gd3m&spaceId=bafyreiddaaox2eyyzic63ltzskr6jo2yxrprxysqvea6utb4foiqaqvjpm.33b9b642zrs9q)
+
+<img src="roadmap_pixelated.png" alt="roadmap preview" height="80">
 
 ## Table of Contents
 
-- [OS Support](#os-support)
-- [Requirements](#requirements)
-- [Terminology](#terminology)
-- [Development](#development)
-  - [Install](#install)
-  - [Start](#start)
-- [Architecture](#architecture)
-  - [Updates](#updates)
-  - [Storage](#storage)
-  - [Workers](#workers)
-- [Peer-to-Peer Deployments](#deployments)
-- [CI Configuration](#ci-configuration)
-- [Store Submissions](#store-submissions)
-  - [Flathub](#flathub)
-  - [Snap](#snap)
-- [Scripts](#scripts)
-- [Troubleshooting](#troubleshooting)
+- [Install & Run](#install-run)
+  - [Install from npm](#install-npm)
+  - [Linux desktop integration](#install-desktop)
+  - [Updating](#install-update)
+  - [Prerequisites (Linux)](#install-prereqs)
+  - [Run from a clone (development)](#install-dev)
+- [Storage](#storage)
+- [Sharing](#sharing)
+  - [Link Options](#link-options)
+  - [Permission Caps](#permission-caps)
+  - [NAT Traversal & Relay Fallback](#relay-fallback)
+  - [Freenet](#freenet)
+- [Setting Up a Relay (Headless VPS)](#relay-setup)
+  - [1. Run the relay](#relay-run)
+  - [2. Publish it to the registry](#relay-publish)
+  - [3. Firewall](#relay-firewall)
+  - [Rotating or replacing the relay](#relay-rotate)
+  - [Abuse considerations](#relay-abuse)
+- [Debug Server](#debug-server)
+  - [Endpoints](#debug-endpoints)
+- [Environment Variables](#env-vars)
+- [CLI Flags](#cli-flags)
 
-## OS Support <a name="os-support"></a>
+## Install & Run <a name="install-run"></a>
 
-- macOS
-- Linux
-- Windows
-
-## Requirements <a name="requirements"></a>
-
-- `npm` via [Node.js][nodejs]
-- [`pear`][pear-docs] - `npx pear`
-
-## Terminology <a name="terminology"></a>
-
-- **OTA** - Over-the-Air. Data delivery without manual intervention
-- **OTA Updates** - Direct software updates to running applications without manual reinstallation
-- **P2P** - Peer-to-Peer. Direct point-to-point communication between machines/devices without central servers
-- **application drive** - the [Hyperdrive][hyperdrive] behind a Pear application
-- **deployment folder** - the build directory output by `pear build` which is then staged
-- **multisig** - a co-signing protocol requiring a quorum of signers before writes can be committed. This cryptographically binds project integrity to collective sign-off
-- **pear link** - a [link format][pear-link-format] for addressing peer-to-peer applications
-- **quorum** - the minimum number of signers needed to commit a multisig write
-- **release lines** - parallel deployment streams at different stability levels
-- **seeding** - exposing a drive to peers for discovery and download
-- **vendor signing** - signing distributables with OS-level certificates so they run on other machines without quarantine e.g. Apple notarization, Windows code signing
-- **versioned link** - a pear link of the form `pear://<fork>.<length>.<key>` where fork, length and key correspond to [core.fork][hypercore-fork], [core.length][hypercore-length], and [core.key][hypercore-key] of the [Hypercore][hypercore] behind the [Hyperdrive][hyperdrive] behind the Pear application
-
-## Development <a name="development"></a>
-
-### Install <a name="install"></a>
-
-On Windows and Linux:
+### Install from npm <a name="install-npm"></a>
 
 ```sh
-npm run install:all
+npm install -g zbterm
+zbterm                     # start the app
+zbterm --help              # CLI flags
+zbterm doctor              # check this machine can actually run it
 ```
 
-On macOS:
+`zbterm doctor` is the first thing to run if anything looks wrong: it reports
+Node, the Electron binary, `node-pty`, the Bare sidecar prebuild, the data
+directory, `$DISPLAY` and the Chromium sandbox, and exits non-zero when
+something is genuinely broken. Add `--json` for machine-readable output.
+
+#### Linux desktop integration <a name="install-desktop"></a>
+
+An npm install does not register a desktop entry or a URL handler by itself.
+On Linux, run this once after installing — otherwise ZBTerm will not show up
+in your launcher and `zbterm://` share links will not open:
 
 ```sh
-npm run install:mac
+zbterm install-desktop     # .desktop entry, icons, zbterm:// handler
+zbterm uninstall-desktop   # remove all of the above
 ```
 
-### Start <a name="start"></a>
-
-Start app in development mode:
+#### Updating <a name="install-update"></a>
 
 ```sh
+npm install -g zbterm@latest   # or:
+zbterm update                  # prints the same command after checking npm
+```
+
+npm installs **do not use the Pear OTA updater**. The OTA path only applies to
+Pear-distributed builds; an npm install checks the npm registry for a newer
+version and tells you to run `npm install -g zbterm@latest`. Installers built
+with electron-forge (deb/rpm/AppImage/flatpak/snap/dmg/msix) are a third,
+separate distribution channel and are unaffected by either.
+
+> **2026-09-19 — the Pear OTA updater is gone (`D-08`).** No build of ZBTerm has a Pear OTA
+> updater any more, so there is no "Pear-distributed" update path to contrast with. An npm
+> install still checks the npm registry and tells you to run `npm install -g zbterm@latest`,
+> exactly as described above. An installer build has no update channel: install a newer package
+> to update.
+
+#### Prerequisites (Linux) <a name="install-prereqs"></a>
+
+`node-pty` is a native module and is compiled from source when no prebuilt
+binary matches your platform, so a global install needs a build toolchain:
+
+- **python3**
+- **make**
+- a C++ toolchain — `build-essential` on Debian/Ubuntu,
+  `@development-tools` / `gcc-c++` on Fedora/RHEL, `base-devel` on Arch
+
+The install also downloads an **Electron runtime of roughly 150 MB**, so the
+first `npm install -g zbterm` is not quick. Behind a proxy or on a restricted
+network, point that download at a mirror:
+
+```sh
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install -g zbterm
+```
+
+If the Electron download was skipped or interrupted, `zbterm doctor` says so
+and `npm rebuild electron` fixes it. If Electron is already installed
+elsewhere, set `ELECTRON_OVERRIDE_DIST_PATH` to the directory holding the
+binary.
+
+### Run from a clone (development) <a name="install-dev"></a>
+
+```sh
+npm install
+npm test
 npm start
 ```
 
-When running locally, updates are turned off to avoid the built application being swapped from local development when there is an update.
+Development builds keep the Pear OTA updater wiring intact, but `npm start`
+passes `--no-updates` by default — see the development appendix in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) if you need to work with
+staged/provisioned/multisig builds.
 
-To enable updates for testing update flow in local development use
+> **2026-09-19 (`D-08`).** There is no Pear OTA updater wiring left in any build, development
+> ones included. `npm start` still passes `--no-updates`; the flag is accepted and has no effect.
 
-```sh
-npm start -- --updates
-```
-
-## Architecture
-
-The application architecture is tightly scoped to handling P2P OTA Updates, running embedded [Bare][bare] workers and facilitating [Peer-to-Peer Deployment](#deployments) flows.
-
-### Updates <a name="updates"></a>
-
-An update occurs when a seeded application drive is written to.
-
-When an update occurs, the instance will emit two events `updating` and `updated`.
-
-```js
-pear.updater.on('updating', () => {
-  // update view to indicate updating in progress
-})
-```
-
-```js
-pear.updater.on('updated', () => {
-  // update view to indicate application updated
-})
-```
-
-#### Disabling Updates <a name="disabling-updates"></a>
-
-Pass `--no-updates` flag to disable updates per application run.
-
-To disable updates as an application default, ensure that the package.json is spread into the options (`{...pkg, ...}`) and set the `updates` field to `false`:
-
-```json
-{
-  "version": "1.0.0",
-  "updates": false
-  ...
-}
-```
-
-#### Runtime Update Flow <a name="runtime-update-flow"></a>
-
-A running application checks for updates on startup and when its application drive receives new data. After the first 60 seconds of startup, detected updates are scheduled with a randomized delay of up to 1 hour by default to spread update traffic across peers. This can be configured with the updater's `delay` option.
-
-A running application will receive `updating` and `updated` events, which are sent to the electron renderer
-process via `bridge.onPearEvent()`. After receiving the `updated` event, the `bridge.applyUpdate()` method is called. This swaps the current application path with a path to the updated application build and then removes the old application from disk. So once the application is restarted, the application path contains the new build therefore the updated application is executed on restart.
-
-### Storage <a name="storage"></a>
-
-A storage dir is used for persistence of peer-to-peer/local data. In development this defaults to `<tmpdir>/pear/<name>`.
-
-In Production this is per OS:
-
-- Mac: `~/Library/Application Support/<name>`
-- Linux: `~/.config/<name>`
-- Windows: `%USERPROFILE%\AppData\Local\<name>`
-
-The `dir` option defines where peer-to-peer storage should be kept.
-
-The `pear.storage` property holds a path to application storage, this value should be passed as to [`Corestore`][corestore] as its `storage` argument.
-
-The `--storage` flag can be passed to use custom storage for multiple running instances. This allows for local end-to-end peer-to-peer flow.
-
-In development custom storage can be passed as so:
+If your headless Linux environment has GPU issues:
 
 ```sh
-npm start -- --storage /tmp/custom/storage
+npm start -- --disable-gpu
 ```
 
-#### Setting Storage for Additional Instances <a name="additional-instances"></a>
+**Install scripts and `allowScripts`.** `package.json` pins
+`allowScripts: { "electron@40.10.1": true }` while npm resolves a newer patch
+release of Electron, so every `npm install` prints an
+`allow-scripts … not yet covered by allowScripts` warning about
+`electron@40.10.x` and `node-pty`. That warning is expected. What actually
+lets the Electron and `node-pty` install scripts run is the **repo-local
+`.npmrc`**, which sets `ignore-scripts=false` — so installing this repo from a
+different working directory silently skips the Electron binary download and
+leaves you with a `zbterm` that cannot start. Always run `npm install` from
+the repo root.
 
-The storage dir holds a [`Corestore`][corestore] and may hold application corestores. Running an application with a different storage location means using a separate `Corestore`, just like an app running on another machine would be using a separate `Corestore`.
-
-An additional application instance can be run with the following (per OS).
-
-##### macOS <a name="additional-instances-macos"></a>
+**Changing the logo.** [`renderer/logo-ascii.js`](renderer/logo-ascii.js) is the
+single source of truth for the mark: a grid of cells (`.` background, `-`
+scanline grey, `G` accent green) plus the palette in `STARTUP_LOGO_COLORS`. The
+terminal splash draws it directly. Edit it, then run:
 
 ```sh
-open -n <name>.app --args --storage /tmp/custom/storage
+npm run icons
 ```
 
-##### Linux <a name="additional-instances-linux"></a>
+That regenerates every other form of the logo — the vector
+[`renderer/logo.svg`](renderer/logo.svg), and from it the Linux hicolor PNGs in
+`build/icon/`, the 512px master `build/icon.png`, the Windows `build/icon.ico`
+and the macOS `build/icon.icns`. None of those are edited by hand. Palette
+colours are read out of `STARTUP_LOGO_COLORS` rather than hardcoded, so a
+recoloured logo propagates on its own. `npm run logo` prints the result in your
+terminal. Building the `.ico` needs ImageMagick (`magick`); everything else
+needs only the `sharp` devDependency.
+
+## Storage <a name="storage"></a>
+
+The app stores local data under Electron `userData`:
+
+- `zbterm/corestore/` — per-session encrypted Hypercore logs and metadata
+- `zbterm/catalog/` — local session catalog
+- `zbterm/snapshots/<sessionId>/` — encrypted local playback snapshots
+
+Use `--profile <id-or-name>` / `--profile-path <dir>` (or `ZBTERM_PROFILE` /
+`ZBTERM_PROFILE_PATH`) to run multiple isolated profiles side by side, or
+`--storage <dir>` to point `pear-runtime` at custom storage entirely.
+
+> **2026-09-19 (`D-08`).** `pear-runtime` is no longer a dependency. `--storage <dir>` still
+> names ZBTerm's own data root (`electron/main.js::pearDataRoot`).
+
+Only one instance can be opened per profile, when starting the app where another instance exist and not specifying a profile, the app will prompt you to select or create a profile
+
+## Sharing <a name="sharing"></a>
+  
+A host creates a share link for a live session (`share.createLink`); a viewer
+joins it (`share.join`). Both sides connect over a Hyperswarm topic derived
+from the link, dial the host's DHT public key directly, and speak an
+encrypted control protocol for join requests, approvals, terminal data, and
+input. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how sharing
+works internally.
+
+### Link Options <a name="link-options"></a>
+
+Passed to `share.createLink(sessionId, opts)` (and exposed via the debug
+server's `POST /sessions/:sessionId/share`):
+
+| Option        | Values                    | Default                    | Meaning |
+| ------------- | ------------------------- | --------------------------- | ------- |
+| `type`        | `'single'` \| `'group'`   | `'single'`                  | `single` links are consumed after one viewer joins; `group` links allow multiple concurrent viewers. |
+| `maxViewers`  | integer                   | 1 (`single`) / 8 (`group`)  | Cap on concurrent viewers for a `group` link. |
+| `autoJoin`    | boolean                   | `true`                      | Whether a join request is auto-approved or requires host approval (see `share:approval-pending`). |
+| `caps`        | bitmask (see below)       | derived from other options  | Explicit permission bitmask; overrides the individual flags below if set. |
+| `sendInput`/`input` | boolean             | `true`                      | Whether the viewer is granted `SEND_INPUT`. |
+| `quickCatchup`| boolean                   | `true`                      | Whether the viewer gets a fast-forwarded backlog on join. |
+| `admin`       | boolean                   | `false`                     | Grants `ADMIN` cap. |
+
+### Permission Caps <a name="permission-caps"></a>
+
+Permissions are a bitmask:
+
+| Cap            | Bit | Meaning |
+| -------------- | --- | ------- |
+| `VIEW_LIVE`    | `1 << 0` | Can view the live terminal stream. |
+| `READ_HISTORY` | `1 << 1` | Can read recorded history/backlog. |
+| `QUICK_CATCHUP`| `1 << 2` | Gets fast-forwarded backlog instead of full replay. |
+| `SEND_INPUT`   | `1 << 3` | Can send keystrokes to the shared session. |
+| `ADMIN`        | `1 << 4` | Administrative capability (e.g. approvals). |
+
+### NAT Traversal & Relay Fallback <a name="relay-fallback"></a>
+
+Direct connections use Hyperswarm/hyperDHT hole-punching, which fails when
+both peers sit behind the same NAT (e.g. two processes on the same home
+network or the same physical machine's VM) or otherwise can't punch through.
+For that case ZBTerm supports relaying the encrypted stream through a
+third, publicly reachable box:
+
+- The viewer's swarm waits `ZBTERM_RELAY_FALLBACK_MS` (default 5000ms) on a
+  pure direct/hole-punch attempt before also offering a relay in parallel.
+  Once offered, hyperdht races the relay and the punch concurrently and
+  transparently swaps the live connection over to the direct path if the
+  punch succeeds later — the relay is a fallback path, not a replacement.
+- The relay's public key is *not* configured by the user. It's discovered
+  automatically via a DHT mutable record — the Holepunch DHT's native
+  equivalent of a DNS TXT record. The app ships with a fixed, hardcoded
+  lookup address (not a secret) and resolves the current relay's key from it
+  at startup, refreshing every 15 minutes.
+- `ZBTERM_RELAY_PUBLIC_KEY` is an escape hatch: set it to skip the registry
+  lookup and pin a specific relay (e.g. your own private one instead of the
+  default).
+
+Check `share.diagnostics()` (or `GET /share/diagnostics` on the debug server)
+for `relayPublicKey` / `relayFallbackMs` to confirm what's resolved, plus
+per-swarm connection/punch/relay stats for troubleshooting stuck joins.
+
+### Freenet <a name="freenet"></a>
+
+The default package also carries an experimental second network, Freenet. The share dialog lists
+it beside Pear when more than one network is built in; pick it there. A Freenet share finds its
+viewer through Freenet contracts, then connects the two machines directly over WebRTC.
+
+ZBTerm does not install, start or update a Freenet node (`D-12`): it needs one already running
+on the same machine, with its WebSocket API at `ws://127.0.0.1:7509` (the node's default; see
+[freenet.org](https://freenet.org)). Without one, the share dialog shows Freenet as unavailable
+with the reason "no Freenet node at ws://127.0.0.1:7509". Both host and viewer need their own node.
+
+The direct connection asks STUN servers for each side's public address: by default
+`stun:stun.l.google.com:19302` and `stun:stun.cloudflare.com:3478` (`D-11`). **Using Freenet
+sharing discloses your IP address to that STUN provider.** Replace the list with the settings
+menu's "STUN/TURN servers" field, `--ice-servers` or `ZBTERM_ICE_SERVERS` (comma-separated ICE
+URLs; `turn:user:secret@host:port` for a TURN relay of your own), or turn STUN off with
+`--ice-servers ''` (then only machines on one network connect). ZBTerm runs no TURN server;
+when neither side can reach the other directly, the join fails with "Could not connect directly
+to the host (ICE failed)".
+
+## Setting Up a Relay (Headless VPS) <a name="relay-setup"></a>
+
+You don't need to run a relay to use ZBTerm — the app resolves a default
+one automatically. Run your own if you want a private fallback path instead
+of the shared default. It needs to run on a box with a real public IP (a
+VPS, not behind NAT) — a machine behind a router/CGNAT can't usefully act as
+a relay for others.
+
+### 1. Run the relay <a name="relay-run"></a>
+
+`relay/server.js` is plain Node (no Electron), so you don't need a full app
+checkout on the VPS. Either run it from a clone:
 
 ```sh
-./<name>.AppImage --storage /tmp/custom/storage
+npm install
+node relay/server.js
 ```
 
-##### Windows <a name="additional-instances-windows"></a>
+...or build a standalone executable (bundles its own Node runtime) and copy
+just that one file to the box:
 
 ```sh
-.\<name>.exe --storage C:\tmp\custom\storage
+npm run build:relay              # this host's platform/arch
+npm run build:relay -- --all     # linux/macos/win, x64 + arm64
+npm run build:relay -- linux-x64 win-x64   # specific targets
 ```
 
-### Workers <a name="workers"></a>
+Output goes to `out/relay/zbterm-relay-<version>-<platform>-<arch>` (e.g.
+`zbterm-relay-1.0.19-linux-x64`), plus a matching
+`zbterm-relay-registry-publish-<version>-<platform>-<arch>` for the
+[registry publisher](#relay-publish) below. Each is a single self-contained
+binary — no `node`, no `node_modules` needed on the target machine.
 
-The idea is to put application peer-to-peer code into a main worker that then acts as a local backend for the application view layer.
+With no `ZBTERM_RELAY_SEED` set, it generates one and prints it once:
 
-```js
-const IPC = pear.run('./workers/main.js', [pear.storage])
-IPC.on('data', (data) => {
-  console.log('data from worker', data)
-})
-IPC.write('hello')
+```
+No ZBTERM_RELAY_SEED set - generated a new one:
+  ZBTERM_RELAY_SEED=<64 hex chars>
+ZBTerm relay listening on UDP port 49737
+  ZBTERM_RELAY_PUBLIC_KEY=<64 hex chars>
 ```
 
-The `workers/main.js` would then be executed with an embedded Bare runtime.
+Save `ZBTERM_RELAY_SEED` and pass it on every restart — it's the relay's
+identity; without it, the relay gets a new public key each restart. Keep the
+process running under systemd/pm2/similar.
 
-The other side of the IPC stream can be accessed inside the worker as `Bare.IPC`.
+Relevant env vars (all optional):
 
-Note how `pear.storage` is passed in as the first argument, this can be accessed via `Bare.argv[2]`.
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `ZBTERM_RELAY_SEED` | random, printed once | 32-byte hex seed for the relay's identity keypair. |
+| `ZBTERM_RELAY_PORT` | `49737` | Fixed UDP port to bind — pin this so you have one deterministic port for the firewall rule. |
+| `ZBTERM_RELAY_MAX_SESSIONS` | `64` | Global cap on concurrent accepted connections. |
+| `ZBTERM_RELAY_MAX_SESSIONS_PER_PEER` | `4` | Cap on concurrent sessions from a single remote identity. |
+| `ZBTERM_RELAY_MAX_SESSION_MS` | `21600000` (6h) | Force-closes any single relayed session past this duration. |
 
-```js
-const Corestore = require('corestore')
-const storage = Bare.argv[2]
+The relay logs accept/reject/timeout events and a periodic stats summary
+(active sessions, matched/pending pairings, active streams) every 5 minutes.
+It never sees decrypted terminal data — it only forwards the already
+noise-encrypted stream between two peers.
 
-Bare.IPC.on('data', (data) => console.log(data.toString()))
+### 2. Publish it to the registry <a name="relay-publish"></a>
 
-Bare.IPC.write('Hello from worker')
-
-const corestore = new Corestore(storage)
-//.. do more with corestore..
-```
-
-## Peer-to-Peer Deployments <a name="deployments"></a>
-
-Use the [`pear`][pear-docs] CLI to deploy applications.
-
-The full release flow — stage, provision, and multisig — plus the Foundational Steps, release lines, and per-OS build/signing details now live in the Pear docs:
-
-- [Deploy your application](https://docs.pears.com/how-to/operate-an-app/manual-deployment/deployment) — the eight Foundational Steps, command by command
-- [Release pipeline](https://docs.pears.com/explanation/deployment-releasing-apps-p2p) — why stage, provision, and multisig exist and how they chain together
-- [Build desktop distributables](https://docs.pears.com/how-to/operate-an-app/build-and-package/build-desktop-distributables) — macOS, Windows, and Linux signing and notarization
-
-The Foundational Steps bootstrap the deployment and then feed into the repeating release cycle:
-
-```mermaid
-graph TD
-    subgraph Link Setup
-        T(0. Touch & Seed) --> U(1. Set upgrade link)
-    end
-
-    U -.-> V
-
-    V(2. Version) --> Make(3. Make Distributables)
-    Make --> Build(4. Build Deployment Directory)
-    Build --> Stage(5. Stage)
-    Stage -->|iterate| V
-    Stage -->|stable| Prov(6. Provision)
-    Prov -->|assessed| Req(7d. Prepare Request)
-    Req --> Sign(7e. Sign)
-    Sign --> Verify(7f. Verify)
-    Verify --> Commit(7g. Commit)
-    Commit --> Live[Production Live]
-    Live -->|next release| V
-
-    K(7a. Create Signing Keys) --> C(7b. Create Multisig Config)
-    Prov -->|setup| C
-    C --> L(7c. Set upgrade to Multisig Link)
-    L --> Req
-```
-
-## CI Configuration <a name="ci-configuration"></a>
-
-Create a GitHub environment (Settings -> Environments) named `release`. Run the `Build Release` workflow to build in CI. This workflow requires these secrets for signed builds:
-
-| Secret                    | Platform | Notes                                                       |
-| ------------------------- | -------- | ----------------------------------------------------------- |
-| `CERTIFICATE_P12`         | `darwin` | Base64 export of Developer ID Application `.p12`            |
-| `CERTIFICATE_PASSWORD`    | `darwin` | Password used to export the `.p12`                          |
-| `MAC_CODESIGN_IDENTITY`   | `darwin` | e.g. `Developer ID Application: Name (TEAMID)`              |
-| `APPLE_ID`                | `darwin` | Apple Developer account email                               |
-| `APPLE_PASSWORD`          | `darwin` | App-specific password (not the account password)            |
-| `APPLE_TEAM_ID`           | `darwin` | Membership details at <https://developer.apple.com/account> |
-| `WINDOWS_CERT_PFX_BASE64` | `win32`  | Base64 export of Windows `.pfx`                             |
-| `WINDOWS_CERT_PASSWORD`   | `win32`  | Password for the Windows `.pfx`                             |
-
-- macOS signing requires an [Apple Developer Program](https://developer.apple.com) membership.
-- Windows certificate 'subject' must match the `Publisher` in [AppxManifest.xml](build/AppxManifest.xml).
-- Linux builds are not signed, no configuration needed.
-
-## Store Submissions <a name="store-submissions"></a>
-
-Applications built from this template can also be distributed through platform-specific application stores.
-
-### Flathub <a name="flathub"></a>
-
-Flathub packages applications as Flatpaks. This section covers preparing a Flatpak manifest and submitting releases for review.
-
-Fork the [flathub repository](https://github.com/flathub/flathub) in your GitHub organization, clone it and create a branch targeting the `new-pr` branch of the repository:
+For ZBTerm clients to discover your relay automatically, publish its
+public key to the DHT registry record clients look up:
 
 ```sh
-$ git clone git@github.com:<org>/flathub.git
-$ cd flathub
-$ git checkout -b my-app-submission -t new-pr
+ZBTERM_REGISTRY_SEED=<registry-secret> node relay/registry-publish.js <relay-public-key-from-step-1>
 ```
 
-Create these files in the flathub directory:
+`ZBTERM_REGISTRY_SEED` is the secret that controls what the registry
+record points at — treat it like a password, never commit it, and don't put
+it in the app. It's separate from `ZBTERM_RELAY_SEED`. The script
+re-publishes every 20 minutes (DHT-stored records aren't permanent) and,
+on restart, reads back the current `seq` before continuing, so a restart
+doesn't get shadowed by a stale higher-seq record. Keep it running alongside
+`relay/server.js`.
 
-- metainfo file using the [appstream web form](https://www.freedesktop.org/software/appstream/metainfocreator/#/), like [`com.pears.HelloPear.metainfo.xml`](./flatpak/com.pears.HelloPear.metainfo.xml)
-- Flatpak YAML file, like [`com.pears.HelloPear.yml`](flatpak/com.pears.HelloPear.yml)
+If you'd rather not touch the shared default registry at all, skip this step
+and instead set `ZBTERM_RELAY_PUBLIC_KEY` directly on your ZBTerm
+host/viewer processes, pointing at your relay's public key from step 1.
 
-#### Testing
+### 3. Firewall <a name="relay-firewall"></a>
 
-Install the Flatpak tools:
+Only `relay/server.js` needs anything opened — it's the one process in this
+setup that must be dialable from the internet:
+
+- Open **inbound UDP** on the port from step 1 (`49737` by default) on the
+  VPS's OS firewall (`ufw`/`iptables`/`firewalld`).
+- If there's a separate cloud security-group layer (AWS/GCP/DigitalOcean/
+  Hetzner console etc.), open the same UDP port there too — it's a different
+  firewall from the OS one.
+
+`relay/registry-publish.js` needs **no firewall changes** — it only makes
+outbound DHT queries, like any regular ZBTerm client.
+
+### Rotating or replacing the relay <a name="relay-rotate"></a>
+
+Run a new `relay/server.js` with a new seed, then re-run
+`registry-publish.js` with the new public key (same `ZBTERM_REGISTRY_SEED`
+as before — that's what lets you point the registry at a different relay
+without shipping an app update). Clients pick up the change on their next
+15-minute refresh.
+
+### Abuse considerations <a name="relay-abuse"></a>
+
+The relay's public key is not a secret — anyone who reads the app source or
+watches DHT traffic can find it (either the default one, or yours if you
+run your own). The underlying `blind-relay` protocol pairs any two peers
+that present a matching token; it has no concept of "is this a ZBTerm
+client" by itself. `relay/server.js`'s `ZBTERM_RELAY_MAX_SESSIONS*` /
+`ZBTERM_RELAY_MAX_SESSION_MS` caps bound the worst case (how many
+connections, from how many identities, for how long) and log activity, but
+they don't prevent unrelated use of your relay — that would need a
+capability-ticket system tying relay usage to genuine ZBTerm invites,
+which isn't implemented yet. If you're running a relay for wider-than-personal
+use, keep an eye on the stats log.
+
+## Debug Server <a name="debug-server"></a>
+
+For local automation and debugging, start a localhost REST API with:
 
 ```sh
-$ sudo apt install flatpak
-$ flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-$ flatpak install flathub org.flatpak.Builder
+npm start -- --debug-server
 ```
 
-In the project directory, [build](https://docs.pears.com/how-to/operate-an-app/build-and-package/build-desktop-distributables#linux) the app and serve the generated Flatpak artifacts over HTTP:
+Listens on `http://127.0.0.1:17077` by default (`--debug-server-port <port>`
+or `ZBTERM_DEBUG_SERVER_PORT` to change it). All routes except a few
+renderer/popup ones require the engine to be initialized.
 
 ```sh
-$ python3 -m http.server --directory out/make/
+curl -s -X POST http://127.0.0.1:17077/sessions \
+  -H 'content-type: application/json' \
+  -d '{"name":"debug shell","cols":100,"rows":30}'
+
+curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
+  -H 'content-type: application/json' \
+  -d '{"text":"pwd","enter":true}'
 ```
 
-In the `flatpak` directory, build and install the Flatpak:
+### Endpoints <a name="debug-endpoints"></a>
+
+| Method & Path | Notes |
+| -------------- | ----- |
+| `GET /health` | Engine/renderer readiness, identity, popups. |
+| `GET /identity` | Local device identity. |
+| `GET /events` | Recent debug event log. |
+| `GET /renderer/terminal-display` | Renderer terminal rows, dimensions, and row visibility geometry. |
+| `GET /share/diagnostics` | Relay/swarm diagnostics — see [NAT Traversal & Relay Fallback](#relay-fallback). |
+| `GET /account/profile` \| `/account/devices` \| `/account/local-device` | Account/device info. |
+| `GET /sessions` | List sessions (`?query=`, `?activeOnly=true`). |
+| `POST /sessions` | Create a session (`name`, `cols`, `rows`). |
+| `GET /sessions/current` | Currently selected debug session. |
+| `POST /sessions/current/input` | Send input to the selected session. |
+| `GET /sessions/:sessionId` | Session summary. |
+| `POST /sessions/:sessionId/switch` | Select a session (without opening it live). |
+| `POST /sessions/:sessionId/live` | Open a session live (pauses playback if needed). |
+| `POST /sessions/:sessionId/extend` | Resize/extend a session. |
+| `POST /sessions/:sessionId/input` | Send input to a specific session. |
+| `POST /sessions/:sessionId/resize` | Resize (`cols`, `rows`). |
+| `POST /sessions/:sessionId/share` | Create a share link — see [Link Options](#link-options). |
+| `GET /sessions/:sessionId/shares` | List share links for a session. |
+| `DELETE /sessions/:sessionId/shares/:linkId` | Revoke a share link. |
+| `POST /sessions/:sessionId/approvals/:requestId/approve` \| `/deny` | Approve/deny a pending join request. |
+| `GET /sessions/:sessionId/stats` | Session stats. |
+| `POST /sessions/:sessionId/playback/open` \| `/seek` \| `/play` \| `/pause` \| `/step` | Playback controls. |
+| `POST /join` | Join a share link by URI (`{"uri": "zbterm://join/..."}`). |
+| `POST /invoke` | Call any `engine.invoke(method, args)` method directly, e.g. `{"method":"share.diagnostics"}`. |
+| `GET /popups` \| `POST /popups/:popupId/actions/:action` | Renderer popup inspection/control. |
+| `GET /renderer/layout` | Renderer layout snapshot. |
+| `GET /sessions/:sessionId/input/diagnostics` | Input pipeline diagnostics. |
+
+## Environment Variables <a name="env-vars"></a>
+
+| Variable | Used by | Meaning |
+| -------- | ------- | ------- |
+| `ZBTERM_PROFILE` | app | Profile id or name to open (same as `--profile`). |
+| `ZBTERM_PROFILE_PATH` | app | Explicit profile data directory (same as `--profile-path`). |
+| `ZBTERM_BACKEND` | app, Tabby plugin (archived 2026-09-19, see the note under this table) | Limit network sharing to one backend: `pear`, `freenet`, or `none` for a local-only run with no share or join (same as `--backend`, which wins). It only narrows what the build carries. Default: no limit. |
+| `ZBTERM_BUILD_BACKENDS` | `electron-forge package` / `make` (`forge.config.js`) | Build variant: which share backends the package carries. ~~`pear` (default), `freenet`, `pear,freenet` or `none`.~~ Corrected 2026-09-24 (`D-14`): `pear`, `freenet`, `pear,freenet` (default) or `none`; see the note under this table. An absent backend loses its `engine/backends/<id>/` directory and its own dependencies, and the package's `package.json` records the list as `zbtermBackends`. With `none` the app hides Share, Join and the keyboard-sharing button and answers a join link with a notice; recording and playback are unchanged. ~~`hyperswarm` and `hyperdht` still ship in every variant, because the OTA updater (`workers/main.js`, `pear-runtime`) uses them.~~ Corrected 2026-09-19 (`D-07`): only a variant with `pear` has the OTA updater; see the note under this table. An unknown value fails the build. |
+| `ZBTERM_FORGE_OUT_DIR` | `electron-forge package` / `make` (`forge.config.js`) | Directory the package is written to instead of `out/`, e.g. to build a variant without replacing the packages already in `out/`. Default: `out`. |
+| `ZBTERM_ICE_SERVERS` | app (main process) | STUN/TURN servers for Freenet's direct connections: comma-separated ICE URLs (`stun:host:port`, `turn:user:secret@host:port`); an empty value means none (host candidates only). `--ice-servers` wins over it, and a non-empty "STUN/TURN servers" setting wins over both. Default: `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478` (`D-11`). The STUN provider sees your IP address; see [Freenet](#freenet). |
+| `ZBTERM_INVITE_V2` | core (`engine/invite.js`) | `1` makes Pear share links use the v2 invite shape (`b`, `peer`, `route`) while keeping the v1 fields beside it. Default: off, so Pear links stay v1 and released builds can join them. A link for any other backend is always v2. Read each time a link is made. The core runs in a Bare worker whose environment is not reliably inherited from the app, so treat it as a development switch. |
+| `ZBTERM_ELECTRON_USER_DATA` | app | Custom Chromium/Electron user data dir. |
+| `ZBTERM_DEBUG` | app | `1` enables verbose packaged debug logging (same as `--debug`). |
+| `ZBTERM_DEBUG_SERVER` | app | `1` starts the debug REST API (same as `--debug-server`). |
+| `ZBTERM_DEBUG_SERVER_PORT` | app | Port for the debug REST API. |
+| `ZBTERM_DEVTOOLS` | app | `1` opens renderer devtools on startup (same as `--devtools`). |
+| `ZBTERM_RELAY_PUBLIC_KEY` | app (viewer/host) | Pin a specific relay instead of resolving one via the registry. |
+| `ZBTERM_RELAY_FALLBACK_MS` | app (viewer) | Delay before racing a relay connection alongside hole-punching. Default `5000`. |
+| `ZBTERM_RELAY_SEED` | `relay/server.js` | Relay's identity seed. |
+| `ZBTERM_RELAY_PORT` | `relay/server.js` | Fixed UDP port to bind. Default `49737`. |
+| `ZBTERM_RELAY_MAX_SESSIONS` | `relay/server.js` | Global concurrent session cap. Default `64`. |
+| `ZBTERM_RELAY_MAX_SESSIONS_PER_PEER` | `relay/server.js` | Per-identity concurrent session cap. Default `4`. |
+| `ZBTERM_RELAY_MAX_SESSION_MS` | `relay/server.js` | Max lifetime of a single relayed session. Default 6h. |
+| `ZBTERM_REGISTRY_SEED` | `relay/registry-publish.js` | Secret controlling the DHT registry record. |
+
+> **2026-09-19 — which builds have OTA updates (`D-07`).** Only a packaged build that carries
+> the Pear backend (`ZBTERM_BUILD_BACKENDS` with `pear`, which is the default) has the Pear OTA
+> updater. A `freenet` or `none` package ships no `workers/main.js`, `pear-runtime`,
+> `pear-runtime-updater`, `corestore`, `hyperswarm` or `hyperdht`; it runs exactly as with
+> `--no-updates`, logs one `[updater] updates unavailable: …` line at start, never shows the
+> update button, and has no replacement update channel: install a newer package to update. npm
+> installs are unchanged: they never used the OTA updater (see [Updating](#install-update)).
+
+> **2026-09-19 — no build has OTA updates (`D-08`, supersedes the note above).** The Pear OTA
+> updater was removed from every build, the default `pear` one included: `workers/main.js`,
+> `electron/updater-available.js`, `pear.json`, `package.json#upgrade` and the `pear-runtime` and
+> `corestore` dependencies are gone, and the `[updater] updates unavailable` line is no longer
+> logged. `ZBTERM_BUILD_BACKENDS` now decides only whether the package carries
+> `engine/backends/pear/` with `hyperswarm` and `hyperdht`. `--no-updates` is still accepted, for
+> existing launchers, and does nothing. The npm registry check is unchanged.
+
+> **2026-09-19 — the Tabby plugin is archived.** `tabby-plugin/` moved to
+> [`archive/tabby-plugin/`](archive/tabby-plugin/) and its plan and changelog to
+> `archive/tabby-plugin/docs/` (see [`archive/README.md`](archive/README.md)). It is not built,
+> tested, linted or packaged any more, so "Tabby plugin" as a consumer of `ZBTERM_BACKEND`
+> describes archived code. The variable's meaning for the app is unchanged.
+
+> **2026-09-28.** `archive/` was not carried into this repository (`Z1` of
+> `docs/projects/260928_zbterm-fork/`); the two links just above do not resolve here. The files
+> they named stay readable in the predecessor repository, frozen at its final commit `b856e15`
+> (see `docs/projects/README.md`).
+
+> **2026-09-24 — the Freenet development switch is gone (freenet-backend F3).** Its row, the
+> variable that made the Freenet **stub** report itself `available`, was removed from this table.
+> The Freenet backend is now a real node client, and nothing reads that variable:
+> `share.backends` lists `freenet` as `broken` / `not yet wired` in every build until its sharing
+> path is wired (phase F9 of `docs/projects/260924_freenet-backend/`).
+
+> **2026-09-24 — Freenet ships by default (freenet-backend F9, `D-14`).** The default package is now
+> `pear,freenet`: `forge.config.js::DEFAULT_BUILD_BACKENDS`, and a default package carries
+> `engine/backends/freenet/` (with its two contract `.wasm` files), `@freenetorg/freenet-stdlib`,
+> `bs58`, `bare-ws`, `bare-encoding`, `node-datachannel` and `THIRD-PARTY-NOTICES.md`; `pear` and
+> `none` leave all of them out. `share.backends` no longer says `not yet wired`: `freenet` is
+> `available` when a Freenet node answers at `ws://127.0.0.1:7509`, and `broken` with "no Freenet
+> node at ws://127.0.0.1:7509" otherwise (see [Freenet](#freenet)).
+
+## CLI Flags <a name="cli-flags"></a>
+
+| Flag | Meaning |
+| ---- | ------- |
+| `--storage <dir>` | Custom storage dir passed to `pear-runtime`. Default: app user data dir. |
+| `--profile <id-or-name>` | Open a specific ZBTerm profile by id or name. Default: auto-select the default profile when possible, otherwise show the picker. |
+| `--profile-path <dir>` | Open an explicit ZBTerm profile data directory. Default: none. |
+| `--backend <pear\|freenet\|none>` | Limit network sharing to one backend, or `none` for local-only. It only narrows what the build carries. Default: every backend in this build. |
+| `--ice-servers <list>` | STUN/TURN servers for Freenet's direct connections, comma-separated ICE URLs; `''` for none (host candidates only). Wins over `ZBTERM_ICE_SERVERS`; a non-empty "STUN/TURN servers" setting wins over it. Default: Google and Cloudflare STUN (`D-11`). |
+| `--no-updates` | Start without OTA updates. Default: updates enabled; `npm start` passes `--no-updates` for development. |
+| `--debug` | Enable verbose packaged debug logging. Default: off. |
+| `--debug-server` | Start the localhost debug REST API. Default: off. |
+| `--debug-server-port <port>` | Port for `--debug-server`. Default: `17077`. |
+| `--devtools` | Open renderer developer tools on startup. Default: off. |
+| `--disable-gpu` | Start without Chromium GPU acceleration (useful headless). Default: GPU enabled. |
+| `--help` | Print CLI flag help and exit without starting the UI. |
+
+> **2026-09-19 (`D-08`).** Two rows above are out of date. `--no-updates`: accepted for
+> compatibility and has no effect; there are no OTA updates to turn off. `--storage <dir>`:
+> ZBTerm's own data directory; nothing is passed to `pear-runtime`, which is no longer a
+> dependency.
+
+## For Developers
+
+Internals, design rationale, build/packaging scripts, and the OTA release
+flow are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+Cutting an npm release — the pre-publish checks, the version policy against
+the Pear `upgrade` key, the per-platform manual matrix, and how to deprecate a
+bad version — is documented in [`docs/RELEASE-NPM.md`](docs/RELEASE-NPM.md).
+
+> **2026-09-19 (`D-08`).** There is no OTA release flow and no Pear `upgrade` key any more; both
+> documents carry a dated note where they describe one.
+
+### Building, signing and store submissions <a name="building-signing"></a>
+
+Local packaging (no distribution, no signing needed):
 
 ```sh
-$ flatpak run --command=flathub-build org.flatpak.Builder --disable-rofiles-fuse com.pears.HelloPear.yml
-$ flatpak install --user ./repo com.pears.HelloPear
+npm run package                        # → out/ZBTerm-<platform>-<arch>/
+npm run make                           # → installers in out/make/
+ZBTERM_FORGE_OUT_DIR=<dir> npm run make  # write into a scratch dir instead of out/
+./build_all.sh                         # relay executables (all platforms) + GUI package (all
+                                        # platforms) + GUI installers (host platform only)
 ```
 
-Repeat the build command after making any changes to the manifest.
+Signed, distributable builds are cut by the `Build Release` GitHub Actions
+workflow (manual dispatch), gated on a `release` environment holding these
+secrets:
 
-Launch the application from your desktop environment or run it from the CLI:
+| Secret | Platform | Notes |
+| ------ | -------- | ----- |
+| `CERTIFICATE_P12` / `CERTIFICATE_PASSWORD` | `darwin` | Base64 `.p12` export + its password. |
+| `MAC_CODESIGN_IDENTITY` | `darwin` | e.g. `Developer ID Application: Name (TEAMID)`. |
+| `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | `darwin` | Notarization (app-specific password, not the account one). |
+| `WINDOWS_CERT_PFX_BASE64` / `WINDOWS_CERT_PASSWORD` | `win32` | Base64 `.pfx` export + its password. |
+
+macOS signing needs an Apple Developer Program membership; the Windows
+certificate's subject must match `Publisher` in
+[`build/AppxManifest.xml`](build/AppxManifest.xml). Linux builds are unsigned.
+The same macOS variables, set locally, sign a local `npm run make` too.
+
+**Flatpak.** The manifest lives at
+[`flatpak/net.z33v.zbterm.yml`](flatpak/net.z33v.zbterm.yml) and
+[`flatpak/net.z33v.zbterm.metainfo.xml`](flatpak/net.z33v.zbterm.metainfo.xml).
+To build and test it locally:
 
 ```sh
-$ flatpak run com.pears.HelloPear
+sudo apt install flatpak
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install flathub org.flatpak.Builder
+npm run make                                    # produces the tarball the manifest's source points at
+python3 -m http.server --directory out/make/    # serve it for the manifest's local:// / http:// source
+cd flatpak
+flatpak run --command=flathub-build org.flatpak.Builder --disable-rofiles-fuse net.z33v.zbterm.yml
+flatpak install --user ./repo net.z33v.zbterm
+flatpak run net.z33v.zbterm
 ```
 
-Uninstall using:
+Uninstall with `flatpak uninstall net.z33v.zbterm && rm -rf ~/.var/app/net.z33v.zbterm`; clear
+`builddir repo .flatpak-builder` under `flatpak/` if a rebuild takes too much disk. Submitting to
+Flathub means updating the manifest's source URLs/sha512 to a real, versioned download location
+and opening a PR against [flathub/flathub](https://github.com/flathub/flathub) — see that
+project's own submission docs for the current process.
 
-```sh
-$ flatpak uninstall com.pears.HelloPear
-$ rm -rf ~/.var/app/com.pears.HelloPear
+**Snap.** `npm run make` on Linux also produces a `.snap` (via
+`pear-electron-forge-maker-snap`, which fixes the base, confinement and app
+command — see `agent_docs/packaging.md` for what it overrides). Install it
+locally with `snap install out/make/*.snap --devmode`; publishing needs a
+registered Snap name and `snapcraft login`/`snapcraft upload` — see
+[Snapcraft's publishing docs](https://documentation.ubuntu.com/snapcraft/).
+
+### Remote test host
+
+The Freenet backend is tested against a network-mode Freenet node on a remote machine. The
+fabric recipe [`scripts/infra/freenet_host.py`](scripts/infra/freenet_host.py) provisions one
+(the pinned `freenet`/`fdev` release, Node.js 24.x and a `freenet-node` systemd unit, everything
+under `~/work/zbterm`) and pushes `spikes/freenet/` to it; its docstring lists what it writes
+where. Debian is tested, Fedora is untested.
+
+```
+PYTHONPATH=/ubitron/dev /zp/zdata/work/ubitron/dev/.venv/bin/python scripts/infra/freenet_host.py HOST
+PYTHONPATH=/ubitron/dev /zp/zdata/work/ubitron/dev/.venv/bin/python scripts/infra/freenet_host.py HOST --task sync
 ```
 
-If the builds take up too much memory, clear these build files from the `flatpak` directory:
-
-```sh
-$ rm -rf builddir repo .flatpak-builder
-```
-
-After confirming that the Flatpak works:
-
-- Upload the Flatpak artifacts to a publicly accessible location with versioned URLs like [this site](https://static.keet.io/downloads/) and update the artifact links in the Flatpak YAML.
-- For verification, upload an empty file to your app website `https://<app-website>/.well-known/org.flathub.VerifiedApps.txt`.
-- Open a PR on the [flathub repository](https://github.com/flathub/flathub) from your branch for submission, like [this PR](https://github.com/flathub/flathub/pull/8716).
-- Address all the review comments.
-- Comment `bot, build` to test building the Flatpak on the Flathub CI.
-- Once the submission is accepted, the Flathub maintainers create a repository in the flathub organization with the changes from the submission branch, like [this repository](https://github.com/flathub/io.keet.Keet).
-- Log in to the [Flathub Developer Portal](https://flathub.org/en/developer-portal) to manage the app and complete the verification by copying the token from this page to the app website `https://<app-website>/.well-known/org.flathub.VerifiedApps.txt`.
-- In a few hours, the app should be available on Flathub, like [this app](https://flathub.org/en/apps/io.keet.Keet).
-
-If the app doesn't show up on Flathub:
-
-- If the Flathub bot opens an issue on the repository containing build errors, address it.
-- If it's unrelated, comment `bot, retry` or open an issue in [Flathub](https://github.com/flathub/flathub/issues) for assistance from the maintainers.
-- Follow the build status at <https://builds.flathub.org>. App-specific build status is available at `https://builds.flathub.org/status/<app-id>`.
-
-To automate the Flathub bot to open PRs when new versions of the app are available on the website, follow [this guide](https://github.com/flathub-infra/flatpak-external-data-checker/#changes-to-flatpak-manifests) and set up the external data checker on the `type: archive` source like this depending on the format of the app site contents:
-
-```yml
-x-checker-data:
-  type: html
-  url: https://static.keet.io/downloads/
-  version-pattern: href="((?:\d+\.)+\d+)/"
-  url-template: https://static.keet.io/downloads/$version/Keet-arm64-flatpak.tar.gz
-```
-
-### Snap <a name="snap"></a>
-
-Snap packages applications for Linux and distributes them through the Snap Store. This section covers preparing a Snap package, testing it locally and publishing releases to the Snap Store.
-
-Install the Snap tools:
-
-```sh
-$ snap install snapcraft --classic
-$ snap install lxd
-$ sudo usermod -a -G lxd $USER
-$ sudo lxd init --auto
-```
-
-In the project directory, [build](https://docs.pears.com/how-to/operate-an-app/build-and-package/build-desktop-distributables#linux) the app. This will create a `.snap` package in the `out/make` directory.
-
-Install the Snap:
-
-```sh
-$ snap install out/make/hellopear_1.0.0_arm64.snap --devmode
-```
-
-After making changes to the Snap configuration, rebuild the application and reinstall the generated Snap.
-
-Launch the application from your desktop environment or run it from the CLI:
-
-```sh
-$ hellopear
-```
-
-Uninstall using:
-
-```sh
-$ snap remove hellopear
-```
-
-If the builds take up too much memory, clean the build container:
-
-```sh
-$ cd out
-$ snapcraft clean
-```
-
-Refer to the [Electron Forge Snap Maker documentation](https://github.com/holepunchto/electron-forge-maker-snap) to configure the Snap.
-
-After confirming that the Snap works:
-
-- Create your developer account in <https://login.ubuntu.com/> and log in.
-- Log in from your terminal with `snapcraft login`.
-- Register your Snap using [the name](https://documentation.ubuntu.com/snapcraft/9.0/how-to/publishing/register-a-snap/#name-your-snap) with `snapcraft register <snap-name>` or `snapcraft register --private <snap-name>` for a private Snap.
-- Publish your Snap with `snapcraft upload --release=stable <my-snap>.snap`.
-- Check the release status with `snapcraft status <snap-name>`.
-
-Snapcraft will guide you with the next steps if release fails.
-
-Once the Snap has been released, it should be available on the Snap Store `https://snapcraft.io/<snap-name>`:
-
-```sh
-$ snap install <snap-name>
-$ <snap-name>
-```
-
-To automate Snap releases, first create this credentials file:
-
-```sh
-$ snapcraft export-login <credentials-filename>
-```
-
-Set the contents of the file as a secret in your automation pipeline and authenticate Snap with:
-
-```sh
-$ export SNAPCRAFT_STORE_CREDENTIALS=$(cat <credentials-filename>)
-```
-
-Upload a new Snap release to the desired channel (for example, `stable`):
-
-```sh
-$ snapcraft upload <snap-name>.snap --release stable
-```
-
-## Scripts <a name="scripts"></a>
-
-### `npm start` <a name="script-start"></a>
-
-Start app in development mode.
-
-```sh
-npm start
-```
-
-Uses: `electron-forge start -- --no-updates`
-
----
-
-### `npm run lint` <a name="script-lint"></a>
-
-Check formatting and linting.
-
-```sh
-npm run lint
-```
-
-Runs:
-
-- `prettier --check .`
-- `lunte`
-
----
-
-### `npm run format` <a name="script-format"></a>
-
-Auto-format and fix lint issues.
-
-```sh
-npm run format
-```
-
-Runs:
-
-- `prettier --write .`
-- `lunte --fix`
-
----
-
-### `npm run package` <a name="script-package"></a>
-
-Package app without creating distributables.
-
-```sh
-npm run package
-```
-
-Runs: `electron-forge package`
-
----
-
-### `npm run make` <a name="script-make-linux"></a>
-
-Create distributables.
-
-```sh
-npm run make
-```
-
-Runs: `electron-forge make`
-
----
-
-## Troubleshooting <a name="troubleshooting"></a>
-
-### App did not update <a name="app-did-not-update"></a>
-
-#### Was the version updated? <a name="check-version-updated"></a>
-
-See [2. Version](https://docs.pears.com/how-to/operate-an-app/manual-deployment/deployment#2-version)
-
-#### Is the upgrade link correct? <a name="check-upgrade-link"></a>
-
-[1. Set upgrade link](https://docs.pears.com/how-to/operate-an-app/manual-deployment/deployment#1-set-the-upgrade-link)
-
-#### Is the app seeded? <a name="check-app-seeded"></a>
-
-The upgrade link must be seeded:
-
-```sh
-pear seed <link>
-```
-
-#### Was the app seeded after opening the app? <a name="check-seeded-after-open"></a>
-
-Just wait about 15 minutes if there is no rush.
-
-Also add the key to a few always-on seeders. Then there is less dependence on subtleties and this issue won't occur.
-
-Explanation (advanced):
-
-- The client looks for peers who have the key when starting up, and will do another lookup roughly every 15 minutes
-- The server announces the key, so clients who look up the key will connect to the server
-
-With the following order of events, the client will not connect to the seeder until its second lookup
-
-- Seeder is offline, and nobody else is seeding
-- Client comes online, looks up the key and finds nobody
-- Seeder comes online and announces the key
-- After about 15 minutes, the client does another lookup, and now connects to the seeder
-
-#### Is the seeder unreachable? <a name="check-seeder-unreachable"></a>
-
-Add the key to a few always-on seeders. Then there is less dependence on the seeder being reachable.
-
-### Recovering from lost write-access <a name="lost-write-access"></a>
-
-Staged and provisioned drives are machine-bound. If data is lost, write access to those keys is lost.
-
-Multisig drives are not machine-bound.
-
-If a stage link is lost, just create a new link and stage to it - update the stage builds.
-
-If a provision key is lost, make a new one using production as the source:
-
-```sh
-pear provision <versioned-production-key> <target-key> <versioned-production-key>
-```
-
-Then provision to the new prerelease key with stage key as source.
-
-```sh
-pear provision <versioned-stage-key> <target-key> <versioned-production-key>
-```
-
-Then pass this new provision link to `pear multisig verify` and `pear multisig commit` commands.
-
-### `pear stage` is showing unexpected size increases <a name="stage-size-increases"></a>
-
-#### Is the `pear build` deployment folder inside the app folder? <a name="check-deployment-folder-inside-app"></a>
-
-If the deployment folder ends up in the build and then that ends up in the deployment folder the build inflates each time. When it comes to running `pear stage` it will show file sizes that are unexpectedly large.
-
-Avoid this by never putting the deployment folder into the application folder.
-
-The deployment folder output by `pear build` can be considered as a sort of multi-architecture container.
-Think about it as above, external to the project as a deployment artifact instead of inside the project.
-
-Never make deployment folders inside applications:
-
-```sh
-pear build ... --package ./my-app/package.json --target ./my-app/my-build # <-- DON'T DO THIS
-
-cd my-app && pear build ... --package ./package.json --target ./my-build # <-- DON'T DO THIS
-```
-
-Always make the deployment folder outside of the app-dir:
-
-```sh
-pear build ... --package ./my-app/package.json --target ./my-build # <-- do this
-```
-
-Or don't use target at all and always run pear build outside of the app folder:
-
-```sh
-pear build ... --package ./my-app/package.json # <-- do this
-```
-
-That will output a build folder per version e.g. `hello-pear-electron-v1.2.3` creating a deploy folder per deploy. This can be very useful for reviewing any deployment issues and for quickly rolling back to a prior version (i.e. stage -> provision -> multisig from an older build folder).
-
-### `pear multisig commit` errors with `INCOMPATIBLE_SOURCE_AND_TARGET` error
-
-Starting from the second commit, it is technically possible to corrupt the production build e.g. due to accidental interuption. So if a command ever errors with an `INCOMPATIBLE_SOURCE_AND_TARGET` error, never try to work around it. The only safe way to proceed is by creating a new source link using `pear provision`.
-
-```sh
-pear touch
-```
-
-```sh
-pear provision <source-verlink> <touched-link> <production-multisig-link>
-```
-
-Where source-verlink is the link used as the source of the original provisioned drive.
-
-Then commit with
-
-```sh
-pear multisig commit <touched-link> <request> ...responses
-```
-
-<!-- Reference Links -->
-
-[pear-runtime]: https://github.com/holepunchto/pear-runtime
-[electron]: https://www.electronjs.org/
-[bare]: https://github.com/holepunchto/bare
-[nodejs]: https://nodejs.org
-[pear-docs]: https://docs.pears.com
-[hyperdrive]: https://github.com/holepunchto/hyperdrive
-[hypercore]: https://github.com/holepunchto/hypercore
-[hypercore-fork]: https://github.com/holepunchto/hypercore#corefork
-[hypercore-length]: https://github.com/holepunchto/hypercore#corelength
-[hypercore-key]: https://github.com/holepunchto/hypercore?tab=readme-ov-file#corekey
-[pear-link-format]: https://github.com/holepunchto/pear-link?tab=readme-ov-file#pear-link-format
-[corestore]: https://github.com/holepunchto/corestore
-[electron-forge-macos-signing]: https://www.electronforge.io/guides/code-signing/code-signing-macos#option-1-using-an-app-specific-password
-[apple-app-specific-password]: https://support.apple.com/en-us/102654
-[windows-sdk]: https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/
-[powershell-install]: https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-windows
-[msix-signing-guide]: https://learn.microsoft.com/en-us/windows/msix/package/create-certificate-package-signing
+`--task repo` pushes this working tree to `~/work/zbterm/repo` (no `node_modules`, `.git`, `out`,
+`archive`) and runs `npm ci` there, so `test/tools/freenet-remote-pair.js` can run one side of a
+Freenet share on the remote host with the shipped backend code.
+
+The Freenet contracts are Rust crates under `engine/backends/freenet/contracts/src/`; the app ships
+their compiled `.wasm`, pinned by BLAKE3 in `contracts/hashes.json`. `bash
+scripts/build-contracts.sh` rebuilds and re-pins them (cargo with the `wasm32-unknown-unknown` target,
+`fdev` and Node on `PATH`). To check that a second machine builds the same bytes, `--task rust`
+installs the pinned Rust toolchain under `~/work/zbterm/rust` and `--task contracts` pushes the
+crates to `~/work/zbterm/contracts/`, where the same script runs.
+
+## License
+
+ZBTerm is open source under the
+[Apache License, Version 2.0](LICENSE). You may use, run, modify and
+redistribute it, including commercially, subject to the terms of that license.
+
+Contributions are accepted under the same license, per Apache-2.0 §5.
+
+The names "ZBTerm", "PassCall" and "PassCall Advanced Technologies", and the
+associated icons, logos and visual identity, are trademarks of PassCall
+Advanced Technologies Ltd. Apache-2.0 §6 grants no trademark rights, so a
+redistributed fork should carry its own name and icons.
+
+Third-party components (Electron, Chromium, Node.js, Bare, the Pear runtime,
+node-pty, xterm.js, Font Awesome and others) remain under their own licenses.

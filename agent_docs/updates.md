@@ -1,45 +1,20 @@
-# OTA update behavior
+# No OTA updater
 
-> Read before touching the update flow or update UI, adding P2P data to the
-> worker, or when debugging how OTA updates land. Only
-> non-obvious, code-verified facts — the code is the reference for everything
-> else. Index: [AGENTS.md](../AGENTS.md).
+> Index: [AGENTS.md](../AGENTS.md).
 
-Flow: stage a new build (as described in README) → the worker's swarm replicates the drive → the
-updater mirrors the bundle → pipe strings flip the renderer UI → apply → relaunch.
+ZBTerm has no peer-to-peer OTA updater (`D-08`, `D-25` in
+[`docs/decisions.md`](../docs/decisions.md)). The Bare worker that this template's
+updater used to live in is now `engine/`, spawned through `bare-sidecar`
+(`engine/spawn-worker.js`); there is no `workers/main.js`, no `pear.json`, no
+`package.json#upgrade`, no `pear-runtime` dependency and no forge upgrade gate.
 
-Timing:
+A packaged build updates the way any other desktop app does: install a newer
+package (deb/rpm/AppImage/Flatpak/Snap/dmg/msix), or, for the npm distribution,
+`npm install -g zbterm@latest` (`zbterm update` checks the npm registry and
+prints that command). `--no-updates` is still accepted everywhere, for
+compatibility with old launchers, and does nothing.
 
-- Immediate check at every launch; after a drive append, a check on a randomized
-  delay (drawn once per process, ≤1 h by default; appends within 60 s of boot check
-  immediately; each new append reschedules the pending check).
-- Only strictly-newer semver wins. **No downgrade path** — a rollback must be
-  re-staged under a _higher_ version.
-
-Apply:
-
-- Works: macOS `.app` and Linux AppImage (`fsx.swap`), Windows MSIX (`addPackage`)
-  or `.exe` (rename dance). **Impossible on snap/flatpak** (swap target is the
-  read-only install mount) — those update via their stores; an attempted apply
-  throws in the worker and the renderer hangs.
-- One-shot latch: `applied = true` is set **before** the swap → a failed apply
-  can't be retried in-process; the worker handler has no try/catch and the main
-  promise no reject/timeout → every failure mode is a silent hang. Real update UX
-  needs a try/catch + failure reply in the worker.
-- Dev (`--updates`): download path only — apply would target a file named `'null'`.
-
-Seeding / replication:
-
-- Apps join the drive client-only and never seed — run dedicated `pear seed`ers.
-- `store.replicate` is registered **only when updates are enabled**: app data in
-  the worker's corestore won't replicate under the dev default `--no-updates`.
-  When adding app P2P storage, hoist `swarm.on('connection', (c) =>
-store.replicate(c))` out of the updates-gated block and `swarm.join` your app
-  topic separately — only the updater-drive join stays gated behind `updates`.
-
-Surface the template doesn't use (see the `pear-runtime` / `pear-runtime-updater`
-READMEs): updater opts `delay` (rollout cap; `0` = instant, good for tests),
-`storage`, `bootstrap` (local DHT), `bundled`; events `error` (attach a listener or
-a crash), `update-scheduled`, `updating-progress`, `updating-delta`;
-`updater.next` = staged path for custom install logic. `PearRuntime` without
-`store`/`swarm` creates its own (pass both or neither).
+Adding P2P data to the Bare worker, or a new share backend, is covered by
+[`agent_docs/architecture.md`](architecture.md) (the sidecar spawn contract)
+and `docs/CORE-CONTRACT.md`/`docs/ARCHITECTURE.md` (the sharing protocol
+itself) — not by this file.

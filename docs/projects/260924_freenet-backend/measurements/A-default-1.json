@@ -1,0 +1,295 @@
+{
+ "run": "A-default-1",
+ "direction": "A",
+ "host": "hetzner-deb16 (public v4)",
+ "viewer": "this machine (NAT)",
+ "ice": "D-11 default",
+ "nonce": "f2-8QKs-Epmclgrxky-",
+ "hostLines": [
+  {
+   "role": "host",
+   "m": "host",
+   "atMs": 1236.04,
+   "instance": "9bQqkmMtg9k5AJZqixD1FvaKs8p5CPFeMF6XQq9uWoA",
+   "port": 7509,
+   "wasmFrom": "build/freenet",
+   "wasmBytes": 181292,
+   "ice": [
+    "stun:stun.l.google.com:19302",
+    "stun:stun.cloudflare.com:3478"
+   ],
+   "node": "v24.21.0",
+   "wsOpenMs": 46.66,
+   "putMs": 982.91,
+   "putDoneEpochMs": 1790258665636,
+   "subscribeMs": 163.46,
+   "subscribeError": null
+  },
+  {
+   "role": "host",
+   "m": "hostDone",
+   "atMs": 51702.35,
+   "why": "viewer said bye",
+   "instance": "9bQqkmMtg9k5AJZqixD1FvaKs8p5CPFeMF6XQq9uWoA",
+   "ackedEntries": 60,
+   "messagesSent": 6,
+   "messagesReceived": 10,
+   "updateErrors": 0,
+   "ackUpdates": 58,
+   "hostErrors": [],
+   "selectedPair": {
+    "local": {
+     "type": "host",
+     "transportType": "UDP",
+     "addr": "v4-public"
+    },
+    "remote": {
+     "type": "srflx",
+     "transportType": "UDP",
+     "addr": "v4-public"
+    }
+   },
+   "pcRttMs": 88,
+   "localCandidates": {
+    "host/v6-ula": 1,
+    "host/v4-public": 1,
+    "host/v4-private": 2,
+    "srflx/v4-public": 1
+   },
+   "remoteCandidates": {
+    "host/v6-tailscale": 1,
+    "host/v6-ula": 2,
+    "host/v4-private": 4,
+    "host/v4-cgnat-or-tailscale": 1,
+    "srflx/v4-public": 1
+   }
+  }
+ ],
+ "viewerLines": [
+  {
+   "role": "viewer",
+   "m": "viewer",
+   "atMs": 114.44,
+   "instance": "9bQqkmMtg9k5AJZqixD1FvaKs8p5CPFeMF6XQq9uWoA",
+   "port": 7509,
+   "wasmFrom": "target",
+   "ice": [
+    "stun:stun.l.google.com:19302",
+    "stun:stun.cloudflare.com:3478"
+   ],
+   "node": "v24.18.0",
+   "wsOpenMs": 57.28,
+   "startEpochMs": 1790258674228
+  },
+  {
+   "role": "viewer",
+   "m": "firstGet",
+   "atMs": 5909.5,
+   "firstGetMs": 5794.75,
+   "misses": 0,
+   "found": true,
+   "stateBytes": 8,
+   "readableEpochMs": 1790258680023,
+   "attempts": [
+    {
+     "ms": 5794.76,
+     "ok": true
+    }
+   ],
+   "hostErrors": []
+  },
+  {
+   "role": "viewer",
+   "m": "subscribe",
+   "atMs": 6336.64,
+   "subscribeMs": 426.95
+  },
+  {
+   "role": "viewer",
+   "m": "latency",
+   "atMs": 36690.46,
+   "hz": 1,
+   "sent": 30,
+   "acked": 30,
+   "lost": 0,
+   "updateErrors": 0,
+   "wallS": 30.35,
+   "putToAckNotificationMs": {
+    "n": 30,
+    "min": 1269.81,
+    "p50": 1351.27,
+    "p95": 1375.95,
+    "max": 1376.98
+   },
+   "ownEchoMs": {
+    "n": 30,
+    "min": 33.34,
+    "p50": 78.02,
+    "p95": 90.46,
+    "max": 111.26
+   },
+   "notifications": 60,
+   "avgNotificationBytes": 2035,
+   "samplesMs": [
+    1299.48,
+    1311.96,
+    1312.93,
+    1364.77,
+    1323.37,
+    1364.24,
+    1367.23,
+    1359.32,
+    1269.81,
+    1330.21,
+    1351,
+    1342.21,
+    1343.65,
+    1364.39,
+    1354.82,
+    1376.98,
+    1365.91,
+    1340.93,
+    1351.27,
+    1365.86,
+    1308.87,
+    1375.95,
+    1375.76,
+    1353.06,
+    1352.98,
+    1356.47,
+    1340.78,
+    1299.2,
+    1373.16,
+    1321.61
+   ],
+   "hostErrors": []
+  },
+  {
+   "role": "viewer",
+   "m": "latency",
+   "atMs": 43885.26,
+   "hz": 5,
+   "sent": 30,
+   "acked": 30,
+   "lost": 0,
+   "updateErrors": 0,
+   "wallS": 7.19,
+   "putToAckNotificationMs": {
+    "n": 30,
+    "min": 1354.11,
+    "p50": 1529.85,
+    "p95": 1933.92,
+    "max": 1959.35
+   },
+   "ownEchoMs": {
+    "n": 30,
+    "min": 33.8,
+    "p50": 78.04,
+    "p95": 101.29,
+    "max": 121.87
+   },
+   "notifications": 57,
+   "avgNotificationBytes": 6012,
+   "samplesMs": [
+    1354.11,
+    1446.78,
+    1378.9,
+    1529.85,
+    1405.3,
+    1520.39,
+    1544.53,
+    1537.27,
+    1539.33,
+    1561.36,
+    1688.37,
+    1959.35,
+    1754.58,
+    1610.5,
+    1737.23,
+    1933.92,
+    1733.41,
+    1530.16,
+    1427.9,
+    1524.8,
+    1524.62,
+    1535.45,
+    1524.76,
+    1537.13,
+    1501.49,
+    1503.94,
+    1416.53,
+    1540.86,
+    1460.51,
+    1361.33
+   ],
+   "hostErrors": []
+  },
+  {
+   "role": "viewer",
+   "m": "rtc",
+   "atMs": 49519.77,
+   "ice": [
+    "stun:stun.l.google.com:19302",
+    "stun:stun.cloudflare.com:3478"
+   ],
+   "offerToConnectedMs": 2137.13,
+   "failure": null,
+   "signallingMessages": 16,
+   "messagesSent": 10,
+   "messagesReceived": 6,
+   "updateErrors": 0,
+   "selectedPair": {
+    "local": {
+     "type": "srflx",
+     "transportType": "UDP",
+     "addr": "v4-public"
+    },
+    "remote": {
+     "type": "host",
+     "transportType": "UDP",
+     "addr": "v4-public"
+    }
+   },
+   "states": [
+    [
+     "connecting",
+     1.4
+    ],
+    [
+     "connected",
+     2062.73
+    ]
+   ],
+   "localCandidates": {
+    "host/v6-tailscale": 1,
+    "host/v6-ula": 2,
+    "host/v4-private": 4,
+    "host/v4-cgnat-or-tailscale": 1,
+    "srflx/v4-public": 1
+   },
+   "remoteCandidates": {
+    "host/v6-ula": 1,
+    "host/v4-public": 1,
+    "host/v4-private": 2,
+    "srflx/v4-public": 1
+   },
+   "pcRttMs": 74,
+   "pings": 20,
+   "pongs": 20,
+   "pingRttMs": {
+    "n": 20,
+    "min": 73.85,
+    "p50": 74.36,
+    "p95": 74.87,
+    "max": 74.87
+   },
+   "hostErrors": []
+  },
+  {
+   "role": "viewer",
+   "m": "exit",
+   "atMs": 50021.07
+  }
+ ],
+ "stray": []
+}

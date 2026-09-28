@@ -1,52 +1,76 @@
 # AGENTS.md
 
-Holepunch's template for Electron apps with **peer-to-peer OTA updates** (no update
-server). The demo UI is trivial on purpose: the plumbing is the product and forks build
-their app on top of it. Stack: Electron ^40 + Forge ^7.11 (CommonJS), `pear-runtime`
-(worker body in the `hello-pear-worker` package), prettier + lunte.
-[README](README.md) = the human deployment manual (stage → provision → multisig).
+ZBTerm: secure terminal recording, playback and peer-to-peer sharing, built on the
+Electron/Pear stack. A host runs a local PTY-backed shell, records encrypted terminal
+history to Hypercore, shares live output over Hyperswarm (backend `pear`) or a local
+Freenet node (backend `freenet`), and authorizes viewers by identity, device, link,
+capability and epoch keys. `engine/` (published separately as `zbterm-core`) is the
+host-independent core: it runs in a Bare sidecar, owns storage, crypto, sharing and identity, and works without Electron.
+`electron/` is a thin shell: windows, renderer IPC, native PTY processes, and spawning
+the Bare sidecar. Stack: Electron ^40 + Forge ^7.11 (CommonJS), `bare-sidecar`,
+prettier + lunte. [README](README.md) is the human manual (install, sharing, the
+debug server, environment variables); [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+is the full design reference.
 
-Key fact: **the OTA updater does not run in Electron.** `electron/main.js` only
-spawns a Bare sidecar (`workers/main.js`) and pipes bytes; the updater lives in the
-worker.
+ZBTerm has no OTA updater, no `pear.json`, and no forge upgrade gate: it is a hard
+fork of Holepunch's `hello-pear-electron` template with the updater removed
+(`D-08`, `D-25`). A packaged build installs and updates like any other desktop app
+(a newer package, or `npm install -g zbterm@latest` for the npm distribution) —
+see [README's Updating section](README.md#install-update).
 
 ## Commands
 
-npm only — pnpm breaks `forge.config.js` (undeclared hoisted `pear-link`).
+npm only — pnpm breaks `forge.config.js` (undeclared hoisted deps).
 
 ```sh
-npm start                            # dev, updates OFF
-npm start -- --updates               # dev + update download (apply can't work in dev)
-npm start -- --storage <dir>         # second instance / custom storage
-npm run lint                         # prettier --check . && lunte  (= CI)
-npm run format                       # prettier --write . && lunte --fix
-npm run package                      # → out/HelloPear-<platform>-<arch>/
-npm run make                         # → installers in out/make/
+npm test                                          # full suite (brittle)
+HOME=<scratch> TMPDIR=<short-dir> npm test         # isolated run (see Process safety)
+npm run lint                                       # prettier + lunte on package.json, forge.config.js, electron/, engine/, renderer/, test/  (= CI)
+npm run format                                     # the same files, --write / --fix
+npm run vendor:assets                              # regenerates vendored renderer assets (pretest/prepack/prestart)
+npm start                                          # dev (electron-forge start -- --no-updates)
+npm run package                                    # → out/<ProductName>-<platform>-<arch>/
+ZBTERM_FORGE_OUT_DIR=<dir> npm run package         # package into a scratch dir instead of out/
+npm run make                                       # → installers in out/make/
+./build_all.sh                                     # relay executables (all platforms) + GUI package/make
 ```
 
-`start`/`package`/`make` all fail at the forge gate until `package.json#upgrade`
-holds a real key (`pear touch`) or `UPGRADE_KEY` is set — the committed value is a
-placeholder. `UPGRADE_KEY` only helps the gate and _packaged_ builds (the hook
-rewrites the packaged `package.json`); in dev the running app reads the committed
-file, so with the placeholder on disk `npm start` opens the window but the worker
-dies on the invalid link at boot (`--no-updates` doesn't prevent this — the
-updater parses the link in its constructor). A working dev run needs a
-well-formed key committed.
+Always give a test run its own `HOME` and a short `TMPDIR` (under 20 characters): a
+long `TMPDIR` breaks the SSH-agent test (108-byte socket path limit). `--no-updates`
+is still accepted everywhere for compatibility and does nothing — there is nothing
+left to disable.
 
 ## Contracts: editing one side breaks the other, often silently
 
-- Six-arg spawn argv order: `getWorker()` in `electron/main.js` ↔ the worker's positional reads
-- Specifier `'/workers/main.js'`: renderer ↔ IPC channel names
-- Pipe strings `updating`/`updated`/`pear:applyUpdate`/`pear:updateApplied`; FramedStream on both ends
-- Node builtins used under `workers/` ↔ `package.json#imports`: Bare has no `events`,
-  so in-project worker code needs a `{"bare": "bare-events", "default": "events"}`
-  entry (hypercore and hyperswarm ship the same map). Dev silently resolves a hoisted
-  npm shim, the packaged app prunes it — the worker then dies at boot with
-  `MODULE_NOT_FOUND` and the UI shows nothing but a dead backend
-- `productName` ↔ `AppxManifest.xml` Identity ↔ CI artifact names ↔ storage dirs
-- `AppxManifest.xml` Publisher CN ↔ Windows signing cert (stable across builds)
-- `pear.json#multisig`: **any edit = different production key**
-- `package.json#version` ↔ generated package metadata (AppImage/Snap/MSIX/Flatpak) ↔ release metadata (metainfo.xml <release>, Flatpak URLs + sha512)
+- Bare-worker spawn (`engine/client.js::_spawnWorker` → `engine/spawn-worker.js`
+  → `bare-sidecar`): argv `[userData, profileId, profilePath, backend, hostCaps]`
+  (empty strings, never `undefined`, for the four optional ones), frozen in
+  [`docs/CORE-CONTRACT.md`](docs/CORE-CONTRACT.md). The pipe speaks the framed
+  binary protocol of `engine/rpc/schema.js` (`INVOKE`/`PTY_*`/`EVENT_*`/`BACKEND_*`
+  frames, `engine/rpc/pipe.js`), not plain strings.
+- `BACKEND_*` frames (`engine/client.js`, `engine/rpc/pipe.js`): the seam the split
+  Freenet adapter crosses — its contract client runs in the Bare worker, its WebRTC
+  half (`node-datachannel`) runs in the host process (`electron/rtc-host.js`),
+  `D-06`/`D-09`.
+- `package.json#imports` Bare map lives in **`engine/package.json`** (the published
+  `zbterm-core` manifest), not the root one: Bare has no `events`/`fs`/`path`/`os`/
+  `crypto`, so each needs a `{"bare": "bare-<name>", "default": "<name>"}` entry.
+  `engine/package.json`'s own dependency ranges must track the root's (`Z2`
+  handoff) — a targeted `npm install` there can drift a transitive version
+  (`protomux` did, once) until `npm update` catches it up.
+- Contract pins (`D-10`): the Freenet contracts ship as committed raw `.wasm`
+  bytes with BLAKE3 hashes pinned by a test (`engine/backends/freenet/contracts/
+hashes.json`); nothing compiles at install or package time. Rust sources,
+  lockfile and `scripts/build-contracts.sh` stay in the repo for reproducing them.
+- `productName` (`package.json`) ↔ `AppxManifest.xml` Identity ↔ CI artifact names
+  ↔ storage dirs.
+- `AppxManifest.xml` Publisher CN ↔ Windows signing cert (stable across builds).
+- `package.json#version` ↔ generated package metadata (AppImage/Snap/MSIX/Flatpak)
+  ↔ release metadata (`flatpak/*.metainfo.xml` `<release>`, Flatpak URLs + sha512).
+- The invite scheme (`zbterm://join/`, `engine/invite.js::LINK_PREFIX`) and the
+  identity SSHSIG namespace (`engine/identity/claim.js::NAMESPACE`) are a clean
+  break from the predecessor's own (`D-23`): a predecessor link or claim must be
+  refused, not silently misread — see `test/former-name.test.js`.
 
 ## Boundaries
 
@@ -58,20 +82,31 @@ rare.
 - ✅ **Always:** if your change makes a _descriptive_ statement in AGENTS.md or
   `agent_docs/` false, update the doc and flag it in your summary; if it conflicts
   with a contract or boundary, stop and ask instead — never rewrite a rule to
-  legalize your own change
-- ✅ **Always:** check worker changes in a packaged build (`npm run package`) —
-  Bare resolves modules differently there than in dev, so `npm start` passing
-  proves nothing about the worker booting for a user. Work is done when lint
-  passes and, for worker changes, the packaged app boots.
-- ⚠️ **Ask first:** `pear.json`, `AppxManifest.xml` identity/publisher, new deps,
-  electron bumps
-- 🚫 **Never:** deployment and publishing (`pear stage`,
-  `pear provision`, `pear multisig`, `pear seed`, pushing `v*` tags — that
-  triggers npm publish), unless the user explicitly asked for exactly that in
-  this session
-- 🚫 **Never:** enable asar (breaks worker spawning); add CLI flags/launch surfaces
-  without declaring them to paparam in `electron/main.js` (unknown argv crashes the
-  packaged app); commit secrets
+  legalize your own change.
+- ✅ **Always:** check worker changes in a packaged build (`npm run package`,
+  output to a scratch `ZBTERM_FORGE_OUT_DIR` outside the repo) — Bare resolves
+  modules differently there than in dev, so `npm start` passing proves nothing
+  about the sidecar booting for a user. Work is done when lint passes and, for
+  worker/`engine/` changes, the packaged app boots.
+- ✅ **Always:** process safety. Never run tests, dev instances or packaged
+  builds against the maintainer's own data: give every instance its own storage,
+  `HOME`/profile/`userData`, and a debug/relay port that isn't one the
+  maintainer's live instances use; never signal a process by name or pattern,
+  only a PID this session started, after checking its command line carries the
+  scratch path; any GUI runs only under an isolated display (`uisolate`).
+- ✅ **Always:** ledgers (`docs/register.md` for `S-nn`, `docs/decisions.md` for
+  `D-nn`) are append-only — take the next free id at landing time, never
+  renumber or edit past rows. New project work lives under `docs/projects/<id>/`
+  per [`docs/projects/README.md`](docs/projects/README.md).
+- ⚠️ **Ask first:** `AppxManifest.xml` identity/publisher, new deps, Electron
+  bumps, anything touching `docs/decisions.md`'s existing rows.
+- 🚫 **Never:** publish or deploy (`npm publish`, pushing a `v*` tag — that
+  triggers npm publish via `.github/workflows/publish.yml` — `pear stage`,
+  `provision`, `multisig`, `seed`, a GitHub release), unless the user explicitly
+  asked for exactly that in this session.
+- 🚫 **Never:** enable asar (breaks Bare sidecar spawning); add CLI flags/launch
+  surfaces without declaring them to paparam in `electron/main.js` (unknown argv
+  crashes the packaged app); commit secrets or real key material.
 
 ## Topic docs — match your task, read the doc BEFORE editing that area
 
@@ -79,10 +114,11 @@ Each `agent_docs/` file holds only code-verified facts you cannot deduce from th
 repo's sources (cross-package contracts, failure semantics, dependency behavior);
 each opens with its own scope statement. Routing:
 
-- Editing `electron/`, `renderer/`, `workers/`, or debugging worker spawn/IPC/startup
-  → [`agent_docs/architecture.md`](agent_docs/architecture.md)
-- Touching the update flow or update UI, adding P2P data, or debugging missing
-  updates → [`agent_docs/updates.md`](agent_docs/updates.md)
+- Editing `electron/`, `renderer/`, or `engine/` (spawn/IPC/startup, the sidecar
+  seam) → [`agent_docs/architecture.md`](agent_docs/architecture.md)
+- Adding P2P data or a share backend, or debugging a missing/broken share
+  → [`agent_docs/updates.md`](agent_docs/updates.md) (there is no OTA updater;
+  this file is now a pointer, not update-flow documentation)
 - Touching `forge.config.js`, `build/`, `flatpak/`, rebranding, or signing
   → [`agent_docs/packaging.md`](agent_docs/packaging.md)
 - Touching `.github/`, or cutting/troubleshooting a release

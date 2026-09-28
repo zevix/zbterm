@@ -1,0 +1,106 @@
+{
+ "run": "B-2",
+ "direction": "host here (owner node 0.2.137), viewer on hetzner-deb16 (freenet 0.2.136)",
+ "date": "2026-09-24",
+ "result": {
+  "ok": true,
+  "dialToConnectedMs": 5048,
+  "path": "DIRECT",
+  "candidatePair": {
+   "local": {
+    "type": "host",
+    "transport": "UDP"
+   },
+   "remote": {
+    "type": "prflx",
+    "transport": "UDP"
+   }
+  },
+  "echo": {
+   "messages": 1000,
+   "totalMs": 393,
+   "perSecond": 2542,
+   "rttP50Ms": 324.69,
+   "rttP95Ms": 386.04,
+   "inOrder": true
+  },
+  "history": {
+   "bytes": 4194304,
+   "blocks": 256,
+   "ms": 999,
+   "firstBlockMs": 368,
+   "mibPerSecond": 4,
+   "lastBlockOk": true
+  }
+ },
+ "host_getMisses": 0,
+ "viewer_getMisses": 0,
+ "events": [
+  {
+   "side": "host",
+   "at": "2026-09-24T20:24:33.287Z",
+   "event": "host:announce",
+   "data": "{\"linkId\":\"f9-remote-pair\",\"instance\":\"4CmX4KZFdyEfo5xGhJzhk2ZTUKqidVZqbXrDH7dJsgbh\",\"fresh\":true,\"ms\":10264}"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T20:24:33.287Z",
+   "event": "announced in",
+   "data": "10269 ms"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T20:24:39.591Z",
+   "event": "host:offer",
+   "data": "{\"linkId\":\"f9-remote-pair\",\"peer\":\"1c6da98c54f32f88a7506ef249e30fc6cafb6c7876795cf603715113c3b12592\"}"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T20:24:40.798Z",
+   "event": "host:connected",
+   "data": "{\"linkId\":\"f9-remote-pair\",\"peer\":\"1c6da98c54f32f88a7506ef249e30fc6cafb6c7876795cf603715113c3b12592\",\"ms\":1208}"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T20:24:40.798Z",
+   "event": "connection",
+   "data": "{\"path\":\"DIRECT\",\"pair\":{\"local\":{\"type\":\"srflx\",\"transport\":\"UDP\"},\"remote\":{\"type\":\"host\",\"transport\":\"UDP\"}}}"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T20:24:42.261Z",
+   "event": "host done:",
+   "data": "viewer closed"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T20:24:30.989Z",
+   "event": "viewer:subscribed",
+   "data": "{\"instance\":\"4CmX4KZFdyEfo5xGhJzhk2ZTUKqidVZqbXrDH7dJsgbh\",\"ms\":2862}"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T20:24:32.367Z",
+   "event": "viewer:answer",
+   "data": "{\"ms\":4240,\"sinceOfferMs\":1376}"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T20:24:33.174Z",
+   "event": "viewer:connected",
+   "data": "{\"peer\":\"ec5a1096092f4f8d8cc05fa6a965ee5d5db1ee98e857184e27d95a7e41213021\",\"path\":\"DIRECT\",\"ms\":5047}"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T20:24:33.175Z",
+   "event": "connected",
+   "data": "{\"ok\":false,\"dialToConnectedMs\":5048,\"path\":\"DIRECT\",\"candidatePair\":{\"local\":{\"type\":\"host\",\"transport\":\"UDP\"},\"remote\":{\"type\":\"prflx\",\"transport\":\"UDP\"}}}"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T20:24:33.569Z",
+   "event": "echo",
+   "data": "{\"messages\":1000,\"totalMs\":393,\"perSecond\":2542,\"rttP50Ms\":324.69,\"rttP95Ms\":386.04,\"inOrder\":true}"
+  }
+ ]
+}

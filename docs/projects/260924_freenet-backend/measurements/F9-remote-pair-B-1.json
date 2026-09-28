@@ -1,0 +1,77 @@
+{
+ "run": "B-1",
+ "direction": "host here (owner node 0.2.137), viewer on hetzner-deb16 (freenet 0.2.136)",
+ "date": "2026-09-24",
+ "result": null,
+ "host_getMisses": 0,
+ "viewer_getMisses": 0,
+ "events": [
+  {
+   "side": "host",
+   "at": "2026-09-24T19:58:16.469Z",
+   "event": "host:announce",
+   "data": "{\"linkId\":\"f9-remote-pair\",\"instance\":\"2u3JEWjDeMZf8uXUFNd1kV1wt2LBFPCjEFCARTeizHYG\",\"fresh\":true,\"ms\":11036}"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T19:58:16.469Z",
+   "event": "announced in",
+   "data": "11040 ms"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T20:02:47.271Z",
+   "event": "host:offer",
+   "data": "{\"linkId\":\"f9-remote-pair\",\"peer\":\"cec03c30f4b8b37c4444ce3af0d75650e8d569ce914f2deeae46b8dcd197e9b6\"}"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T20:02:49.003Z",
+   "event": "host:connected",
+   "data": "{\"linkId\":\"f9-remote-pair\",\"peer\":\"cec03c30f4b8b37c4444ce3af0d75650e8d569ce914f2deeae46b8dcd197e9b6\",\"ms\":1732}"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T20:02:49.003Z",
+   "event": "connection",
+   "data": "{\"path\":\"DIRECT\",\"pair\":{\"local\":{\"type\":\"srflx\",\"transport\":\"UDP\"},\"remote\":{\"type\":\"host\",\"transport\":\"UDP\"}}}"
+  },
+  {
+   "side": "host",
+   "at": "2026-09-24T20:04:02.840Z",
+   "event": "host done:",
+   "data": "viewer closed"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T19:58:13.858Z",
+   "event": "viewer:subscribed",
+   "data": "{\"instance\":\"2u3JEWjDeMZf8uXUFNd1kV1wt2LBFPCjEFCARTeizHYG\",\"ms\":980}"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T20:02:40.308Z",
+   "event": "viewer:answer",
+   "data": "{\"ms\":267429,\"sinceOfferMs\":266446}"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T20:02:41.395Z",
+   "event": "viewer:connected",
+   "data": "{\"peer\":\"cd502594864e18ba597359b610d814fac1e3aa976ae18ab8cb5f9837f8690066\",\"path\":\"DIRECT\",\"ms\":268517}"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T20:02:41.396Z",
+   "event": "connected",
+   "data": "{\"ok\":false,\"dialToConnectedMs\":268517,\"path\":\"DIRECT\",\"candidatePair\":{\"local\":{\"type\":\"host\",\"transport\":\"UDP\"},\"remote\":{\"type\":\"srflx\",\"transport\":\"UDP\"}}}"
+  },
+  {
+   "side": "viewer",
+   "at": "2026-09-24T20:02:46.637Z",
+   "event": "echo",
+   "data": "{\"messages\":1000,\"totalMs\":5240,\"perSecond\":191,\"rttP50Ms\":910.33,\"rttP95Ms\":4167.74,\"inOrder\":true}"
+  }
+ ],
+ "note": "no RESULT: the viewer reached its cap (see events)"
+}

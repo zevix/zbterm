@@ -4,6 +4,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Called by publish.yml so a release cannot happen unless lint and the whole
+  # cross-platform install matrix passed on exactly the commit being published.
+  workflow_call:
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -13,3 +16,104 @@ jobs:
         with:
           allow-git: all
       - run: npm run lint
+
+  # `npm install -g zbterm` has to work on Windows and macOS, not just Linux:
+  # every native dependency is N-API and ships prebuilds (sodium-native via
+  # require-addon, @lydell/node-pty as six per-platform OPTIONAL dependencies,
+  # bare-sidecar directly), so nothing here compiles - but "designed to
+  # work" is not "proven to work", which is what this matrix is for.
+  #
+  # Never pass --omit=optional anywhere in this job: it is exactly how the pty
+  # binary goes missing, and the point of the matrix is to catch that on every
+  # OS rather than only on Linux.
+  install:
+    name: Install ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      # One red platform must not hide the state of the other three.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64 (doctor + headless engine boot)
+          # macos-latest and macos-14 are BOTH arm64, so pairing them would buy
+          # no extra coverage. macos-26-intel is the x64 image this repo
+          # already builds releases on (see build-release.yml); macos-13 is the
+          # older x64 image.
+          - os: macos-latest
+            label: macos-arm64 (doctor only, no headless display)
+          - os: macos-26-intel
+            label: macos-x64 (doctor only, no headless display)
+          - os: windows-latest
+            label: windows-x64 (doctor only, no headless display)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # A full dev install: `npm pack` runs `prepack`, which vendors the
+      # renderer assets out of devDependencies.
+      - name: npm ci
+        run: npm ci
+
+      # bin/lib/postinstall.js prunes prebuilds by npm_config_platform /
+      # npm_config_arch, with a sysctl.proc_translated probe for Rosetta. If a
+      # runner reports the wrong pair, the prune keeps the wrong target and
+      # `doctor` fails later with a confusing "no bare prebuild" line - so the
+      # target is asserted here, in the log, before anything else runs.
+      - name: Assert the prune target matches the runner
+        shell: bash
+        run: |
+          node -e '
+            const { target } = require("./bin/lib/postinstall.js")
+            const expected = process.platform + "-" + process.arch
+            const actual = target()
+            console.log("runner platform-arch:     " + expected)
+            console.log("postinstall prune target: " + actual)
+            if (actual !== expected) {
+              console.error("prune target does not match the runner - Rosetta, or an npm_config_platform/npm_config_arch override")
+              process.exit(1)
+            }
+          '
+
+      - name: npm pack
+        shell: bash
+        run: |
+          rm -f zbterm-*.tgz
+          npm pack --pack-destination .
+          ls -l zbterm-*.tgz
+
+      # Both smoke scripts default to ./zbterm-<version>.tgz, so the tarball
+      # is handed over by location rather than by an argument - a path built on
+      # a Windows runner is a different shape in bash than in pwsh, and there
+      # is no reason to translate it.
+
+      # Linux is the only runner that can obtain a display, so it is the only
+      # one that proves the Bare engine actually boots: the smoke script polls
+      # GET /health until the body contains "engineReady":true. The whole
+      # script runs under xvfb-run because `doctor` checks DISPLAY on Linux
+      # before the GUI stage is ever reached.
+      - name: Smoke install (headless engine boot under Xvfb)
+        if: runner.os == 'Linux'
+        run: |
+          command -v xvfb-run >/dev/null 2>&1 || {
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+          }
+          xvfb-run -a npm run smoke:install
+
+      # No display on the hosted macOS runners: doctor only. Same script,
+      # which skips its GUI stage when there is neither xvfb-run nor $DISPLAY.
+      - name: Smoke install (doctor only)
+        if: runner.os == 'macOS'
+        run: npm run smoke:install
+
+      # Windows needs its own script purely because `npm install -g --prefix
+      # DIR` puts the shims in DIR itself instead of DIR/bin.
+      - name: Smoke install (doctor only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/npm-smoke-install.ps1

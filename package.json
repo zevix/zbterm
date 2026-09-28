@@ -1,20 +1,64 @@
 {
-  "name": "hello-pear-electron",
-  "productName": "HelloPear",
-  "version": "1.0.0",
-  "upgrade": "pear://<YOUR_KEY_HERE>",
-  "description": "",
-  "license": "",
-  "author": "",
+  "name": "zbterm",
+  "productName": "ZBTerm",
+  "version": "1.0.44",
+  "description": "Peer-to-peer terminal recording and live session sharing, built on Hypercore and Electron.",
+  "license": "Apache-2.0",
+  "author": "David Achitov",
   "type": "commonjs",
   "main": "electron/main.js",
-  "private": true,
+  "bin": {
+    "zbterm": "bin/zbterm.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin/",
+    "electron/",
+    "engine/",
+    "renderer/",
+    "build/icon.png",
+    "build/icon/",
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
   "scripts": {
-    "lint": "prettier --check . && lunte",
-    "format": "prettier --write . && lunte --fix",
+    "lint": "prettier --check package.json forge.config.js electron engine renderer test && lunte electron engine renderer test forge.config.js",
+    "format": "prettier --write package.json forge.config.js electron engine renderer test && lunte --fix electron engine renderer test forge.config.js",
+    "vendor:assets": "node scripts/vendor-assets.js",
+    "postinstall": "node bin/lib/postinstall.js",
+    "prepack": "node scripts/vendor-assets.js",
+    "pretest": "node scripts/vendor-assets.js",
+    "prestart": "node scripts/vendor-assets.js",
+    "test": "brittle-node test/*.test.js test/backends/*.test.js",
+    "test:canary": "node test/canary-scan.js",
+    "test:debug-server": "node test/debug-server-e2e.js",
+    "icons": "node scripts/generate-icons.js",
+    "logo": "node scripts/logo.js",
+    "pack:check": "bash scripts/npm-pack-check.sh",
+    "smoke:install": "bash scripts/npm-smoke-install.sh",
+    "release:npm": "bash scripts/release-npm.sh",
     "start": "electron-forge start -- --no-updates",
     "package": "electron-forge package",
     "make": "electron-forge make",
+    "build:relay": "node scripts/build-relay.js",
     "install:all": "npm i --ignore-scripts=true && npm run postinstall:all",
     "install:mac": "npm i --ignore-scripts=true && npm run postinstall:mac",
     "postinstall:all": "npm run install:electron",
@@ -24,11 +68,36 @@
     "install:fs-xattr": "cd node_modules/fs-xattr && node-gyp rebuild"
   },
   "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.15",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
+    "b4a": "^1.8.1",
+    "bare-crypto": "^1.15.3",
+    "bare-events": "^2.8.3",
+    "bare-fs": "^4.7.1",
+    "bare-os": "^3.9.1",
+    "bare-path": "^3.0.0",
+    "bare-sidecar": "^0.5.7",
+    "blind-relay": "^1.6.1",
+    "compact-encoding": "^3.5.2",
+    "electron": "^40.2.1",
     "framed-stream": "^1.0.1",
-    "hello-pear-worker": "^1.0.0",
+    "graceful-goodbye": "^1.3.3",
+    "hyperbee": "^2.27.3",
+    "hypercore": "^11.37.0",
+    "keet-identity-key": "^3.2.0",
     "paparam": "^1.10.0",
-    "pear-runtime": "^1.1.4",
+    "sodium-native": "^5.1.0",
     "which-runtime": "^1.3.2"
+  },
+  "optionalDependencies": {
+    "@freenetorg/freenet-stdlib": "^0.4.0",
+    "bare-encoding": "^1.0.3",
+    "bare-ws": "^3.2.0",
+    "bs58": "^6.0.0",
+    "hyperdht": "^6.34.0",
+    "hyperswarm": "^4.17.2",
+    "node-datachannel": "^0.33.4"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",
@@ -38,7 +107,13 @@
     "@electron-forge/maker-rpm": "^7.11.1",
     "@electron-forge/maker-zip": "^7.11.1",
     "@electron/node-gyp": "git+ssh://git@github.com/electron/node-gyp.git#06b29aafb7708acef8b3669835c8a7857ebc92d2",
+    "@fortawesome/fontawesome-free": "^7.3.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "@yao-pkg/pkg": "^6.21.0",
     "app-builder-lib": "^26.8.1",
+    "brittle": "^4.0.2",
     "electron": "^40.2.1",
     "electron-forge-plugin-prune-prebuilds": "^1.0.0",
     "electron-forge-plugin-universal-prebuilds": "^1.0.0",
@@ -47,10 +122,19 @@
     "pear-electron-forge-maker-flatpak": "^0.0.6",
     "pear-electron-forge-maker-snap": "^1.0.0",
     "prettier": "^3.8.1",
-    "prettier-config-holepunch": "^2.0.0"
+    "prettier-config-holepunch": "^2.0.0",
+    "sharp": "^0.35.3"
   },
   "allowScripts": {
     "electron@40.10.1": true,
     "electron-winstaller": false
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zevix/zbterm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zevix/zbterm/issues"
+  },
+  "homepage": "https://github.com/zevix/zbterm#readme"
 }

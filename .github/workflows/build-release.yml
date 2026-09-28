@@ -2,16 +2,8 @@ name: Build Release
 
 on:
   workflow_call:
-    inputs:
-      upgrade-key:
-        type: string
-        default: ''
 
   workflow_dispatch:
-    inputs:
-      upgrade-key:
-        description: Value for package.json upgrade field
-        required: false
 
 env:
   CHANNEL: production
@@ -65,7 +57,6 @@ jobs:
       - uses: holepunchto/actions/make-pear-app@v1
         with:
           channel: ${{ env.CHANNEL }}
-          upgrade_key: ${{ inputs['upgrade-key'] }}
           linux_appimage: >-
             ${{ format('{0}-{1}-{2}.AppImage',
                 needs.prebuild.outputs.package-name,
@@ -106,7 +97,6 @@ jobs:
         id: build
         with:
           channel: ${{ env.CHANNEL }}
-          upgrade_key: ${{ inputs['upgrade-key'] }}
           linux_appimage: >-
             ${{ format('{0}-{1}-{2}.AppImage',
                 needs.prebuild.outputs.package-name,
@@ -147,7 +137,6 @@ jobs:
         id: build
         with:
           channel: ${{ env.CHANNEL }}
-          upgrade_key: ${{ inputs['upgrade-key'] }}
           macos_dmg: >-
             ${{ format('{0}-{1}-{2}.dmg',
                 needs.prebuild.outputs.package-name,
@@ -185,7 +174,6 @@ jobs:
         id: build
         with:
           channel: ${{ env.CHANNEL }}
-          upgrade_key: ${{ inputs['upgrade-key'] }}
           macos_dmg: >-
             ${{ format('{0}-{1}-{2}.dmg',
                 needs.prebuild.outputs.package-name,
@@ -225,7 +213,6 @@ jobs:
         id: build
         with:
           channel: ${{ env.CHANNEL }}
-          upgrade_key: ${{ inputs['upgrade-key'] }}
           windows_msix: >-
             ${{ format('{0}.msix',
                 needs.prebuild.outputs.package-name) }}

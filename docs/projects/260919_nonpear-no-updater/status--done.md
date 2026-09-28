@@ -1,0 +1,1 @@
+Done 2026-09-19. U0–U1 retired. Non-Pear packages ship no hyperswarm/hyperdht/pear-runtime/corestore in the app's node_modules and run with updates off; Pear builds unchanged. Suite 354 tests / 2132 asserts, lint 98 warnings. S-13 fixed (D-07). Open: open-issues.md. Git not touched.

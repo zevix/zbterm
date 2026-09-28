@@ -1,0 +1,23 @@
+{
+  "name": "zbterm-spike-freenet",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Throwaway probes P-1..P-6 for the backend-abstraction plan. Not packaged.",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@freenetorg/freenet-stdlib": "^0.4.0",
+    "@hyperswarm/secret-stream": "6.9.1",
+    "@noble/hashes": "^1.8.0",
+    "@roamhq/wrtc": "^0.10.0",
+    "bare-encoding": "^1.0.3",
+    "bare-fs": "4.7.1",
+    "bare-path": "^3.1.2",
+    "bare-process": "^4.5.1",
+    "bare-ws": "^3.2.0",
+    "hypercore": "11.33.5",
+    "node-datachannel": "^0.33.4",
+    "streamx": "2.28.1",
+    "werift": "^0.24.4",
+    "ws": "^8.21.3"
+  }
+}

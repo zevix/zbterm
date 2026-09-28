@@ -7,7 +7,15 @@ permissions:
   id-token: write
   contents: write
 jobs:
+  # Publishing is gated on the full Integrate workflow - lint plus the
+  # cross-platform `npm install -g` matrix (Linux, macOS arm64, macOS x64,
+  # Windows) - running against exactly this tag. A tarball that does not
+  # install cleanly on all four cannot reach npm.
+  integrate:
+    uses: ./.github/workflows/integrate.yml
+
   publish:
+    needs: [integrate]
     runs-on: ubuntu-latest
     environment:
       name: npm

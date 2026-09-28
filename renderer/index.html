@@ -2,47 +2,2164 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Hello Pear</title>
+    <title>ZBTerm</title>
+    <link rel="stylesheet" href="vendor/xterm/xterm.css" />
+    <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css" />
     <style>
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-        display: flex;
-        justify-content: center;
-        align-items: center;
+      * {
+        box-sizing: border-box;
+      }
+
+      :root {
+        --sidebar-width: 310px;
+        --sidebar-min-width: 220px;
+        --sidebar-max-width: 640px;
+        --header-height: 60px;
+        --bottom-height: 50px;
+        --app-bg: #16181b;
+        --main-bg: #111316;
+        --panel-bg: #202428;
+        --bar-bg: #1b1f23;
+        --control-bg: #262b30;
+        --control-disabled-bg: #20252a;
+        --input-bg: #111316;
+        --text: #e7edf1;
+        --muted: #9eabb4;
+        --soft-text: #bac5cc;
+        --border: #31383d;
+        --control-border: #3a4248;
+        --selected-bg: #33414a;
+        --selected-border: #6aa9b7;
+        --accent-blue: #2b8cff;
+        --accent-blue-border: #6ab0ff;
+        --accent-green-border: #3fd18b;
+        --pear-color: #9ad227;
+        --pear-text: #e2f6b4;
+        --pear-deep: #4e6b14;
+        --accent-warm: #c9872c;
+        --activity-mark: rgba(154, 210, 39, 0.78);
+        --history-mark: rgba(43, 140, 255, 0.72);
+        --socket-mark: rgba(238, 102, 78, 0.9);
+        --idle-mark: rgba(158, 171, 180, 0.34);
+        --download-mark: rgba(243, 201, 105, 0.9);
+        --live-flash-bg: #050607;
+        --terminal-bg: #111316;
+        --letterbox-bg: #000000;
+        --terminal-fg: #e7edf1;
+        --terminal-cursor: #f3c969;
+        --terminal-selection: #355a64;
+      }
+
+      :root[data-theme='light'] {
+        --app-bg: #dfe5ea;
+        --main-bg: #f7f9fb;
+        --panel-bg: #eef2f5;
+        --bar-bg: #ffffff;
+        --control-bg: #f2f5f8;
+        --control-disabled-bg: #e4e9ee;
+        --input-bg: #ffffff;
+        --text: #1d252c;
+        --muted: #60707c;
+        --soft-text: #44525d;
+        --border: #c9d2db;
+        --control-border: #b8c4ce;
+        --selected-bg: #dbeef4;
+        --selected-border: #5aa5b8;
+        --accent-blue: #1677db;
+        --accent-blue-border: #4d9ae8;
+        --accent-green-border: #35b978;
+        --pear-color: #7dbd12;
+        --pear-text: #44660a;
+        --pear-deep: #5e8018;
+        --accent-warm: #b36b00;
+        --activity-mark: rgba(94, 128, 24, 0.72);
+        --history-mark: rgba(22, 119, 219, 0.66);
+        --socket-mark: rgba(205, 78, 54, 0.82);
+        --idle-mark: rgba(96, 112, 124, 0.32);
+        --download-mark: rgba(179, 107, 0, 0.82);
+        --live-flash-bg: #ffffff;
+        --terminal-bg: #fbfcfd;
+        --letterbox-bg: #ffffff;
+        --terminal-fg: #172027;
+        --terminal-cursor: #a55e00;
+        --terminal-selection: #bdd7e4;
+      }
+
+      html {
+        width: 100%;
         height: 100vh;
+        overflow: hidden;
+      }
+
+      body {
         margin: 0;
-        background: linear-gradient(135deg, #21c437 0%, #0e4f15 100%);
-        color: white;
+        width: 100%;
+        height: 100vh;
+        overflow: hidden;
+        background: var(--app-bg);
+        color: var(--text);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
       }
-      h1 {
-        font-size: 48px;
-        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+
+      button,
+      input,
+      select {
+        font: inherit;
       }
-      #update-btn {
-        display: none;
-        margin-top: 20px;
-        padding: 12px 24px;
-        font-size: 18px;
-        border: 2px solid white;
-        border-radius: 8px;
-        background: green;
-        color: white;
+
+      .app {
+        position: relative;
+        display: grid;
+        grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+        height: 100vh;
+        max-height: 100vh;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .sidebar-resizer {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: var(--sidebar-width);
+        width: 8px;
+        /* Sits mostly on the terminal side so it does not swallow clicks on
+           the session list's scrollbar. */
+        margin-left: -2px;
+        z-index: 15;
+        cursor: col-resize;
+        background: transparent;
+        touch-action: none;
+      }
+
+      .sidebar-resizer::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 1px;
+        width: 2px;
+        background: transparent;
+        transition: background 120ms ease;
+      }
+
+      .sidebar-resizer:hover::after,
+      .sidebar-resizer.dragging::after {
+        background: var(--accent-blue-border);
+      }
+
+      body.sidebar-resizing {
+        cursor: col-resize;
+        user-select: none;
+      }
+
+      .sidebar {
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
+        /* Without an explicit column the brand bar's min-content width sets it,
+           and at narrow widths every row overflows past the pane's edge. */
+        grid-template-columns: minmax(0, 1fr);
+        border-right: 1px solid var(--border);
+        background: var(--panel-bg);
+        min-width: 0;
+        min-height: 0;
+        max-height: 100vh;
+        overflow: hidden;
+      }
+
+      .brand {
+        height: var(--header-height);
+        padding: 0 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .brand h1 {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 22px;
+        line-height: 1;
+        margin: 0;
+        font-weight: 650;
+        flex: 0 1 auto;
+        min-width: 0;
+      }
+
+      .brand h1 > span:last-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .brand-mark {
+        display: inline-flex;
+        width: 40px;
+        height: 40px;
+        flex-shrink: 0;
+      }
+
+      .brand-mark img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+
+      .version {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .brand-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex: 0 0 auto;
+      }
+
+      .brand-actions > * {
+        flex-shrink: 0;
+      }
+
+      .settings-toggle {
+        font-size: 16px;
+        line-height: 1;
+        display: inline-grid;
+        place-items: center;
+      }
+
+      .tools {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        padding: 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .tools input {
+        width: 100%;
+        min-width: 0;
+        background: var(--input-bg);
+        border: 1px solid var(--control-border);
+        color: var(--text);
+        padding: 8px 78px 8px 9px;
+        border-radius: 6px;
+      }
+
+      .search-wrap {
+        grid-column: 1 / -1;
+        position: relative;
+        min-width: 0;
+      }
+
+      .search-toggle {
+        position: absolute;
+        right: 5px;
+        top: 50%;
+        transform: translateY(-50%);
+        min-width: 62px;
+        height: 26px;
+        padding: 0 8px;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--muted);
         cursor: pointer;
       }
-      #update-btn:hover {
-        background: greenyellow;
+
+      .search-toggle.active {
+        border-color: var(--pear-color);
+        color: var(--pear-text);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--pear-color) 16%, transparent) inset;
       }
-      .container {
+
+      .icon-btn,
+      .text-btn,
+      .session-row {
+        border: 1px solid var(--control-border);
+        background: var(--control-bg);
+        color: var(--text);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      .icon-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 20px;
+      }
+
+      .theme-toggle {
+        font-size: 16px;
+        line-height: 1;
+        display: inline-grid;
+        place-items: center;
+      }
+
+      .text-btn {
+        padding: 7px 10px;
+      }
+
+      .label-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        min-width: 0;
+        white-space: nowrap;
+      }
+
+      .btn-icon {
+        display: inline-grid;
+        place-items: center;
+        width: 1.1em;
+        min-width: 1.1em;
+        line-height: 1;
+      }
+
+      #shareSession .btn-icon {
+        color: var(--pear-color);
+      }
+
+      @container topbar (max-width: 760px) {
+        .topbar-actions .label-btn span {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
+        }
+
+        .topbar-actions .label-btn {
+          width: 34px;
+          height: 34px;
+          padding: 0;
+          gap: 0;
+        }
+      }
+
+      .icon-only {
+        display: inline-grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+      }
+
+      .icon-only > i {
+        display: block;
+        width: 1em;
+        line-height: 1;
         text-align: center;
+      }
+
+      .text-btn.mode-live {
+        border-color: var(--pear-color);
+        color: var(--pear-text);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--pear-color) 22%, transparent) inset;
+      }
+
+      .text-btn.live-on {
+        border-color: var(--pear-color);
+        color: var(--pear-text);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--pear-color) 22%, transparent) inset;
+      }
+
+      .text-btn.live-on .btn-icon {
+        color: var(--pear-color);
+      }
+
+      .text-btn.live-on.live-joined {
+        border-color: var(--accent-blue-border);
+        color: #d9ecff;
+        box-shadow: 0 0 0 1px rgba(43, 140, 255, 0.22) inset;
+      }
+
+      .text-btn.live-on.live-joined .btn-icon {
+        color: var(--accent-blue-border);
+      }
+
+      .text-btn.input-shared {
+        border-color: #ee8078;
+        color: #ffb7b1;
+        box-shadow: 0 0 0 1px rgba(238, 128, 120, 0.2) inset;
+      }
+
+      .text-btn.input-shared-viewer {
+        border-color: var(--pear-color);
+        color: var(--pear-text);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--pear-color) 22%, transparent) inset;
+      }
+
+      .text-btn.input-blocked-flash {
+        animation: input-blocked-flash 0.62s ease-out;
+      }
+
+      .text-btn.input-blocked-flash .btn-icon {
+        color: #ffefed;
+      }
+
+      .text-btn.zoom-flash {
+        animation: zoom-flash 0.42s ease-out;
+      }
+
+      .text-btn.zoom-flash .btn-icon {
+        color: #eaffef;
+      }
+
+      :root[data-theme='light'] .text-btn.live-on.live-joined {
+        color: #0f64bf;
+      }
+
+      :root[data-theme='light'] .text-btn.live-on.live-joined .btn-icon {
+        color: var(--accent-blue);
+      }
+
+      :root[data-theme='light'] .text-btn.input-shared {
+        color: #9f3028;
+      }
+
+      :root[data-theme='light'] .text-btn.input-blocked-flash .btn-icon {
+        color: #ffffff;
+      }
+
+      :root[data-theme='light'] .text-btn.zoom-flash .btn-icon {
+        color: #ffffff;
+      }
+
+      .text-btn.mode-pause {
+        background: var(--accent-blue);
+        border-color: var(--accent-blue-border);
+        color: #f4f9ff;
+      }
+
+      .text-btn.live-beacon {
+        animation: live-beacon-pulse 1.05s steps(1, end) infinite;
+        color: #f4f9ff;
+      }
+
+      .text-btn.live-beacon.live-host {
+        animation-name: live-beacon-pulse-host;
+      }
+
+      .text-btn.live-beacon.input-blocked-flash,
+      .text-btn.live-beacon.live-host.input-blocked-flash {
+        animation: input-blocked-flash 0.62s ease-out;
+      }
+
+      @keyframes live-beacon-pulse {
+        0%,
+        49% {
+          background: var(--accent-blue);
+          border-color: var(--accent-blue-border);
+        }
+
+        50%,
+        100% {
+          background: var(--live-flash-bg);
+          border-color: var(--accent-blue-border);
+        }
+      }
+
+      @keyframes live-beacon-pulse-host {
+        0%,
+        49% {
+          background: var(--pear-deep);
+          border-color: var(--pear-color);
+        }
+
+        50%,
+        100% {
+          background: var(--live-flash-bg);
+          border-color: var(--pear-color);
+        }
+      }
+
+      /* Confirms a Ctrl -/+ zoom on the Font button the shortcut stood in for. */
+      @keyframes zoom-flash {
+        0%,
+        100% {
+          background: var(--control-bg);
+        }
+
+        12%,
+        74% {
+          background: #1b7f3b;
+          border-color: #6ee7a0;
+          color: #f2fff6;
+          box-shadow:
+            0 0 0 1px rgba(110, 231, 160, 0.38) inset,
+            0 0 0 3px rgba(27, 127, 59, 0.18);
+        }
+      }
+
+      @keyframes input-blocked-flash {
+        0%,
+        100% {
+          background: var(--control-bg);
+        }
+
+        12%,
+        74% {
+          background: #b3261e;
+          border-color: #ff8a80;
+          color: #fff5f3;
+          box-shadow:
+            0 0 0 1px rgba(255, 138, 128, 0.38) inset,
+            0 0 0 3px rgba(179, 38, 30, 0.18);
+        }
+      }
+
+      button:disabled,
+      select:disabled {
+        background: var(--control-disabled-bg);
+        border-color: var(--border);
+        color: color-mix(in srgb, var(--muted) 80%, transparent);
+        cursor: default;
+        opacity: 0.62;
+      }
+
+      .text-btn.transport-waiting {
+        background: var(--control-disabled-bg);
+        border-color: var(--border);
+        color: color-mix(in srgb, var(--muted) 80%, transparent);
+        cursor: default;
+        opacity: 0.62;
+      }
+
+      .text-btn.extending:disabled {
+        border-color: var(--accent-green-border);
+        color: var(--accent-green-border);
+        opacity: 1;
+        animation: extending-flash 1s ease-in-out infinite;
+      }
+
+      @keyframes extending-flash {
+        0%,
+        100% {
+          background: var(--control-disabled-bg);
+        }
+
+        50% {
+          background: color-mix(in srgb, var(--accent-green-border) 38%, transparent);
+        }
+      }
+
+      .text-btn.mode-live:disabled {
+        border-color: var(--pear-color);
+        color: var(--pear-text);
+        opacity: 0.86;
+      }
+
+      .text-btn.live-on:disabled {
+        border-color: var(--pear-color);
+        color: var(--pear-text);
+        opacity: 0.86;
+      }
+
+      .text-btn.live-on.live-joined:disabled {
+        border-color: var(--accent-blue-border);
+        color: #d9ecff;
+      }
+
+      :root[data-theme='light'] .text-btn.live-on.live-joined:disabled {
+        color: #0f64bf;
+      }
+
+      #joinLink {
+        width: 100%;
+      }
+
+      .sessions {
+        overflow: auto;
+        min-height: 0;
+        padding: 8px;
+      }
+
+      .session-select-wrap {
+        display: none;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .session-select {
+        width: 100%;
+        min-width: 0;
+        height: 36px;
+        background: var(--input-bg);
+        border: 1px solid var(--control-border);
+        color: var(--text);
+        border-radius: 6px;
+        padding: 0 9px;
+      }
+
+      .session-row {
+        width: 100%;
+        min-height: 58px;
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr);
+        gap: 9px;
+        align-items: center;
+        text-align: left;
+        padding: 8px;
+        margin-bottom: 6px;
+        position: relative;
+      }
+
+      .session-row.selected {
+        background: var(--selected-bg);
+        border-color: var(--selected-border);
+      }
+
+      .session-row:focus-visible,
+      .session-menu-trigger:focus-visible,
+      .context-menu-item:focus-visible {
+        outline: 2px solid var(--accent-blue-border);
+        outline-offset: 2px;
+      }
+
+      .session-menu-trigger {
+        position: absolute;
+        right: 7px;
+        top: 7px;
+        width: 30px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--control-border);
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--bar-bg) 88%, transparent);
+        color: var(--soft-text);
+        opacity: 0;
+        transform: translateY(-3px);
+        cursor: pointer;
+      }
+
+      .session-row:hover .session-menu-trigger,
+      .session-row:focus-within .session-menu-trigger,
+      .session-row.menu-open .session-menu-trigger {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .session-actions {
+        position: absolute;
+        right: 7px;
+        top: 7px;
+        display: flex;
+        gap: 4px;
+      }
+
+      .session-actions .session-action {
+        position: static;
+        width: 26px;
+        font-size: 12px;
+      }
+
+      .session-actions .session-action:hover {
+        color: var(--text);
+        background: var(--control-bg);
+      }
+
+      .session-actions .session-action.active {
+        color: var(--pear-color);
+      }
+
+      .session-editor-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        background: rgba(0, 0, 0, 0.48);
+      }
+
+      /* Popup menus dim the app like the dialogs do. The layer lets pointer
+         events through, so the outside-click handlers still see the target. */
+      body:has(.context-menu:not([hidden]))::before {
+        content: '';
+        position: fixed;
+        inset: 0;
+        z-index: 24;
+        background: rgba(0, 0, 0, 0.48);
+        pointer-events: none;
+      }
+
+      .session-editor {
+        position: fixed;
+        width: min(380px, calc(100vw - 16px));
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 8px 10px;
+        align-items: center;
+        padding: 12px;
+        border: 1px solid var(--control-border);
+        border-radius: 7px;
+        background: var(--bar-bg);
+        box-shadow: 0 16px 44px rgba(0, 0, 0, 0.34);
+      }
+
+      .session-editor-label {
+        color: var(--soft-text);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .session-editor .modal-input {
+        padding: 6px 8px;
+      }
+
+      .session-editor-field {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 6px;
+      }
+
+      .session-editor-browse {
+        width: 32px;
+        padding: 0;
+        display: grid;
+        place-items: center;
+      }
+
+      .session-editor .session-editor-check {
+        grid-column: 1 / -1;
+        margin-top: 0;
+      }
+
+      .session-editor-share-options {
+        grid-column: 1 / -1;
+        min-width: 0;
+      }
+
+      .session-editor-share-options[hidden] {
+        display: none;
+      }
+
+      /* The Share options want the wizard's width once they are shown. */
+      .session-editor:has(.session-editor-share-options:not([hidden])) {
+        width: min(440px, calc(100vw - 16px));
+      }
+
+      .session-editor-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+        margin-top: 4px;
+      }
+
+      .context-menu {
+        position: fixed;
+        z-index: 25;
+        min-width: 174px;
+        display: grid;
+        gap: 3px;
+        padding: 5px;
+        border: 1px solid var(--control-border);
+        border-radius: 7px;
+        background: var(--bar-bg);
+        box-shadow: 0 16px 44px rgba(0, 0, 0, 0.34);
+      }
+
+      .context-menu[hidden] {
+        display: none;
+      }
+
+      .context-menu-item {
+        width: 100%;
+        justify-content: flex-start;
+        border: 0;
+        background: transparent;
+        color: var(--text);
+        border-radius: 5px;
+        padding: 8px 9px;
+        cursor: pointer;
+      }
+
+      .context-menu-item:hover {
+        background: var(--control-bg);
+      }
+
+      .context-menu-item:disabled {
+        background: transparent;
+      }
+
+      /* Checkable menu rows keep the tick column reserved when unchecked so
+         the labels stay on one left edge whatever the state. */
+      .context-menu-check .check-mark {
+        color: var(--pear-text);
+      }
+
+      .context-menu-check[aria-checked='false'] .check-mark,
+      .context-menu-field .check-mark {
+        visibility: hidden;
+      }
+
+      .settings-menu {
+        min-width: 226px;
+      }
+
+      .session-icon {
+        width: 16px;
+        min-width: 16px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1;
+        text-align: center;
+      }
+
+      .session-icon.input-shared {
+        color: #ee8078;
+      }
+
+      .session-icon.live-host {
+        color: var(--pear-deep);
+      }
+
+      .session-icon.live-joined {
+        color: var(--accent-blue);
+      }
+
+      .session-icon.pending {
+        color: var(--download-mark);
+        animation: pending-pulse 0.9s ease-in-out infinite;
+      }
+
+      .session-row.pending {
+        border-color: color-mix(in srgb, var(--download-mark) 58%, var(--control-border));
+      }
+
+      .session-main {
+        min-width: 0;
+        display: grid;
+        gap: 3px;
+      }
+
+      .session-title {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      /* Pinned and default marks, at the right end of the row. The hover
+         actions take the same corner, so the marks give way to them. */
+      .session-marks {
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        pointer-events: none;
+      }
+
+      .session-row.has-marks .session-main {
+        padding-right: 40px;
+      }
+
+      .session-row:hover .session-marks,
+      .session-row:focus-within .session-marks,
+      .session-row.menu-open .session-marks {
+        visibility: hidden;
+      }
+
+      /* Marks the session SHIFT+New copies. */
+      .session-default-mark {
+        font-size: 12px;
+        color: var(--pear-deep);
+      }
+
+      .session-pin-mark {
+        font-size: 11px;
+        color: var(--muted);
+        transform: rotate(30deg);
+      }
+
+      .session-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+      }
+
+      .session-sub {
+        color: var(--muted);
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .empty {
+        color: var(--muted);
+        padding: 12px;
+      }
+
+      .main {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        min-width: 0;
+        height: 100vh;
+        max-height: 100vh;
+        min-height: 0;
+        overflow: hidden;
+        background: var(--terminal-bg);
+      }
+
+      .topbar {
+        container: topbar / inline-size;
+        height: var(--header-height);
+        min-height: var(--header-height);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bar-bg);
+      }
+
+      .topbar-title {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      .topbar h2 {
+        margin: 0;
+        font-size: 16px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .meta {
+        color: #9eabb4;
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .topbar-actions {
+        flex: 0 1 auto;
+        display: flex;
+        flex-wrap: nowrap;
+        justify-content: flex-end;
+        gap: 6px;
+      }
+
+      .terminal-wrap {
+        min-height: 0;
+        padding: 8px;
+        overflow: hidden;
+        contain: layout paint;
+        display: grid;
+        place-items: center;
+        position: relative;
+      }
+
+      /* A session shown at another grid (a host with a different window, or a
+         recording) is centred. Everything around it, padding included, is plain
+         black (white in light mode): the terminal background is not, so its edge
+         still shows without drawing a frame. */
+      .terminal-wrap.terminal-letterboxed {
+        background: var(--letterbox-bg);
+      }
+
+      .terminal-wrap.drop-target::after {
+        content: '';
+        position: absolute;
+        inset: 4px;
+        border: 2px dashed var(--accent-blue-border);
+        border-radius: 6px;
+        pointer-events: none;
+      }
+
+      #terminal {
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      #terminal .xterm {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      #terminal .xterm-viewport {
+        overflow: hidden !important;
+      }
+
+      #terminal .xterm-screen {
+        max-width: 100%;
+        overflow: hidden;
+      }
+
+      .bottom {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        align-items: center;
+        min-height: var(--bottom-height);
+        padding: 8px 10px;
+        border-top: 1px solid var(--border);
+        background: var(--bar-bg);
+        box-shadow: 0 -1px 0 var(--terminal-bg);
+      }
+
+      .status {
+        color: var(--soft-text);
+        font-size: 12px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .playback {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: min(720px, 60vw);
+      }
+
+      .time-label {
+        color: var(--soft-text);
+        font-size: 12px;
+        min-width: 86px;
+        text-align: left;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .total-time.live-total {
+        opacity: 0.5;
+      }
+
+      .text-btn.mode-hd {
+        border-color: #f3c969;
+        color: #ffe2a1;
+        box-shadow: 0 0 0 1px rgba(243, 201, 105, 0.28) inset;
+      }
+
+      .text-btn.mode-hd:disabled {
+        background: var(--control-disabled-bg);
+        border-color: color-mix(in srgb, #f3c969 45%, var(--border));
+        color: color-mix(in srgb, #ffe2a1 65%, var(--muted));
+        opacity: 0.72;
+      }
+
+      .scrubber-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+        flex: 1;
+        min-width: 0;
+      }
+
+      .scrubber-tip {
+        position: absolute;
+        left: 0;
+        bottom: 24px;
+        transform: translateX(-50%);
+        color: var(--text);
+        background: var(--control-bg);
+        border: 1px solid var(--control-border);
+        border-radius: 4px;
+        padding: 2px 5px;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        pointer-events: none;
+        white-space: nowrap;
+      }
+
+      .scrubber-indicators {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 50%;
+        height: 12px;
+        transform: translateY(-50%);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--control-bg) 72%, var(--border));
+        overflow: hidden;
+        pointer-events: none;
+      }
+
+      .scrubber-indicators span {
+        position: absolute;
+        top: 2px;
+        height: 8px;
+        min-width: 2px;
+        border-radius: 999px;
+      }
+
+      .scrubber-indicators .activity {
+        background: var(--activity-mark);
+      }
+
+      .scrubber-indicators .activity.low,
+      .scrubber-indicators .history.low,
+      .scrubber-indicators .socket.low {
+        opacity: 0.42;
+      }
+
+      .scrubber-indicators .activity.medium,
+      .scrubber-indicators .history.medium,
+      .scrubber-indicators .socket.medium {
+        opacity: 0.68;
+      }
+
+      .scrubber-indicators .activity.high,
+      .scrubber-indicators .history.high,
+      .scrubber-indicators .socket.high {
+        opacity: 0.96;
+      }
+
+      .scrubber-indicators .history {
+        top: 0;
+        height: 4px;
+        background: var(--history-mark);
+      }
+
+      .scrubber-indicators .socket {
+        top: 8px;
+        height: 4px;
+        background: var(--socket-mark);
+      }
+
+      .scrubber-indicators .idle {
+        top: 5px;
+        height: 2px;
+        background: repeating-linear-gradient(90deg, var(--idle-mark) 0 6px, transparent 6px 10px);
+        opacity: 0.72;
+      }
+
+      .scrubber-indicators .download {
+        top: 0;
+        height: 12px;
+        background: repeating-linear-gradient(
+          135deg,
+          var(--download-mark) 0 4px,
+          transparent 4px 8px
+        );
+        opacity: 0.9;
+      }
+
+      .playback[hidden],
+      .scrubber-tip[hidden],
+      #update-btn[hidden] {
+        display: none;
+      }
+
+      .playback input[type='range'] {
+        flex: 1;
+      }
+
+      .scrubber-wrap input[type='range'] {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        accent-color: var(--accent-blue);
+        background: transparent;
+        appearance: none;
+        -webkit-appearance: none;
+      }
+
+      .scrubber-wrap input[type='range']::-webkit-slider-runnable-track {
+        height: 12px;
+        border-radius: 999px;
+        background: transparent;
+      }
+
+      .scrubber-wrap input[type='range']::-webkit-slider-thumb {
+        width: 14px;
+        height: 14px;
+        margin-top: -1px;
+        border: 2px solid var(--accent-blue-border);
+        border-radius: 50%;
+        background: var(--bar-bg);
+        -webkit-appearance: none;
+      }
+
+      .scrubber-wrap input[type='range']::-moz-range-track {
+        height: 12px;
+        border-radius: 999px;
+        background: transparent;
+      }
+
+      .scrubber-wrap input[type='range']::-moz-range-thumb {
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--accent-blue-border);
+        border-radius: 50%;
+        background: var(--bar-bg);
+      }
+
+      /* No usable share backend (R-9). .label-btn sets display, which beats
+         the [hidden] attribute, so the class hides these outright. */
+      body.sharing-unavailable #joinLink,
+      body.sharing-unavailable #shareSession,
+      body.sharing-unavailable #inputMode {
+        display: none;
+      }
+
+      .share-backend-picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        margin: 0 0 10px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+
+      .share-backend-picker legend {
+        padding: 0 4px;
+        color: var(--muted);
+      }
+
+      .share-backend-picker:disabled {
+        opacity: 0.6;
+      }
+
+      .share-backend-choice {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      /* A backend the core lists as broken: a disabled radio with its reason. */
+      .share-backend-broken {
+        color: var(--muted);
+      }
+
+      .share-backend-detail {
+        font-size: 0.9em;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: calc(var(--bottom-height) + 16px);
+        z-index: 30;
+        max-width: min(520px, calc(100% - 36px));
+        padding: 10px 14px;
+        transform: translateX(-50%);
+        border: 1px solid var(--control-border);
+        border-radius: 6px;
+        background: var(--panel-bg);
+        color: var(--text);
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+      }
+
+      .share-options {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .share-option {
+        display: grid;
+        gap: 5px;
+        min-height: 86px;
+        padding: 10px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .share-option:focus-visible {
+        outline: 2px solid var(--accent-blue-border);
+        outline-offset: 1px;
+      }
+
+      .share-option strong {
+        font-size: 14px;
+      }
+
+      .share-option-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .share-max-users {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 400;
+        white-space: nowrap;
+      }
+
+      .share-max-users input {
+        width: 38px;
+        min-width: 0;
+        padding: 1px 2px;
+      }
+
+      .share-max-users input::-webkit-inner-spin-button,
+      .share-max-users input::-webkit-outer-spin-button {
+        opacity: 1;
+      }
+
+      .share-option span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .share-option.selected {
+        border-color: var(--accent-blue-border);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-blue-border) 54%, transparent) inset;
+      }
+
+      .share-warning {
+        margin: 8px 0 4px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+
+      .share-warning-danger {
+        color: #ff3b30;
+      }
+
+      .modal-warning {
+        margin: 4px 0;
+      }
+
+      .identity-options {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin: 6px 0;
+      }
+
+      .identity-option {
+        display: grid;
+        gap: 5px;
+        min-height: 76px;
+        padding: 10px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .identity-option strong {
+        font-size: 14px;
+      }
+
+      .identity-option span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .identity-option.selected {
+        border-color: var(--accent-blue-border);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-blue-border) 54%, transparent) inset;
+      }
+
+      .identity-github {
+        display: grid;
+        gap: 8px;
+      }
+
+      .identity-github[hidden] {
+        display: none;
+      }
+
+      .identity-keys {
+        display: grid;
+        gap: 6px;
+        max-height: 210px;
+        overflow-y: auto;
+      }
+
+      .identity-key-row {
+        display: grid;
+        gap: 3px;
+        padding: 8px 9px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .identity-key-row strong {
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }
+
+      .identity-key-row span {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+
+      .identity-key-row.selected {
+        border-color: var(--accent-blue-border);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-blue-border) 54%, transparent) inset;
+      }
+
+      /* A key the claimed username does not publish can be selected, so that
+         the error can explain why - but it never reads as usable. */
+      .identity-key-row.unpublished span {
+        color: #ff3b30;
+      }
+
+      .identity-hint {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+
+      /* The headline of the wizard: what peers see right now, carrying the
+         same red/green mark as the peer badges rather than reading as a hint. */
+      .identity-current {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--soft-text);
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      .identity-current > i {
+        font-size: 13px;
+        line-height: 1;
+      }
+
+      .identity-current-verified > i {
+        color: var(--accent-green-border);
+      }
+
+      /* Unverified is a caution, not an error: the same warm mark the Join and
+         approval dialogs use. Red stays reserved for a claim that failed. */
+      .identity-current-unknown > i {
+        color: var(--accent-warm);
+      }
+
+      .identity-username-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .identity-error {
+        color: #ff3b30;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      /* Same line, same place: green once the provider has confirmed the key,
+         so the gate always says where the claim stands. */
+      .identity-error.identity-error-ok {
+        color: var(--accent-green-border);
+      }
+
+      .identity-error[hidden] {
+        display: none;
+      }
+
+      .session-identity {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+        min-width: 0;
+      }
+
+      .identity-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        max-width: 100%;
+        min-width: 0;
+        padding: 1px 7px 1px 6px;
+        border: 1px solid var(--control-border);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--control-bg) 76%, transparent);
+        color: var(--soft-text);
+        font-size: 11px;
+        line-height: 1.6;
+      }
+
+      .identity-badge-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .identity-badge .spinner {
+        width: 11px;
+        height: 11px;
+        min-width: 11px;
+        border-width: 2px;
+      }
+
+      .identity-badge > i {
+        font-size: 11px;
+        line-height: 1;
+      }
+
+      .identity-verified {
+        border-color: color-mix(in srgb, var(--accent-green-border) 62%, var(--control-border));
+      }
+
+      .identity-verified > i {
+        color: var(--accent-green-border);
+      }
+
+      .identity-pending {
+        border-color: color-mix(in srgb, var(--accent-blue-border) 52%, var(--control-border));
+      }
+
+      .identity-unknown > i {
+        color: var(--accent-warm);
+      }
+
+      .identity-failed > i {
+        color: #ff3b30;
+      }
+
+      .identity-failed {
+        border-color: color-mix(in srgb, #ff3b30 58%, var(--control-border));
+      }
+
+      /* "Who is on the other end", shared by the Join dialog and the host's
+         approval dialog. Same icon, colour and explainer in both. */
+      .peer-identity {
+        display: grid;
+        gap: 3px;
+        margin: 6px 0 2px;
+      }
+
+      .peer-identity[hidden] {
+        display: none;
+      }
+
+      .peer-identity-head {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+      }
+
+      .peer-identity-head > i {
+        font-size: 13px;
+        line-height: 1;
+      }
+
+      .peer-identity-name {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 650;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .peer-identity-explain {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+
+      .peer-identity-verified > .peer-identity-head > i {
+        color: var(--accent-green-border);
+      }
+
+      .peer-identity-unknown > .peer-identity-head > i {
+        color: var(--accent-warm);
+      }
+
+      .peer-identity-failed > .peer-identity-head > i,
+      .peer-identity-failed > .peer-identity-explain {
+        color: #ff3b30;
+      }
+
+      /* The one moving state: a claim is being checked and nothing may be
+         joined or approved until it settles. */
+      .peer-identity-checking > .peer-identity-head > i {
+        color: var(--accent-warm);
+        animation: peer-identity-flash 900ms steps(1, end) infinite;
+      }
+
+      @keyframes peer-identity-flash {
+        0%,
+        49% {
+          opacity: 1;
+        }
+        50%,
+        100% {
+          opacity: 0.2;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .peer-identity-checking > .peer-identity-head > i {
+          animation: none;
+        }
+      }
+
+      .identity-annotate {
+        display: grid;
+        place-items: center;
+        width: 16px;
+        height: 16px;
+        min-width: 16px;
+        padding: 0;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 9px;
+        cursor: pointer;
+      }
+
+      .identity-annotate:hover {
+        color: var(--text);
+        background: var(--control-bg);
+      }
+
+      .modal-identity {
+        display: flex;
+        margin: 6px 0 2px;
+      }
+
+      .identity-note {
+        color: var(--accent-green-border);
+      }
+
+      .status-refused {
+        color: #ff3b30;
+        cursor: pointer;
+      }
+
+      .wizard-status {
+        display: grid;
+        justify-items: center;
+        gap: 10px;
+        padding: 12px 0 8px;
+        color: var(--soft-text);
+      }
+
+      .terminal-pending {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: grid;
+        place-items: center;
+        background: color-mix(in srgb, var(--terminal-bg) 84%, transparent);
+        pointer-events: none;
+      }
+
+      .terminal-pending[hidden] {
+        display: none;
+      }
+
+      .terminal-pending-inner {
+        display: grid;
+        justify-items: center;
+        gap: 10px;
+        color: var(--soft-text);
+        font-size: 13px;
+      }
+
+      .spinner {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 3px solid color-mix(in srgb, var(--control-border) 74%, transparent);
+        border-top-color: var(--accent-blue-border);
+        animation: spin 0.9s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @keyframes pending-pulse {
+        0%,
+        100% {
+          opacity: 0.45;
+          transform: scale(0.86);
+        }
+
+        50% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      .share-key {
+        width: 100%;
+        min-height: 76px;
+        resize: vertical;
+        background: var(--input-bg);
+        border: 1px solid var(--control-border);
+        color: var(--text);
+        padding: 8px 9px;
+        border-radius: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+      }
+
+      .playback select {
+        background: var(--input-bg);
+        border: 1px solid var(--control-border);
+        color: var(--text);
+        border-radius: 6px;
+        height: 32px;
+      }
+
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        background: rgba(0, 0, 0, 0.48);
+      }
+
+      .modal-panel {
+        width: min(440px, 100%);
+        display: grid;
+        gap: 12px;
+        padding: 14px;
+        background: var(--bar-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+        max-height: calc(100vh - 16px);
+        overflow: auto;
+      }
+
+      .modal-overlay-anchored {
+        display: block;
+      }
+
+      .modal-overlay-anchored > .modal-panel {
+        position: fixed;
+        width: min(440px, calc(100vw - 16px));
+        max-height: calc(100vh - 16px);
+        overflow: auto;
+      }
+
+      .modal-title {
+        color: var(--text);
+        font-weight: 650;
+        line-height: 1.3;
+      }
+
+      .modal-input {
+        width: 100%;
+        min-width: 0;
+        background: var(--input-bg);
+        border: 1px solid var(--control-border);
+        color: var(--text);
+        padding: 8px 9px;
+        border-radius: 6px;
+      }
+
+      .modal-input-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 8px;
+        align-items: center;
+      }
+
+      .modal-check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 7px;
+        width: max-content;
+        max-width: 100%;
+        color: var(--soft-text);
+        font-size: 13px;
+        line-height: 1.3;
+      }
+
+      .modal-check input {
+        width: 14px;
+        height: 14px;
+        margin: 0;
+        accent-color: var(--accent-blue-border);
+      }
+
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .modal-danger {
+        background: #9d2f2f;
+        border-color: #d15b5b;
+        color: #fff7f7;
+      }
+
+      .profile-picker {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        background: rgba(0, 0, 0, 0.48);
+      }
+
+      .profile-picker[hidden] {
+        display: none;
+      }
+
+      .profile-panel {
+        width: min(520px, 100%);
+        display: grid;
+        gap: 14px;
+        padding: 16px;
+        background: var(--bar-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+      }
+
+      .profile-panel h2 {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.2;
+      }
+
+      .profile-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .profile-row {
+        width: 100%;
+        min-height: 52px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 9px 10px;
+        text-align: left;
+      }
+
+      .profile-name {
+        display: block;
+        color: var(--text);
+        font-weight: 620;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .profile-meta {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .profile-actions {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+      }
+
+      .profile-actions input {
+        width: 100%;
+        min-width: 0;
+        background: var(--input-bg);
+        border: 1px solid var(--control-border);
+        color: var(--text);
+        padding: 8px 9px;
+        border-radius: 6px;
+      }
+
+      @media (max-width: 780px) {
+        :root {
+          --bottom-height: 88px;
+        }
+
+        .app {
+          grid-template-columns: 1fr;
+          grid-template-rows: auto minmax(0, 1fr);
+        }
+
+        .sidebar-resizer {
+          display: none;
+        }
+
+        .sidebar {
+          grid-template-rows: auto auto auto auto;
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .session-select-wrap {
+          display: block;
+        }
+
+        .main {
+          height: 100%;
+          max-height: none;
+        }
+
+        .sessions {
+          display: none;
+        }
+
+        .playback {
+          min-width: 0;
+        }
+
+        .bottom {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 6px;
+          padding: 6px 8px;
+        }
+
+        .status {
+          display: none;
+        }
+
+        .playback {
+          width: 100%;
+          display: grid;
+          grid-template-columns: repeat(4, 32px) minmax(0, 1fr) auto;
+          grid-template-rows: auto auto;
+          gap: 6px;
+          align-items: center;
+        }
+
+        .playback .text-btn {
+          padding: 6px 8px;
+        }
+
+        .playback .icon-only {
+          width: 32px;
+          height: 32px;
+        }
+
+        .scrubber-wrap {
+          grid-column: 1 / -1;
+          grid-row: 2;
+          min-height: 18px;
+        }
+
+        .time-label {
+          min-width: 0;
+          text-align: right;
+          white-space: nowrap;
+        }
+
+        .playback select {
+          min-width: 58px;
+          width: 58px;
+        }
       }
     </style>
   </head>
   <body>
-    <div class="container">
-      <h1 id="v">v</h1>
-      <button id="update-btn">Apply update</button>
+    <div id="profilePicker" class="profile-picker" hidden>
+      <section class="profile-panel">
+        <h2>Choose Profile</h2>
+        <div id="profileList" class="profile-list"></div>
+        <div class="profile-actions">
+          <input id="profileName" type="text" placeholder="New profile name" />
+          <button id="createProfile" class="text-btn">Create</button>
+        </div>
+      </section>
     </div>
-    <script type="module" src="app.js"></script>
+    <script>
+      if (location.hash === '#profile-picker') {
+        document.getElementById('profilePicker').hidden = false
+      }
+    </script>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <h1>
+            <span class="brand-mark" aria-hidden="true"
+              ><img src="../build/icon/icon-64x64.png" alt=""
+            /></span>
+            <span>ZBTerm</span>
+          </h1>
+          <span class="brand-actions">
+            <button
+              id="settingsToggle"
+              class="icon-btn settings-toggle"
+              title="Settings (right-click to show diagnostics)"
+              aria-haspopup="menu"
+              aria-expanded="false"
+            >
+              <i class="fa-solid fa-gear" aria-hidden="true"></i>
+            </button>
+            <button id="identitySetup" class="icon-btn" title="Choose your identity">
+              <i class="fa-solid fa-id-badge" aria-hidden="true"></i>
+            </button>
+            <button id="themeToggle" class="icon-btn theme-toggle" title="Toggle theme">
+              <i class="fa-solid fa-moon" aria-hidden="true"></i>
+            </button>
+            <span id="version" class="version"></span>
+          </span>
+        </div>
+        <div class="tools">
+          <button id="newSession" class="text-btn label-btn" title="New session">
+            <i class="fa-solid fa-plus btn-icon" aria-hidden="true"></i><span>New</span>
+          </button>
+          <button id="joinLink" class="text-btn label-btn">
+            <i class="fa-solid fa-right-to-bracket btn-icon" aria-hidden="true"></i
+            ><span>Join</span>
+          </button>
+          <div class="search-wrap">
+            <input id="search" type="search" placeholder="Search sessions" />
+            <button
+              id="activeOnly"
+              class="search-toggle"
+              type="button"
+              aria-pressed="false"
+              title="Filter active sessions"
+            >
+              All
+            </button>
+          </div>
+        </div>
+        <div class="session-select-wrap">
+          <select id="sessionSelect" class="session-select" aria-label="Select session"></select>
+        </div>
+        <div id="sessions" class="sessions"></div>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-title">
+            <h2 id="title">No session selected</h2>
+            <div id="meta" class="meta"></div>
+          </div>
+          <div class="topbar-actions">
+            <button
+              id="fontSizeIncrease"
+              class="text-btn label-btn"
+              aria-label="Increase font size"
+              disabled
+            >
+              <i class="fa-solid fa-plus btn-icon" aria-hidden="true"></i><span>Font</span>
+            </button>
+            <button
+              id="fontSizeDecrease"
+              class="text-btn label-btn"
+              aria-label="Decrease font size"
+              disabled
+            >
+              <i class="fa-solid fa-minus btn-icon" aria-hidden="true"></i><span>Font</span>
+            </button>
+            <button id="shareSession" class="text-btn label-btn" disabled>
+              <i class="fa-solid fa-share-nodes btn-icon" aria-hidden="true"></i><span>Share</span>
+            </button>
+            <button id="inputMode" class="text-btn label-btn" disabled>
+              <i class="fa-solid fa-keyboard btn-icon" aria-hidden="true"></i><span>Local</span>
+            </button>
+            <button id="hdToggle" class="text-btn label-btn" disabled>
+              <i class="fa-solid fa-rocket btn-icon" aria-hidden="true"></i><span>HD</span>
+            </button>
+            <button id="extendSession" class="text-btn label-btn" disabled>
+              <i class="fa-solid fa-arrow-rotate-right btn-icon" aria-hidden="true"></i
+              ><span>Extend</span>
+            </button>
+            <button id="goLive" class="text-btn label-btn" disabled>
+              <i class="fa-solid fa-desktop btn-icon" aria-hidden="true"></i><span>Live</span>
+            </button>
+            <button id="update-btn" class="text-btn" hidden>Update</button>
+          </div>
+        </header>
+        <section class="terminal-wrap">
+          <div id="terminal"></div>
+          <div id="terminalPending" class="terminal-pending" hidden>
+            <div class="terminal-pending-inner">
+              <div class="spinner"></div>
+              <div id="terminalPendingText">Joining</div>
+            </div>
+          </div>
+        </section>
+        <footer class="bottom">
+          <div id="status" class="status">ready - initial</div>
+          <div id="playback" class="playback" hidden>
+            <button id="stepBack" class="text-btn icon-only" title="Step back">
+              <i class="fa-solid fa-backward-step" aria-hidden="true"></i>
+            </button>
+            <button id="playPause" class="text-btn icon-only" title="Play">
+              <i class="fa-solid fa-play" aria-hidden="true"></i>
+            </button>
+            <button id="stepForward" class="text-btn icon-only" title="Step forward">
+              <i class="fa-solid fa-forward-step" aria-hidden="true"></i>
+            </button>
+            <button id="collapseGaps" class="text-btn icon-only" title="Collapse empty time">
+              <i class="fa-solid fa-compress" aria-hidden="true"></i>
+            </button>
+            <div class="scrubber-wrap">
+              <span id="scrubberTip" class="scrubber-tip" hidden>0:00</span>
+              <div id="scrubberIndicators" class="scrubber-indicators"></div>
+              <input id="scrubber" type="range" min="0" max="1000" value="0" />
+            </div>
+            <span id="timeLabel" class="time-label">
+              <span id="currentTime">0:00</span>
+              <span> / </span>
+              <span id="totalTime" class="total-time">0:00</span>
+            </span>
+            <select id="speed">
+              <option value="0.5">0.5x</option>
+              <option value="1" selected>1x</option>
+              <option value="2">2x</option>
+              <option value="4">4x</option>
+              <option value="8">8x</option>
+            </select>
+          </div>
+        </footer>
+      </main>
+      <div
+        id="sidebarResizer"
+        class="sidebar-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        tabindex="0"
+        title="Drag to resize the sidebar (double-click to reset)"
+      ></div>
+    </div>
+    <div id="sessionMenu" class="context-menu" hidden></div>
+    <div id="terminalMenu" class="context-menu" hidden></div>
+    <div id="settingsMenu" class="context-menu settings-menu" role="menu" hidden></div>
+    <button id="rename" class="text-btn" hidden>Rename</button>
+    <button id="clearCaches" class="text-btn" hidden>Delete History</button>
+    <button id="removeHd" class="text-btn" hidden>Remove HD</button>
+    <button id="extendSessionHidden" class="text-btn" hidden>Extend</button>
+    <button id="delete" class="text-btn" hidden>Delete</button>
+    <script src="logo-ascii.js"></script>
+    <script src="app.js"></script>
   </body>
 </html>

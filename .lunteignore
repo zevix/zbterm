@@ -1,0 +1,3 @@
+renderer/vendor
+# Rust crates, cargo output and byte-exact contract fixtures (scripts/build-contracts.sh)
+engine/backends/freenet/contracts/src
