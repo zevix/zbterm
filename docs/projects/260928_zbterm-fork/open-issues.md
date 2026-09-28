@@ -8,7 +8,9 @@ What this project left open on purpose, at close on 2026-09-28.
   in [`owner-steps.md`](owner-steps.md): A keeps `931a836`; B rebuilds `main` from `72710d1` and
   force-pushes. Only B meets `Z-1`/`Z-3` ("not in zbterm's published history"), because
   `931a836` holds this folder as it was before `Z5`, with the former name in it.
-  > **2026-09-28.** The owner chose option B.
+  > **2026-09-28.** Done by option B, at the owner's go-ahead: `main` = the template history up
+  > to `72710d1` plus one commit, `664cb4a`, force-pushed with a lease on `931a836`. The checks of
+  > `owner-steps.md` passed before the push. `931a836` stays only in the local reflog.
 - **`A-4`**: the forge contact address is now `zbterm@1zk.net`
   (`forge.config.js`, the Flatpak metainfo). Confirm that the mailbox exists, or name another.
 - **`A-2`**: `package.json#author` is unchanged, and the startup logo is text only
@@ -21,8 +23,6 @@ What this project left open on purpose, at close on 2026-09-28.
   `JOIN_TIMEOUT_MS` (30 s), with the generic "host was not found" message. A protocol check at the
   handshake would make it fail fast with the cause. That is a behaviour change, so the owner
   decides.
-- **zxterm**: `zevix/zxterm`'s status file still points at the predecessor's local path for the
-  ledgers. Drop that pointer once zbterm's `main` is pushed, since the GitHub links then resolve.
 
 ## Known flakes and limits (register)
 

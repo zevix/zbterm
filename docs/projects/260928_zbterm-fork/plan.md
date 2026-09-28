@@ -5,7 +5,8 @@ tree holds the predecessor's code, tests and docs under the name ZBTerm. It runs
 Pear stack (`hypercore` 11.37.0, `bare-sidecar` 0.5.7, and the rest in the `Z2` note), has its own
 names, storage, link scheme, wire strings and rebuilt contracts, and holds no former-name byte
 (`test/name.test.js`). Suite 469/469, 3002/3002; lint 98 warnings; the packaged app boots with a
-fresh profile. Nothing is committed: the owner's commands are in [`owner-steps.md`](owner-steps.md).
+fresh profile. Committed and pushed by option B of [`owner-steps.md`](owner-steps.md) as `664cb4a`
+on top of the template's `72710d1`.
 `T0` (the optional text-client spike) was not run; it and everything else left open is in
 [`open-issues.md`](open-issues.md).
 
