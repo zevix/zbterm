@@ -1,0 +1,54 @@
+<!--
+  Template AppStream metadata.
+  Replace all placeholder values before publishing.
+-->
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>net.z33v.zbterm</id>
+
+  <name>ZBTerm</name>
+  <summary>Secure local terminal recording and peer-to-peer sharing</summary>
+
+  <metadata_license>MIT</metadata_license>
+  <project_license>Apache-2.0</project_license>
+
+  <developer id="com.passcall">
+    <name>PassCall Advanced Technologies Ltd.</name>
+  </developer>
+
+  <content_rating type="oars-1.1"/>
+
+  <url type="homepage">https://github.com/zevix/zbterm</url>
+  <url type="help">https://github.com/zevix/zbterm/issues/new/choose</url>
+  <url type="bugtracker">https://github.com/zevix/zbterm/issues</url>
+
+  <releases>
+    <release date="2026-06-29" version="1.0.0"/>
+  </releases>
+
+  <recommends>
+    <display_length compare="ge">600</display_length>
+  </recommends>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+
+  <description>
+    <p>A terminal that records what you do and lets you share a live session peer-to-peer, without a server in the middle.</p>
+    <ul>
+      <li>PTY-backed shells with encrypted session recording and scrubbable playback</li>
+      <li>Live peer-to-peer terminal sharing with per-link permission caps</li>
+      <li>Encryption at rest and in transit, with key rotation on join and exit</li>
+      <li>Multiple isolated profiles and concurrent sessions</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">net.z33v.zbterm.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/zevix/zbterm/refs/heads/main/assets/flatpak-screenshot.png</image>
+    </screenshot>
+  </screenshots>
+</component>
