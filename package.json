@@ -5,6 +5,18 @@
   "description": "Peer-to-peer terminal recording and live session sharing, built on Hypercore and Electron.",
   "license": "Apache-2.0",
   "author": "David Achitov",
+  "keywords": [
+    "terminal",
+    "terminal-recording",
+    "terminal-sharing",
+    "pty",
+    "peer-to-peer",
+    "p2p",
+    "hypercore",
+    "hyperswarm",
+    "electron",
+    "freenet"
+  ],
   "type": "commonjs",
   "main": "electron/main.js",
   "bin": {
@@ -36,6 +48,7 @@
     "build/icon.png",
     "build/icon/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md"
   ],

@@ -8,7 +8,7 @@
 # Nothing here touches forge.config.js, the electron-forge makers or
 # build_all.sh: the npm package and the installer release paths are separate
 # and both stay working (there is no OTA release path any more, D-08). See
-# docs/RELEASE-NPM.md.
+# docs/RELEASING.md.
 set -euo pipefail
 
 usage() {

@@ -42,8 +42,7 @@ file covers the Freenet components only.
   v3 it incorporates in Appendix B). Because the module is shipped unmodified in its own folder
   and loaded at run time, it can be replaced by any other build of it: replace
   `resources/app/node_modules/@freenetorg/freenet-stdlib` in an installed package. An issue asking
-  upstream to reconcile the two declarations has been drafted (see
-  `docs/projects/260924_freenet-backend/upstream-licence-issue.md` in the ZBTerm repository).
+  upstream to reconcile the two declarations has been drafted.
 
 ## 2. `node-datachannel` 0.33.4 and libdatachannel v0.24.5
 

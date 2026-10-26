@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in ZBTerm does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start zbterm
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ZBTerm version
+      description: Output of `zbterm --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed it
+      options:
+        - npm (npm install -g zbterm)
+        - Installer (deb, rpm, AppImage, flatpak, snap, dmg, msix)
+        - From a clone (npm start)
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `zbterm doctor`
+      description: Includes your OS, Node and native module status.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Anything relevant from the terminal, or from a run with `--debug`. Remove anything private first.
+      render: text
