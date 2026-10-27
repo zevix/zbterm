@@ -35,7 +35,8 @@ function readGolden(name) {
 test('codec.js decodes the Rust-written golden Request fixture', (t) => {
   const bytes = readGolden('request')
   if (!bytes) {
-    t.skip(
+    t.comment(
+      'SKIP:',
       `golden fixture missing: ${goldenPath('request')} (run cargo test in zxterm-core with ZX_SEAM_GOLDEN_WRITE=1)`
     )
     return
@@ -49,7 +50,7 @@ test('codec.js decodes the Rust-written golden Request fixture', (t) => {
 test('codec.js decodes the Rust-written golden Reply (ok) fixture', (t) => {
   const bytes = readGolden('reply-ok')
   if (!bytes) {
-    t.skip(`golden fixture missing: ${goldenPath('reply-ok')}`)
+    t.comment('SKIP:', `golden fixture missing: ${goldenPath('reply-ok')}`)
     return
   }
   const { frame, offset } = codec.decodeFrame(bytes, 0)
@@ -62,7 +63,7 @@ test('codec.js decodes the Rust-written golden Reply (ok) fixture', (t) => {
 test('codec.js decodes the Rust-written golden Reply (err) fixture', (t) => {
   const bytes = readGolden('reply-err')
   if (!bytes) {
-    t.skip(`golden fixture missing: ${goldenPath('reply-err')}`)
+    t.comment('SKIP:', `golden fixture missing: ${goldenPath('reply-err')}`)
     return
   }
   const { frame, offset } = codec.decodeFrame(bytes, 0)
@@ -78,7 +79,7 @@ test('codec.js decodes the Rust-written golden Reply (err) fixture', (t) => {
 test('codec.js decodes the Rust-written golden Event fixture', (t) => {
   const bytes = readGolden('event')
   if (!bytes) {
-    t.skip(`golden fixture missing: ${goldenPath('event')}`)
+    t.comment('SKIP:', `golden fixture missing: ${goldenPath('event')}`)
     return
   }
   const { frame, offset } = codec.decodeFrame(bytes, 0)
@@ -90,7 +91,7 @@ test('codec.js decodes the Rust-written golden Event fixture', (t) => {
 test('codec.js decodes the Rust-written golden Output fixture', (t) => {
   const bytes = readGolden('output')
   if (!bytes) {
-    t.skip(`golden fixture missing: ${goldenPath('output')}`)
+    t.comment('SKIP:', `golden fixture missing: ${goldenPath('output')}`)
     return
   }
   const { frame, offset } = codec.decodeFrame(bytes, 0)
@@ -104,7 +105,7 @@ test('codec.js decodes the Rust-written golden Output fixture', (t) => {
 test('codec.js decodes the Rust-written golden Chan fixture (K10)', (t) => {
   const bytes = readGolden('chan')
   if (!bytes) {
-    t.skip(`golden fixture missing: ${goldenPath('chan')}`)
+    t.comment('SKIP:', `golden fixture missing: ${goldenPath('chan')}`)
     return
   }
   const { frame, offset } = codec.decodeFrame(bytes, 0)

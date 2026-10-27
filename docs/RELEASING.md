@@ -16,6 +16,24 @@ Cutting an npm release does not cut an installer release, and vice versa. Both s
 > it already exists. Use either the script (and remove `publish.yml`), or CI (run the script
 > without `--publish` as a pre-flight, then `npm version <target>` and push the tag).
 
+## The zxterm-core sidecar comes first
+
+ZBTerm runs the Rust `zxterm-core` sidecar from the `zxterm-core-prebuilds` npm package, built and
+published by [zevix/zxterm](https://github.com/zevix/zxterm). During development `package.json`
+can point at a sibling checkout (`file:../zxterm/npm/zxterm-core-prebuilds`), but a published
+ZBTerm must depend on a registry version; `pack-check` refuses any `file:`/`link:` dependency.
+
+1. Release zxterm: push a `v<version>` tag there; its `prebuilds` workflow builds every target and
+   publishes `zxterm-core-prebuilds`.
+2. In ZBTerm, switch to that version and commit the lockfile:
+
+   ```sh
+   npm install zxterm-core-prebuilds@<version> --save-exact
+   git commit -am "Depend on zxterm-core-prebuilds <version>"
+   ```
+
+3. Release ZBTerm as below.
+
 ## Commands
 
 ```sh

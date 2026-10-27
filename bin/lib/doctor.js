@@ -251,6 +251,39 @@ function checkBarePrebuild({
   }
 }
 
+// The Rust zxterm-core sidecar every share, identity and crypto call goes
+// through. Resolved exactly as the app resolves it (electron/zxterm-core-host.js),
+// ZXTERM_CORE_BIN included.
+function checkZxtermCore({
+  resolveBinary = () => require('../../electron/zxterm-core-host').bin()
+} = {}) {
+  let binary
+  try {
+    binary = resolveBinary()
+  } catch (err) {
+    return {
+      name: 'zxterm-core',
+      ok: false,
+      detail: err.message,
+      fix:
+        'reinstall so the zxterm-core-prebuilds package is restored (`npm install -g zbterm`), ' +
+        'or set ZXTERM_CORE_BIN to a zxterm-core binary'
+    }
+  }
+
+  const stat = statOrNull(binary)
+  if (!stat || !stat.isFile()) {
+    return {
+      name: 'zxterm-core',
+      ok: false,
+      detail: 'not a file: ' + binary,
+      fix: 'point ZXTERM_CORE_BIN at a zxterm-core binary, or unset it'
+    }
+  }
+
+  return { name: 'zxterm-core', ok: true, detail: binary, fix: null }
+}
+
 function checkDataDir({ dir = userDataRoot() } = {}) {
   const stat = statOrNull(dir)
   if (stat && !stat.isDirectory()) {
@@ -388,6 +421,7 @@ function runChecks({ platform = process.platform, env = process.env } = {}) {
     checkElectron(),
     checkNodePty(),
     checkBarePrebuild({ platform }),
+    checkZxtermCore(),
     checkDataDir()
   ]
   if (platform === 'linux') {
@@ -437,6 +471,7 @@ module.exports = {
   checkElectron,
   checkNodePty,
   checkBarePrebuild,
+  checkZxtermCore,
   checkDataDir,
   checkDisplay,
   checkSandbox,

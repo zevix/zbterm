@@ -52,12 +52,15 @@ async function started(t, url, keyPair = transportKeyPair()) {
 // tests/contract_pins.rs.
 test('freenet: the routes the core mints name the pinned signalling contract (its BLAKE3)', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const pins = zxtermPins()
   if (!pins) {
-    t.skip('the zxterm tree (contracts/hashes.json) is not next to zxterm-core-prebuilds')
+    t.comment(
+      'SKIP:',
+      'the zxterm tree (contracts/hashes.json) is not next to zxterm-core-prebuilds'
+    )
     return
   }
   const node = await startLocalNode()
@@ -126,7 +129,7 @@ test('freenet: start() with no node rejects E_BACKEND_UNAVAILABLE naming the add
 
 test('freenet: against a local node, start, route, health, diagnostics and stop', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const node = await startLocalNode()
@@ -179,7 +182,7 @@ test('freenet: against a local node, start, route, health, diagnostics and stop'
 // first, then puts it; a second announce of the same route finds it.
 test('freenet: node client workarounds (S-05) against a local node', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const node = await startLocalNode()

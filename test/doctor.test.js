@@ -148,6 +148,29 @@ test('doctor: bare-sidecar prebuild check', async (t) => {
   t.ok(absent.fix.includes('npm rebuild bare-sidecar'))
 })
 
+test('doctor: zxterm-core sidecar check', async (t) => {
+  const dir = tmpdir(t, 'zbterm-doctor-zxterm-')
+  const file = path.join(dir, 'zxterm-core')
+  fs.writeFileSync(file, 'x')
+
+  const present = doctor.checkZxtermCore({ resolveBinary: () => file })
+  t.is(present.ok, true)
+  t.is(present.detail, file)
+
+  const missing = doctor.checkZxtermCore({
+    resolveBinary: () => {
+      throw new Error('zxterm-core sidecar binary not found for linux-riscv64')
+    }
+  })
+  t.is(missing.ok, false)
+  t.ok(missing.detail.includes('not found for linux-riscv64'))
+  t.ok(missing.fix.includes('ZXTERM_CORE_BIN'))
+
+  const notFile = doctor.checkZxtermCore({ resolveBinary: () => dir })
+  t.is(notFile.ok, false)
+  t.ok(notFile.detail.startsWith('not a file:'))
+})
+
 test('doctor: data dir check on existing, creatable and unwritable roots', async (t) => {
   const dir = tmpdir(t, 'zbterm-doctor-data-')
 

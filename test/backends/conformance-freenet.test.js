@@ -24,7 +24,8 @@ async function nodeUrl() {
 }
 
 if (!freenetAvailable()) {
-  test('freenet backend conformance: skipped', (t) => t.skip('freenet binary not on PATH'))
+  test('freenet backend conformance: skipped', (t) =>
+    t.comment('SKIP:', 'freenet binary not on PATH'))
 } else {
   // K14 (ZBTerm D-38): a Freenet share's epochs, envelopes, live frames and
   // input are the core's (`session: true`); every case of the suite runs.

@@ -40,7 +40,7 @@ function firstLine(worker) {
 
 test('freenet (Bare): the client starts against a local node under the sidecar', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const node = await startLocalNode()

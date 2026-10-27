@@ -154,7 +154,7 @@ function guarded(title, fn) {
 }
 
 if (!freenetAvailable()) {
-  test('freenet session: skipped', (t) => t.skip('freenet binary not on PATH'))
+  test('freenet session: skipped', (t) => t.comment('SKIP:', 'freenet binary not on PATH'))
 } else {
   guarded(
     'freenet session: an auto-join runs on the core and shows the UI what it always saw',

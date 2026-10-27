@@ -10,10 +10,12 @@
 // (test/pipe-backpressure-flood.test.js).
 //
 // Requires `zxterm-core` built with the `seam-test` Cargo feature
-// (`cargo build -p zxterm-core --features seam-test` in `zevix/zxterm`) -
+// (`cargo build -p zxterm-core --features seam-test --target-dir target/seam-test`
+// in `zevix/zxterm`) -
 // `test.flood`/`test.echo` only exist in that build. Both tests below skip
 // with a named reason if the binary is not found at `ZXTERM_CORE_BIN` (or
-// the default `<ZX_ZXTERM>/target/debug/zxterm-core`).
+// the default `<ZX_ZXTERM>/target/seam-test/debug/zxterm-core`, a target directory
+// of its own so a plain debug build is never mistaken for it).
 //
 // Flood size is bytes, not milliseconds (`test.flood { bytes }`, unlike the
 // pipe test's time-boxed flood) - `ZBTERM_ZXTERM_SEAM_FLOOD_BYTES` is this
@@ -31,9 +33,10 @@ const { execFileSync } = require('child_process')
 const test = require('brittle')
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'zxterm-seam-worker.js')
-const ZXTERM_ROOT = process.env.ZX_ZXTERM || '/zeev/github/zxterm'
+const ZXTERM_ROOT = process.env.ZX_ZXTERM || path.join(__dirname, '..', '..', 'zxterm')
 const ZXTERM_CORE_BIN =
-  process.env.ZXTERM_CORE_BIN || path.join(ZXTERM_ROOT, 'target', 'debug', 'zxterm-core')
+  process.env.ZXTERM_CORE_BIN ||
+  path.join(ZXTERM_ROOT, 'target', 'seam-test', 'debug', 'zxterm-core')
 
 const FLOOD_BYTES = Number(process.env.ZBTERM_ZXTERM_SEAM_FLOOD_BYTES || 16 * 1024 * 1024)
 const SETTLE_MS = 3000
@@ -166,8 +169,9 @@ class WorkerBridge {
 
 test('the seam: sidecar spawn, core.version, one identity.* method, test.echo, under a real Bare worker', async (t) => {
   if (!binAvailable()) {
-    t.skip(
-      `zxterm-core not built at ${ZXTERM_CORE_BIN} (cargo build -p zxterm-core --features seam-test)`
+    t.comment(
+      'SKIP:',
+      `zxterm-core not built at ${ZXTERM_CORE_BIN} (cargo build -p zxterm-core --features seam-test --target-dir target/seam-test)`
     )
     return
   }
@@ -218,8 +222,9 @@ test('the seam: sidecar spawn, core.version, one identity.* method, test.echo, u
 
 test('the seam: a 16 MiB test.flood to a client under a real Bare worker recovers within the pipe-backpressure bound', async (t) => {
   if (!binAvailable()) {
-    t.skip(
-      `zxterm-core not built at ${ZXTERM_CORE_BIN} (cargo build -p zxterm-core --features seam-test)`
+    t.comment(
+      'SKIP:',
+      `zxterm-core not built at ${ZXTERM_CORE_BIN} (cargo build -p zxterm-core --features seam-test --target-dir target/seam-test)`
     )
     return
   }

@@ -187,7 +187,11 @@ jobs:
           macos_apple_password: ${{ secrets.APPLE_PASSWORD }}
           macos_apple_team_id: ${{ secrets.APPLE_TEAM_ID }}
 
+  # Disabled until the zxterm-core sidecar has a Windows build (its
+  # named-pipe listener is not implemented): a Windows package would start
+  # without its core.
   build-win32:
+    if: false
     needs: [prebuild]
     timeout-minutes: 20
     permissions:
