@@ -71,6 +71,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "build:relay": "node scripts/build-relay.js",
+    "build:sidecar": "node scripts/sidecar.js build",
     "install:all": "npm i --ignore-scripts=true && npm run postinstall:all",
     "install:mac": "npm i --ignore-scripts=true && npm run postinstall:mac",
     "postinstall:all": "npm run install:electron",
@@ -100,8 +101,7 @@
     "hypercore": "^11.37.0",
     "paparam": "^1.10.0",
     "sodium-native": "^5.1.0",
-    "which-runtime": "^1.3.2",
-    "zxterm-core-prebuilds": "file:../zxterm/npm/zxterm-core-prebuilds"
+    "which-runtime": "^1.3.2"
   },
   "optionalDependencies": {
     "hyperdht": "^6.34.0",

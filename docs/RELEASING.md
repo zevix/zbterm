@@ -4,60 +4,68 @@ ZBTerm has two independent distribution channels:
 
 | Channel    | Artifact                                           | Release path                                    |
 | ---------- | -------------------------------------------------- | ----------------------------------------------- |
-| npm        | `zbterm-<version>.tgz` on registry.npmjs.org       | `scripts/release-npm.sh`, `publish.yml`         |
+| npm        | `zbterm` and `@zbterm/zxterm-core-*` on npmjs.org  | `scripts/release-npm.sh --tag`, `publish.yml`   |
 | Installers | deb / rpm / AppImage / flatpak / snap / dmg / msix | `Build Release` workflow, `./build_all.sh`      |
 
 Cutting an npm release does not cut an installer release, and vice versa. Both share
 `package.json#version`.
 
-> **Pick one npm publish path.** `scripts/release-npm.sh --publish` runs `npm publish` locally and
-> then tells you to `git push --follow-tags`. Pushing a `v*` tag also triggers
-> `.github/workflows/publish.yml`, which publishes the same version again from CI and fails because
-> it already exists. Use either the script (and remove `publish.yml`), or CI (run the script
-> without `--publish` as a pre-flight, then `npm version <target>` and push the tag).
+Publishing always runs in CI. `scripts/release-npm.sh --tag` checks everything, then creates the
+version commit and the `v<version>` tag; pushing the tag runs `.github/workflows/publish.yml`.
 
-## The zxterm-core sidecar comes first
+## The zxterm-core sidecar
 
-ZBTerm runs the Rust `zxterm-core` sidecar from the `zxterm-core-prebuilds` npm package, built and
-published by [zevix/zxterm](https://github.com/zevix/zxterm). During development `package.json`
-can point at a sibling checkout (`file:../zxterm/npm/zxterm-core-prebuilds`), but a published
-ZBTerm must depend on a registry version; `pack-check` refuses any `file:`/`link:` dependency.
+ZBTerm runs the Rust `zxterm-core` sidecar, whose source is the `zxterm/` git submodule
+([zevix/zxterm](https://github.com/zevix/zxterm)). zxterm publishes nothing itself. On a tag,
+`publish.yml`:
 
-1. Release zxterm: push a `v<version>` tag there; its `prebuilds` workflow builds every target and
-   publishes `zxterm-core-prebuilds`.
-2. In ZBTerm, switch to that version and commit the lockfile:
+1. builds the sidecar for every target in `scripts/sidecar.js#TARGETS` (Linux x64/arm64, macOS
+   x64/arm64), each on its own runner;
+2. publishes one package per target, `@zbterm/zxterm-core-<platform>-<arch>`, at zbterm's version,
+   each with `os`/`cpu` (and `libc` on Linux) set and the binary at its root;
+3. writes those packages into `optionalDependencies`, pinned to the same version
+   (`node scripts/sidecar.js inject`), and publishes `zbterm`. npm then installs only the package
+   for the user's machine.
 
-   ```sh
-   npm install zxterm-core-prebuilds@<version> --save-exact
-   git commit -am "Depend on zxterm-core-prebuilds <version>"
-   ```
+The committed `package.json` and lockfile never list the platform packages, so a checkout installs
+without them; `npm run build:sidecar` builds and stages the sidecar locally instead.
 
-3. Release ZBTerm as below.
+To ship a sidecar change, land it in zxterm, then bump the submodule here:
+
+```sh
+git -C zxterm fetch && git -C zxterm checkout <commit>
+git commit -am "Bump zxterm to <commit>"
+```
+
+First release only: create the `zbterm` organization on npmjs.com (it owns the `@zbterm` scope),
+then configure this repository's `publish.yml` as a trusted publisher of `zbterm` and of each
+`@zbterm/zxterm-core-*` package, or set an `NPM_TOKEN` secret in the `npm` environment. Packages
+that do not exist yet can only be published with a token; switch to trusted publishing after.
 
 ## Commands
 
 ```sh
+npm run build:sidecar                    # build and stage this machine's sidecar first
 npm run pack:check                       # lint + test + pack + tarball audit
 npm run smoke:install -- <tarball>       # install into a throwaway prefix and boot it
 npm run release:npm -- patch             # dry run: plan + BLOCKERS, changes nothing
-npm run release:npm -- patch --publish   # local publish
+npm run release:npm -- patch --tag       # version commit + tag; push it to publish
 ```
 
-`release:npm` runs the other two for you. Without `--publish` it evaluates every guard, prints a
+`release:npm` runs the pack check and the smoke install for you. Without `--tag` it evaluates every guard, prints a
 `BLOCKERS:` section and changes nothing:
 
 | Guard               | What it means                                                                 |
 | ------------------- | ----------------------------------------------------------------------------- |
 | `clean-tree`        | `git status --porcelain` is empty.                                            |
 | `branch-confirmed`  | You confirmed the branch you are releasing from (or passed `--yes`).          |
-| `npm-whoami`        | You are logged in (`npm login`).                                              |
 | `version-available` | The target version is not on the registry yet (`E404` = unpublished, fine).   |
 | `pack-check`        | `scripts/npm-pack-check.sh` passed.                                           |
-| `smoke-install`     | `scripts/npm-smoke-install.sh` passed on the packed tarball.                  |
+| `smoke-install`     | `scripts/npm-smoke-install.sh` passed on the packed tarball and the staged sidecar. |
 
-With `--publish` the script runs `npm version <target>` (bump commit and `vX.Y.Z` tag) and
-`npm publish --access public`, then prints the `git push --follow-tags` command instead of running
-it, so a failed publish never leaves a pushed tag for a version that is not on the registry.
+With `--tag` the script runs `npm version <target>` (bump commit and `vX.Y.Z` tag), then prints
+the `git push --follow-tags` command instead of running it. If `publish.yml` fails after some
+platform packages are up, re-run it: it skips the versions that are already published.
 
 ## Version policy
 
@@ -84,7 +92,6 @@ zbterm            # a window opens, a terminal session starts
 | Linux x64         | `zbterm install-desktop`; the launcher entry and a `zbterm://join/…` link work; `uninstall-desktop` removes them. |
 | Linux arm64       | Same, plus `zbterm doctor` reports a `bare-sidecar` prebuild for `linux-arm64`.                 |
 | macOS arm64 / x64 | The npm build is unsigned; confirm the Gatekeeper workaround in the README still applies.        |
-| Windows x64       | The shim is on `PATH`; `zbterm --version` works from `cmd.exe` and PowerShell.                   |
 
 ## Generated files
 

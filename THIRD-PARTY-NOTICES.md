@@ -92,21 +92,21 @@ The two contracts ZBTerm ships, `engine/backends/freenet/contracts/signalling-v1
 
 ---
 
-## 4. The `zxterm-core` sidecar (`zxterm-core-prebuilds`)
+## 4. The `zxterm-core` sidecar (`@zbterm/zxterm-core-<platform>-<arch>`)
 
 - What: the Rust `zxterm-core` binary from `zevix/zxterm` (unrelated to this repository's JS
   `zbterm-core` package), which serves ZBTerm's identity paths (SSH keys, identity claims and
   their verification, provider key lookups, the identity key) as a sidecar process of the core.
-- Shipped as the npm package `zxterm-core-prebuilds` (a local `file:` dependency, never
-  published) under `node_modules/zxterm-core-prebuilds/prebuilds/<platform>-<arch>/zxterm-core`
-  (`.exe` on Windows).
+- Built from the `zxterm/` git submodule and shipped as one npm package per platform,
+  `@zbterm/zxterm-core-<platform>-<arch>` (an optional dependency of `zbterm`), with the binary at
+  its root as `zxterm-core`; desktop builds carry it under `npm/zxterm-core-<platform>-<arch>/`.
 - Licence: **MIT** (`zevix/zxterm`'s `LICENSE`). The binary statically links Rust crates under
   MIT, Apache-2.0, BSD-3-Clause, ISC, Unicode-3.0, CDLA-Permissive-2.0 and CC0-1.0, and
   **`freenet-stdlib` 0.12.1 under LGPL-3.0-only** (with its `freenet-macros`; the licence text is
   Appendix A here, and its source stays public as zxterm-core's `X-04` requires), all checked by
   `cargo deny check licenses` there. Their attributions and licence texts are in `zevix/zxterm`'s
-  `THIRD-PARTY-NOTICES.md`, which `scripts/build-prebuilds.sh` there copies, with that `LICENSE`,
-  into the package next to the binaries.
+  `THIRD-PARTY-NOTICES.md`, which `scripts/sidecar.js` here copies, with that `LICENSE`, into
+  each platform package next to the binary.
 
 ## Appendix A — GNU Lesser General Public License, version 3
 

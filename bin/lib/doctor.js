@@ -266,7 +266,8 @@ function checkZxtermCore({
       ok: false,
       detail: err.message,
       fix:
-        'reinstall so the zxterm-core-prebuilds package is restored (`npm install -g zbterm`), ' +
+        'reinstall zbterm without --omit=optional (`npm install -g zbterm`) so its ' +
+        'platform package is installed; from a source checkout, run `npm run build:sidecar`; ' +
         'or set ZXTERM_CORE_BIN to a zxterm-core binary'
     }
   }

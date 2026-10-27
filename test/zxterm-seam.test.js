@@ -11,7 +11,7 @@
 //
 // Requires `zxterm-core` built with the `seam-test` Cargo feature
 // (`cargo build -p zxterm-core --features seam-test --target-dir target/seam-test`
-// in `zevix/zxterm`) -
+// in the `zxterm/` submodule) -
 // `test.flood`/`test.echo` only exist in that build. Both tests below skip
 // with a named reason if the binary is not found at `ZXTERM_CORE_BIN` (or
 // the default `<ZX_ZXTERM>/target/seam-test/debug/zxterm-core`, a target directory
@@ -33,7 +33,7 @@ const { execFileSync } = require('child_process')
 const test = require('brittle')
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'zxterm-seam-worker.js')
-const ZXTERM_ROOT = process.env.ZX_ZXTERM || path.join(__dirname, '..', '..', 'zxterm')
+const ZXTERM_ROOT = process.env.ZX_ZXTERM || path.join(__dirname, '..', 'zxterm')
 const ZXTERM_CORE_BIN =
   process.env.ZXTERM_CORE_BIN ||
   path.join(ZXTERM_ROOT, 'target', 'seam-test', 'debug', 'zxterm-core')

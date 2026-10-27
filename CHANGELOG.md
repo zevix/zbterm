@@ -16,3 +16,5 @@ and the project uses [semantic versioning](https://semver.org/) as described in
 - Experimental Freenet share backend, through the `zxterm-core` sidecar.
 - Multiple profiles and multiple concurrent sessions.
 - `zbterm doctor`, `zbterm install-desktop` / `uninstall-desktop`, and a localhost debug REST API.
+- The Rust `zxterm-core` sidecar, built from the `zxterm/` submodule and shipped as one optional
+  npm package per platform (`@zbterm/zxterm-core-<platform>-<arch>`).

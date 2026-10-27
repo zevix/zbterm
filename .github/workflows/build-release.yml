@@ -54,6 +54,11 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:all
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
       - uses: holepunchto/actions/make-pear-app@v1
         with:
           channel: ${{ env.CHANNEL }}
@@ -93,6 +98,11 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:all
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
         with:
@@ -133,6 +143,11 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:mac
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
         with:
@@ -170,6 +185,11 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:mac
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
         with:
@@ -213,6 +233,11 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:all
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
         with:

@@ -1,0 +1,3 @@
+[submodule "zxterm"]
+	path = zxterm
+	url = https://github.com/zevix/zxterm.git

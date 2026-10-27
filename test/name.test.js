@@ -25,10 +25,13 @@ function listFiles() {
     cwd: ROOT,
     encoding: 'utf8'
   })
-  return out
-    .split('\n')
-    .filter(Boolean)
-    .filter((rel) => fs.existsSync(path.join(ROOT, rel)))
+  return (
+    out
+      .split('\n')
+      .filter(Boolean)
+      // Files only: the zxterm/ submodule is listed too, as a directory.
+      .filter((rel) => fs.statSync(path.join(ROOT, rel), { throwIfNoEntry: false })?.isFile())
+  )
 }
 
 test('no file anywhere in the tree still spells the old name', (t) => {

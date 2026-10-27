@@ -26,7 +26,12 @@ from any cwd; the repo root is resolved from this script's own path.
             validated tarball first.
 
 What it does:
-  1. Installs the tarball into `mktemp -d` used as an `npm install -g --prefix`.
+  1. Installs the tarball into `mktemp -d` used as an `npm install -g --prefix`,
+     next to this platform's zxterm-core sidecar package, packed from the one
+     `npm run build:sidecar` staged under npm/. The published zbterm gets that
+     package as an optional dependency; the tarball here does not list it
+     (publish.yml adds it), so it is installed alongside, where the app's
+     resolution from the installed package finds it the same way.
   2. Runs `zbterm --version`.
   3. Runs `zbterm doctor --json` - the primary health gate; it is the cheapest
      end-to-end proof. The assertion is on the PARSED report - every check must
@@ -138,11 +143,19 @@ export XDG_CACHE_HOME="$PREFIX/xdg-cache"
 export ZBTERM_ELECTRON_USER_DATA="$PREFIX/electron-user-data"
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
 
+SIDECAR_DIR="$ROOT/npm/zxterm-core-$(node -p 'process.platform + "-" + process.arch')"
+[ -f "$SIDECAR_DIR/package.json" ] ||
+  die "no staged zxterm-core sidecar in $SIDECAR_DIR - run 'npm run build:sidecar' first"
+step "Packing the sidecar package in $SIDECAR_DIR"
+SIDECAR_TARBALL="$PREFIX/$(npm pack --silent --pack-destination "$PREFIX" "$SIDECAR_DIR" | tail -1)"
+[ -f "$SIDECAR_TARBALL" ] || die "npm pack did not produce the sidecar tarball"
+ok "$SIDECAR_TARBALL"
+
 step "Installing $TARBALL"
 # ignore-scripts is pinned off explicitly: the electron and node-pty install
 # scripts have to run, and the repo-local .npmrc that normally guarantees that
 # does not apply to an install targeting a different prefix.
-npm install -g --prefix "$PREFIX" --ignore-scripts=false "$TARBALL"
+npm install -g --prefix "$PREFIX" --ignore-scripts=false "$TARBALL" "$SIDECAR_TARBALL"
 
 BIN="$PREFIX/bin/zbterm"
 [ -x "$BIN" ] || die "no executable at $BIN"

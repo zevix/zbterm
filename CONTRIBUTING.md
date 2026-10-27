@@ -9,12 +9,17 @@ repository root: the repo-local `.npmrc` is what lets the Electron and `node-pty
 run.
 
 ```sh
-git clone https://github.com/zevix/zbterm.git
+git clone --recursive https://github.com/zevix/zbterm.git
 cd zbterm
 npm install
+npm run build:sidecar
 npm test
 npm start
 ```
+
+`npm run build:sidecar` builds the Rust `zxterm-core` sidecar from the `zxterm/` submodule; it needs
+a Rust toolchain, a C compiler and CMake. Changes to the sidecar itself go to
+[zevix/zxterm](https://github.com/zevix/zxterm); bump the submodule here once they land there.
 
 On Linux, `node-pty` may compile from source and needs `python3`, `make` and a C++ toolchain; see
 [Prerequisites](README.md#install-prereqs).

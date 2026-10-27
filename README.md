@@ -147,8 +147,15 @@ binary.
 
 ### Run from a clone (development) <a name="install-dev"></a>
 
+The Rust `zxterm-core` sidecar is built from the [zxterm](https://github.com/zevix/zxterm)
+submodule, so a clone also needs a Rust toolchain (`rustup`; the version is pinned in
+`zxterm/rust-toolchain.toml`), a C compiler and CMake.
+
 ```sh
+git clone --recursive https://github.com/zevix/zbterm.git   # or: git submodule update --init
+cd zbterm
 npm install
+npm run build:sidecar   # cargo-builds zxterm-core and stages it under npm/
 npm test
 npm start
 ```
@@ -478,7 +485,7 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | `ZBTERM_ICE_SERVERS` | app (main process) | STUN/TURN servers for Freenet's direct connections: comma-separated ICE URLs (`stun:host:port`, `turn:user:secret@host:port`); an empty value means none (host candidates only). `--ice-servers` wins over it, and a non-empty "STUN/TURN servers" setting wins over both. Default: `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478`. The STUN provider sees your IP address; see [Freenet](#freenet). |
 | `ZBTERM_INVITE_V2` | core (`engine/invite.js`) | `1` makes Pear share links use the v2 invite shape (`b`, `peer`, `route`) while keeping the v1 fields beside it. Default: off, so Pear links stay v1 and released builds can join them. A link for any other backend is always v2. Read each time a link is made. The core runs in a Bare worker whose environment is not reliably inherited from the app, so treat it as a development switch. |
 | `ZBTERM_ELECTRON_USER_DATA` | app | Custom Chromium/Electron user data dir. |
-| `ZXTERM_CORE_BIN` | app | Path to a `zxterm-core` sidecar binary to run instead of the one from the `zxterm-core-prebuilds` package, e.g. a local build of [zevix/zxterm](https://github.com/zevix/zxterm). |
+| `ZXTERM_CORE_BIN` | app | Path to a `zxterm-core` sidecar binary to run instead of the installed or staged one, e.g. a debug build from the `zxterm/` submodule. |
 | `ZBTERM_DEBUG` | app | `1` enables verbose packaged debug logging (same as `--debug`). |
 | `ZBTERM_DEBUG_SERVER` | app | `1` starts the debug REST API (same as `--debug-server`). |
 | `ZBTERM_DEBUG_SERVER_PORT` | app | Port for the debug REST API. |

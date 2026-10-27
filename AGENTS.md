@@ -65,8 +65,9 @@ left to disable.
   worker spawns one per profile on first use, with the host's spawn function: the
   host module's path is the worker's optional 6th argument (`EngineClient`'s
   `coreHost`; ZBTerm's is `electron/zxterm-core-host.js`), because `engine/` may not
-  spawn processes. The binary ships in the `zxterm-core-prebuilds` package
-  (`prebuilds/<platform>-<arch>/`, then `-universal`; `ZXTERM_CORE_BIN` overrides).
+  spawn processes. The binary is built from the `zxterm/` submodule and ships as
+  the optional dependency `@zbterm/zxterm-core-<platform>-<arch>`, or staged under
+  `npm/` by `scripts/sidecar.js` in a checkout or desktop build (`ZXTERM_CORE_BIN` overrides).
   Frozen in [`docs/CORE-CONTRACT.md`](docs/CORE-CONTRACT.md) §3/§4.
 - `package.json#imports` Bare map lives in **`engine/package.json`** (the published
   `zbterm-core` manifest), not the root one: Bare has no `events`/`fs`/`path`/`os`/
