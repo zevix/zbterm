@@ -123,8 +123,10 @@ function run(electronPath, args, { onSandboxFailure }) {
     process.removeListener('SIGINT', forward)
     process.removeListener('SIGTERM', forward)
 
-    const failedFast =
-      code !== 0 && code !== null && Date.now() - startedAt < SANDBOX_RETRY_WINDOW_MS
+    // Chromium's FATAL sandbox errors abort the process with a signal
+    // (SIGTRAP), so there is no exit code to check.
+    const failed = signal !== null || (code !== null && code !== 0)
+    const failedFast = failed && Date.now() - startedAt < SANDBOX_RETRY_WINDOW_MS
 
     if (failedFast && SANDBOX_FAILURE_PATTERN.test(stderrHead) && onSandboxFailure) {
       onSandboxFailure()
