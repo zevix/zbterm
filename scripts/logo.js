@@ -26,6 +26,7 @@ async function main() {
   const colors = {
     black: ansiBg(hexToRgb(svgColors.black)),
     green: ansiBg(hexToRgb(svgColors.green)),
+    blue: ansiBg(hexToRgb(svgColors.blue)),
     greenText: ansiFg(hexToRgb(svgColors.green))
   }
   const logoRows = paddedLogoRows(rawLogoRows)
@@ -52,11 +53,7 @@ async function main() {
   drawCenteredText(startRow + logoRows.length + 1, `ZBTerm v${pkg.version}`, cols, {
     color: colors.greenText
   })
-  drawCenteredText(
-    startRow + logoRows.length + 2,
-    '(c) 2026 by PassCall Advanced Technologies Ltd.',
-    cols
-  )
+  drawCenteredText(startRow + logoRows.length + 2, 'Written by Zeev Kotzer', cols)
   process.stdout.write(`\x1b[0m\x1b[${startRow + blockHeight + 2};1H\x1b[?25h`)
   await waitForEnter()
 }
@@ -120,12 +117,14 @@ function parseNumberOption(args, names, fallback, min, max, round) {
 function colorForChar(char) {
   if (char === '-') return 'slate'
   if (char === 'G') return 'green'
+  if (char === 'B') return 'blue'
   return 'black'
 }
 
 function ansiForLogoColor(color, slate, colors) {
   if (color === 'slate') return slate
   if (color === 'green') return colors.green
+  if (color === 'blue') return colors.blue
   return colors.black
 }
 
