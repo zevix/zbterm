@@ -123,7 +123,9 @@ jobs:
                 needs.prebuild.outputs.version,
                 'arm64') }}
 
+  # Paused: no macOS builds until sharing works on Linux.
   build-macos:
+    if: false
     needs: [prebuild]
     timeout-minutes: 20
     permissions:
@@ -165,7 +167,9 @@ jobs:
           macos_apple_password: ${{ secrets.APPLE_PASSWORD }}
           macos_apple_team_id: ${{ secrets.APPLE_TEAM_ID }}
 
+  # Paused: no macOS builds until sharing works on Linux.
   build-macos-x64:
+    if: false
     needs: [prebuild]
     timeout-minutes: 20
     permissions:

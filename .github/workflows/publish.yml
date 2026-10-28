@@ -55,6 +55,15 @@ jobs:
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
+          # Every binary is checked before anything is published, so a
+          # missing target (macOS builds are paused in packages.yml) stops
+          # the release instead of publishing some of the packages.
+          for dir in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            test -f "artifacts/zxterm-core-$dir/zxterm-core" || {
+              echo "no zxterm-core binary for $dir; not publishing" >&2
+              exit 1
+            }
+          done
           for dir in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
             node scripts/sidecar.js stage "$dir" "artifacts/zxterm-core-$dir/zxterm-core"
             name="$(node -p "require('./npm/zxterm-core-$dir/package.json').name")"
