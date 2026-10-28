@@ -4,12 +4,23 @@
 
 ZBTerm is a secure terminal recording, playback, and peer-to-peer sharing
 application. A host runs a local PTY-backed shell, records encrypted terminal
-history into Hypercore, shares live output over Hyperswarm/HyperDHT, and
-authorizes viewers by identity, device, link, capability, and epoch keys.
+history into Hypercore, shares live output over one of two share backends —
+Hyperswarm/HyperDHT (backend `pear`) or a local Freenet node (backend
+`freenet`) — and authorizes viewers by identity, device, link, capability, and
+epoch keys.
 
 This document is the architecture reference for ZBTerm: the process
 model, the storage and cryptographic design, the peer-to-peer protocol, and
-the reasoning behind the less obvious decisions.
+the reasoning behind the less obvious decisions. The frozen, host-independent
+contract of the core (spawn arguments, frame kinds, method and event tables)
+is [`CORE-CONTRACT.md`](CORE-CONTRACT.md); where the two differ, that document
+and the code win.
+
+ZBTerm is a hard fork of Holepunch's `hello-pear-electron` template with the
+Pear OTA updater removed (`D-08`, `D-25`): there is no `pear-runtime`
+dependency, no `pear.json` and no peer-to-peer update path. It ships as
+desktop installers and as an npm package (`npm install -g zbterm`); see
+Appendix A.2.
 
 The design is driven by five requirements:
 
@@ -19,7 +30,8 @@ The design is driven by five requirements:
    links, and cryptographic epoch keys.
 4. Sensitive networking, storage, and cryptographic operations must be
    isolated from the Electron application shell.
-5. The system must remain compatible with the Pear and Bare runtimes.
+5. The core must run under the Bare runtime, independent of Electron, so a
+   host other than the Electron app can embed it.
 
 The document walks through the system roughly in the order a request
 travels: process model, the shell/worker seam, the engine API, storage,
@@ -29,13 +41,18 @@ tradeoffs, and non-goals.
 
 ### 1.1 Core Principles
 
-- One running profile owns one core engine instance and one shared
-  Hyperswarm/DHT identity.
+- One running profile owns one core engine instance, one active share
+  backend (for Pear, one shared Hyperswarm/DHT identity), and one Rust
+  `zxterm-core` sidecar.
 - Electron is a shell. It owns windows, renderer IPC, the debug HTTP server,
-  update worker lifecycle, and native PTY processes.
+  supervision of the Bare worker, and native PTY processes.
 - The Bare worker is the core. It owns profiles, locks, account state,
-  Corestore, crypto, session business logic, sharing, playback, and the shared
-  Hyperswarm.
+  session Hypercores, crypto, session business logic, sharing, playback, and the share
+  backend.
+- Identity (SSH keys, claims, verification, provider key lookups, the identity
+  key) and the Freenet transport run in the Rust `zxterm-core` sidecar, a
+  separate process the worker spawns per profile and reaches over its own
+  socket.
 - `node-pty` stays in the Electron shell because it does not run under Bare.
   The core can request PTY operations only through the framed engine seam.
 - Renderer contracts are stable: `zbterm:invoke(method, args)` and
@@ -52,11 +69,11 @@ narrow, ordered, binary protocol.
 
 ## 2. Process Model
 
-### 2.1 The Three Runtime Domains
+### 2.1 The Runtime Domains
 
-ZBTerm is split into three runtime domains, each with an intentionally
+ZBTerm is split into three main runtime domains, each with an intentionally
 narrow job: the renderer presents, the shell connects, and the worker
-controls.
+controls. A fourth process, the Rust `zxterm-core` sidecar, serves the worker.
 
 **The renderer** is the user-interface layer. It uses xterm.js to display
 terminal output and presents session lists, sharing dialogs, playback
@@ -64,13 +81,17 @@ controls, profile controls, and status information. The renderer does not
 directly access the file system, cryptographic keys, peer-to-peer sockets, or
 terminal processes; it communicates exclusively through a preload bridge that
 exposes a stable `zbterm:invoke(method, args)` command API and a
-`zbterm:event` event stream. This stable interface allows the internal
-architecture to change without a redesign of the user interface.
+`zbterm:event` event stream (`window.zbterm` in `electron/preload.js`).
+This stable interface allows the internal architecture to change without a
+redesign of the user interface. Alongside it the preload exposes only a few
+app-level helpers that never reach the engine (`window.bridge`: clipboard,
+logging, zoom, dropped-file paths; `window.app.setIceServers`).
 
 **The Electron main shell** is treated as a shell around the core engine. It
 owns the application windows, Electron renderer IPC and the preload
-integration, the loopback debug HTTP server, supervision of the Bare worker
-and of the application update worker, and — most importantly — the native
+integration, the loopback debug HTTP server, supervision of the Bare worker,
+the npm-registry update check on npm installs (`electron/update-channel.js`),
+and — most importantly — the native
 pseudo-terminal processes provided by `node-pty`. Because `node-pty` cannot
 run inside the Bare worker, terminal process creation must remain in the
 shell. The shell, however, owns no terminal session business logic: it does
@@ -81,13 +102,27 @@ short: the shell owns the terminal process handle; the worker owns the
 terminal session.
 
 **The Bare core worker** is the architectural core. It owns the profile
-manager and profile locks, account and device state, Corestore and Hypercore
+manager and profile locks, account and device state, Hypercore and Hyperbee
 data, session creation and lifecycle logic, encryption and key distribution,
-the session catalog, playback, sharing, and one shared Hyperswarm instance
-for the active profile. The main orchestrator inside the worker is the
+the session catalog, playback, sharing, and the one active share backend for
+the profile (§7). The main orchestrator inside the worker is the
 `SessionEngine`, which exposes a single public command pattern — invoke a
 method with arguments — used identically by the renderer, the debug server,
 and any future entrypoint.
+
+**The Rust `zxterm-core` sidecar** is a separate binary built from the
+`zevix/zxterm` repository (the `zxterm/` git submodule; unrelated to this
+repo's JS `zbterm-core` package, which is the Bare worker). The Bare worker
+spawns one per profile on first use, through a spawn function the host
+supplies, and talks to it over a local socket at
+`<profile>/account/zxterm-core.sock` (length-prefixed `postcard` frames with
+JSON payloads; `engine/zxterm/{core,client,codec}.js`). It serves every
+identity path — SSH-key discovery and signing (it reads `~/.ssh` and talks to
+`ssh-agent` itself), identity claims and their verification, provider key
+lookups over HTTPS, and the identity key — and, for the Freenet backend, the
+contract client, the embedded contracts, WebRTC, the session protocol and
+Freenet history (§7.5). It runs with `--exit-on-stdin-eof` on a stdin pipe
+nobody writes to, so it dies with the worker that spawned it.
 
 ### 2.2 High-Level Block Diagram
 
@@ -104,25 +139,30 @@ flowchart TB
     Client[EngineClient<br/>framed RPC client]
     PtyHost[PTY Host<br/>node-pty registry]
     Debug[Debug Server<br/>loopback HTTP API]
-    Updater[OTA Worker Supervisor]
   end
 
   subgraph W[Bare Core Worker]
-    Host[EngineHost<br/>framed RPC host]
+    Host[worker.js<br/>framed RPC host]
     Engine[SessionEngine]
     Profiles[ProfileManager<br/>profile lock owner]
     Account[AccountStore<br/>identity/devices/social]
-    Identity[IdentityStore<br/>self claim, peers, provider cache]
+    Identity[IdentityStore<br/>call-through to sidecar]
     Catalog[Catalog<br/>local session index]
-    Store[SessionStore<br/>Corestore/Hypercore/Hyperbee]
-    Share[ShareManager<br/>one shared Hyperswarm]
+    Store[SessionStore<br/>Hypercore/Hyperbee]
+    Share[ShareManager<br/>links, caps, approval]
+    Backend[Share backend<br/>pear or freenet]
     Player[Player<br/>history replay]
     Crypto[Crypto<br/>envelopes and AEAD]
+  end
+
+  subgraph X[Rust zxterm-core sidecar]
+    XCore[identity, idkey,<br/>Freenet transport,<br/>session protocol, history]
   end
 
   subgraph P2P[P2P Network]
     Swarm[Hyperswarm / HyperDHT]
     Relay[Optional relay fallback]
+    Freenet[Local Freenet node<br/>+ WebRTC]
     Peers[Hosts and viewers]
   end
 
@@ -148,24 +188,28 @@ flowchart TB
   Engine <--> Catalog
   Engine <--> Store
   Engine <--> Share
+  Share <--> Backend
   Engine <--> Player
   Engine <--> Crypto
   Engine <-- "PTY frames" --> PtyHost
-  Share <--> Swarm
+  Identity <-- "zxterm-core.sock" --> XCore
+  Crypto <-- "idkey.*" --> XCore
+  Backend <-- "pear" --> Swarm
+  Backend <-- "freenet: proxy over the sock" --> XCore
+  XCore <--> Freenet
   Swarm <--> Relay
   Swarm <--> Peers
+  Freenet <--> Peers
   Profiles <--> Lock
   Account <--> AccountDisk
-  Identity <--> AccountDisk
+  XCore <--> AccountDisk
   Catalog <--> CatalogDisk
   Store <--> Corestore
   Player <--> Snapshots
-  Updater -. separate Pear OTA path .- P2P
 ```
 
-> **2026-09-19 (`D-08`).** The `OTA Worker Supervisor` node and its `separate Pear OTA path`
-> edge no longer exist: the Pear OTA updater was removed from every build. The host supervises
-> one Bare worker, the core's (`engine/worker.js`).
+The shell supervises exactly one Bare worker, the core's (`engine/worker.js`);
+the worker in turn supervises its `zxterm-core` sidecar.
 
 ### 2.3 Process Topology
 
@@ -173,21 +217,36 @@ flowchart TB
 flowchart LR
   Renderer["Renderer<br/>UI only"]
   Shell["Electron main shell<br/>windows, IPC, debug server,<br/>PTY host, worker supervision"]
-  Core["Bare core worker<br/>profile lock, engine, stores,<br/>crypto, swarm, share protocol,<br/>playback"]
+  Core["Bare core worker<br/>profile lock, engine, stores,<br/>crypto, share backend, share protocol,<br/>playback"]
+  Sidecar["Rust zxterm-core sidecar<br/>identity, idkey, Freenet transport"]
   Network["HyperDHT peers"]
+  FreenetNet["Freenet node + WebRTC peers"]
   Disk["Profile storage"]
 
   Renderer <-- "Electron IPC<br/>zbterm:invoke/event" --> Shell
   Shell <-- "compact-encoding frames<br/>over FramedStream(Bare.IPC)" --> Core
   Shell <-- "PTY frames only" --> Core
   Shell <-- "node-pty process handles" --> Shell
+  Core <-- "postcard frames over<br/>account/zxterm-core.sock" --> Sidecar
   Core <-- "HyperDHT sockets<br/>Protomux channels" --> Network
-  Core <-- "Corestore, catalog,<br/>account, snapshots" --> Disk
+  Sidecar <-- "contracts, WebRTC<br/>data channels" --> FreenetNet
+  Core <-- "session cores, catalog,<br/>account, snapshots" --> Disk
+  Sidecar <-- "account/identity,<br/>Freenet history segments" --> Disk
 ```
 
-The shell never constructs `SessionEngine` in-process. It supervises
-`engine/worker.js` (the `zbterm-core` sidecar entrypoint), restarts it on
-crash or hang, and forwards renderer/debug requests through `EngineClient`.
+The shell never constructs `SessionEngine` in-process. It spawns
+`engine/worker.js` (the `zbterm-core` sidecar entrypoint) through
+`engine/client.js::EngineClient` → `engine/spawn-worker.js` → `bare-sidecar`,
+restarts it on crash or hang, and forwards renderer/debug requests through
+`EngineClient`. The spawn argv is positional and frozen:
+`[userData, profileId, profilePath, backend, freenetNode, coreHost?]`, empty
+strings (never `undefined`) for the optional ones. `backend` is the
+share-backend limit (`--backend` / `ZBTERM_BACKEND`, `electron/backend-limit.js`),
+`freenetNode` the Freenet node's WebSocket URL (`--freenet-node` /
+`ZBTERM_FREENET_NODE`, `''` for `ws://127.0.0.1:7509/v1/contract/command`), and
+`coreHost` the absolute path of the host module that knows where the
+`zxterm-core` binary is and how to spawn it (`electron/zxterm-core-host.js`),
+because `engine/` itself may not spawn processes.
 
 The worker owns `ProfileManager` and therefore owns profile locks. This
 avoids a shell-side lock model that would not generalize to future headless
@@ -200,15 +259,19 @@ entrypoints.
 | Renderer | Electron renderer | xterm.js rendering, session UI, sharing dialogs, playback controls |
 | Preload bridge | Electron renderer/shell boundary | Exposes stable `zbterm:invoke` and `zbterm:event` APIs |
 | `electron/main.js` | Electron shell | Windows, app lifecycle, renderer IPC, shell-only commands |
-| `engine-lifecycle.js` | Electron shell | Starts/stops/restarts the Bare worker and reports engine state |
-| `EngineClient` | Electron shell | Encodes invokes, decodes replies/events, preserves renderer contract |
-| Debug server | Electron shell | Loopback REST API using the same `EngineClient` seam as the renderer |
-| PTY host | Electron shell | Owns `node-pty` instances and validates PTY frame session ownership |
-| `EngineHost` | Bare worker | Decodes frames, dispatches invokes, emits events, requests PTY ops |
-| `SessionEngine` | Bare worker | Main command/event API and orchestration |
-| `ShareManager` | Bare worker | One shared Hyperswarm, link lifecycle, join/host protocol, relay lookup |
-| Stores | Bare worker | Account, catalog, session Corestore, meta Hyperbee, snapshot cache |
+| `engine-lifecycle.js` | Electron shell | Starts/stops/restarts the Bare worker, owns the `ProfileManager` used before an engine runs, pushes ICE servers, reports engine state |
+| `EngineClient` | Electron shell | `engine/client.js` (wrapped by `electron/engine-client.js`): spawns the worker, encodes invokes, decodes replies/events, serves PTY frames, preserves renderer contract |
+| Debug server | Electron shell | Loopback-only (`127.0.0.1`) REST API using the same `EngineClient` seam as the renderer (`--debug-server`; see [`debug_server_howto.md`](debug_server_howto.md)) |
+| PTY host | Electron shell | `electron/pty-host.js`: owns `node-pty` instances (`pty-session.js`) and their systemd scopes (`pty-scope.js`), validates PTY frame session ownership |
+| Host options | Electron shell | `backend-limit.js` (share-backend limit), `ice-servers.js` (STUN/TURN list for Freenet), `update-channel.js` (install channel and npm update check) |
+| `zxterm-core-host.js` | Shell module, loaded in the Bare worker | Locates the `zxterm-core` binary and spawns it on the worker's behalf |
+| `engine/worker.js` | Bare worker | Decodes frames, dispatches invokes, emits events, requests PTY ops |
+| `SessionEngine` | Bare worker | Main command/event API and orchestration (`engine/index.js`) |
+| `ShareManager` | Bare worker | Link lifecycle, caps, approval, join/host protocol, live encryption, sealed input; holds one share backend |
+| Share backends | Bare worker | `engine/backends/`: `pear` (Hyperswarm, relay fallback) and `freenet` (proxy to the sidecar), behind one `ShareBackend` contract |
+| Stores | Bare worker | Account, catalog, session log Hypercore, meta Hyperbee, snapshot cache |
 | Player | Bare worker | Sparse history fetch, decrypt, seek, frame/data playback |
+| `zxterm-core` | Rust sidecar (per profile) | Identity, identity key, Freenet contract client/WebRTC/session protocol/history |
 
 ### 2.5 Rationale for the Split
 
@@ -243,18 +306,24 @@ The core is `engine/`, which is also the `zbterm-core` npm package: its own
 `package.json`, its own version, its own `imports` map, the Bare sidecar
 entrypoint `engine/worker.js`, and the host-side supervisor `engine/client.js`.
 The contract it publishes is frozen in `docs/CORE-CONTRACT.md` and
-`test/core-contract.test.js` fails the build when the two drift. (`workers/`
-keeps only `main.js`, the app's OTA updater, which is not core.) It contains no
+`test/core-contract.test.js` fails the build when the two drift. There is no
+other worker: `engine/` is the only core directory
+(`test/core-boundary.test.js::CORE_DIRS` is `['engine']`). It contains no
 host-specific code: no `node-pty`, no `electron`, no process spawning, and no
 require that resolves into `electron/`, `renderer/`, or `bin/`. The core owns
 *interfaces*; a host supplies the implementations by injection. This is what
 makes a second host (a plugin, a headless CLI) possible without touching the
 core, and `test/core-boundary.test.js` fails the build if it regresses.
+`scripts/core-headless-smoke.js` proves the point from plain Node: it launches
+the worker with a fake PTY host, records a session and reads the catalog back.
+(The one non-Electron host that existed, a Tabby plugin, is archived and no
+longer built.)
 
-> **2026-09-19 (`D-08`).** `workers/` no longer exists: `workers/main.js`, the OTA updater, was
-> removed from every build. `test/core-boundary.test.js::CORE_DIRS` is `['engine']`.
-
-Today there is exactly one such adapter contract, the **PTY host**. It is a
+The core has two host adapters. The first is the **`zxterm-core` host**: an
+object `{ spawn(bin, args), bin() }` that the worker loads from the path in its
+6th spawn argument (`engine/zxterm/core.js::setCoreHost`); without one there is
+no Rust sidecar, and every identity call fails at once with
+`E_BACKEND_UNAVAILABLE`. The second is the **PTY host**. It is a
 constructor option, not a require: `new SessionEngine({ ptyHost })` throws an
 `EngineError` when it is missing rather than falling back to a local
 implementation.
@@ -271,7 +340,7 @@ events: 'data' -> { sessionId, data: Buffer }
 ```
 
 `attach()` is the optional half of the contract, for hosts that **already own**
-a terminal (a Tabby tab, an SSH session someone else launched).
+a terminal (an editor's terminal tab, an SSH session someone else launched).
 `createSession({ mode: 'attach' })` calls it instead of `spawn()`; a host that
 does not implement it makes that call fail with `E_INTERNAL`. The handle it
 returns has the same five methods and the same two events, deliberately - there
@@ -299,29 +368,26 @@ Two implementations satisfy it. `electron/pty-host.js` is the real one: it owns
 containment for each terminal), and the Electron shell injects it into the
 `EngineClient`. `engine/pty-remote.js` is the worker-side proxy the Bare worker
 injects: the same API, but every call becomes a `PTY_*` frame on the shell
-seam, and inbound `PTY_DATA`/`PTY_EXIT` frames become the same two events. The
-core cannot tell them apart, which is the point. Neither implements `attach()`
-today - the Electron shell always launches its own terminals - and the frame
-protocol has no `PTY_ATTACH` kind, so attach mode is currently for hosts that
-embed the engine in-process. `test/engine-attach.test.js` exercises it against
-a fake host that implements both halves.
+seam, and inbound `PTY_DATA`/`PTY_EXIT`/`PTY_DETACH` frames become the same two
+events. The core cannot tell them apart, which is the point. `pty-remote.js`
+implements `attach()` too, as a `PTY_ATTACH` frame (§3.1), so attach mode works
+in-process and across the sidecar seam alike: `EngineClient` answers
+`PTY_ATTACH` by calling its own `ptyHost.attach()`, and answers with
+`PTY_DETACH` when that host has none. `electron/pty-host.js` implements only
+the spawn half — the Electron shell always launches its own terminals.
+`test/engine-attach.test.js` and `test/engine-attach-seam.test.js` exercise
+attach mode in-process and over the seam.
 
-Any new host capability the core needs - reading `~/.ssh`, HTTP for provider
-key lookups - gets its own named adapter contract in this shape rather than a
-direct require. Provider key lookup already works this way: the resolver emits
-`identity:resolve-request` and the shell answers over the seam.
-
-> **2026-09-29 (K9 of zxterm-core, in `zevix/zxterm`).** Superseded for identity: reading `~/.ssh`, talking to
-> `ssh-agent` and the provider key lookup are done by the Rust `zxterm-core` sidecar, a separate
-> OS process the Bare worker spawns per profile through a host-supplied spawn function
-> (`electron/zxterm-core-host.js`, passed as the worker's 6th argument; see
-> `docs/CORE-CONTRACT.md` §3 "The `zxterm-core` sidecar"). `identity:resolve-request` and
-> `identity.resolveResult` are gone. The PTY host remains the one host adapter of this shape.
+Any new host capability the core needs gets its own named adapter contract in
+this shape rather than a direct require. The OS capabilities identity needs —
+reading `~/.ssh`, talking to `ssh-agent`, HTTPS for provider key lookups — are
+not host adapters: the `zxterm-core` sidecar performs them itself (§6.3).
 
 ## 3. The Shell–Worker IPC Seam
 
 The Electron shell and Bare worker communicate over a single duplex pipe. The
-transport is a framed binary protocol over `FramedStream(Bare.IPC)`. JSON is
+transport is a framed binary protocol over `FramedStream(Bare.IPC)`
+(`engine/rpc/schema.js` for the codecs, `engine/rpc/pipe.js` for the pipe). JSON is
 used only for method bodies and low-rate events; hot paths
 use binary frames.
 
@@ -393,7 +459,15 @@ classDiagram
 | `EVENT_JSON` | worker to shell | Low-rate events such as list/share/status changes |
 | `EVENT_DATA` | worker to shell | Binary `session:data` and `player:data` payloads |
 | `PTY_SPAWN/WRITE/RESIZE/KILL/PAUSE/RESUME` | worker to shell | Core-controlled PTY operations |
+| `PTY_ATTACH` | worker to shell | Attach to a terminal the host already owns (attach mode, §2.6) |
 | `PTY_DATA/EXIT` | shell to worker | PTY output and termination events |
+| `PTY_DETACH` | both ways | Worker to shell: let go of an attached terminal; shell to worker: the attached terminal is gone |
+
+`FrameKind` numbers 0–14 are wire-compatible state and are never renumbered.
+Kinds 15–21 once carried a Freenet backend's WebRTC connections between the
+worker and the shell (`BACKEND_*`); they were removed when WebRTC moved into
+the `zxterm-core` sidecar (K11 of zxterm-core, `D-34`), are reserved, and
+decode as an unknown kind (`E_CORRUPT`). No Freenet traffic crosses this pipe.
 
 *Invoke frames* carry a method name and arguments from shell to worker
 (e.g. `session.create`, `share.join`, `player.open`); the worker dispatches
@@ -413,15 +487,6 @@ to the worker. The worker addresses every PTY operation by session
 identifier, and the shell maintains the actual `node-pty` registry and
 confirms that operations refer to valid terminal sessions.
 
-> **2026-09-24 (`projects/260924_freenet-backend`).** A fourth family was appended:
-> `BACKEND_OPEN/SIGNAL/STATE/CHANNEL/DATA/FLOW/CLOSE`, `FrameKind` 15–21 (0–14 unchanged), which
-> carry a share backend's WebRTC peer connections between the worker and the shell. See the
-> dated paragraph under §7 and `docs/CORE-CONTRACT.md` §3.
-
-> **2026-09-29 (K11 of zxterm-core, in `zevix/zxterm`; `D-34`).** That family is removed again:
-> kinds 15–21 are reserved and never reused. WebRTC runs in the Rust `zxterm-core` sidecar, so
-> no Freenet frame crosses this pipe.
-
 ### 3.2 Ordering: Why One Pipe
 
 There is one duplex pipe, on purpose, and no separate fast lane for data. A
@@ -430,10 +495,30 @@ state events, replies, and lifecycle events: the renderer can never observe
 a session-close event before terminal data that was emitted earlier. This is
 much easier to reason about than reconciling two streams.
 
+### 3.3 The Second Seam: Worker ↔ `zxterm-core`
+
+The worker reaches the Rust sidecar over a different seam, which the shell
+never sees: a local socket at `<profile>/account/zxterm-core.sock` (a named
+pipe on Windows, not implemented yet) carrying length-prefixed `postcard`
+frames with JSON payloads (`engine/zxterm/codec.js`, `engine/zxterm/client.js`;
+`zxterm_core::seam` on the Rust side). `engine/zxterm/core.js::Core` spawns
+`zxterm-core sidecar --profile <profile>/account --exit-on-stdin-eof` on the
+first call that needs it and restarts it on the next call after it exits. Its
+health is the `core.health` method. The seam carries request/response methods
+(`identity.*`, `idkey.*`, `freenet.*`, `share.*`, `history.*`), events, and
+non-droppable `Chan` frames for raw channel bytes. The binary is found at
+`node_modules/@zbterm/zxterm-core-<platform>-<arch>/` (the npm optional
+dependency), then `npm/zxterm-core-<platform>-<arch>/` in the app directory
+(staged by `scripts/sidecar.js`), with `ZXTERM_CORE_BIN` overriding both; a
+missing binary is a named `E_BACKEND_UNAVAILABLE`, never a hang. See
+[`CORE-CONTRACT.md`](CORE-CONTRACT.md) §3 and §4.
+
 ## 4. Engine API Surface
 
-The public engine surface remains `invoke(method, args)`. The important
-method families:
+The public engine surface remains `invoke(method, args)`. The method families
+`engine/index.js` dispatches (the authoritative table, with arguments and
+results, is [`CORE-CONTRACT.md`](CORE-CONTRACT.md) §5.1, which
+`test/core-contract.test.js` keeps in step with the code):
 
 ```mermaid
 mindmap
@@ -445,10 +530,13 @@ mindmap
       close
       delete
       rename
+      update
+      defaultName
       list
       input
       resize
       ack
+      diagnostics
       setHd
       removeHd
       clearCaches
@@ -458,20 +546,33 @@ mindmap
       play
       pause
       step
-    identity_account
-      identity.get
+      view
+    identity
+      get
+      self
+      beginClaim
+      setSelf
+      clear
+      peers
+      annotatePeer
+      lookup
+      inspectInvite
+      sshCandidates
+      sshInspect
+      sshSign
+    account_device
       account.profile
       account.devices
       account.localDevice
       device.revoke
     profile
-      current
       list
       create
       rename
       deleteEmpty
-      select
     share
+      backends
+      setIceServers
       createLink
       listLinks
       revokeLink
@@ -481,20 +582,37 @@ mindmap
       approveJoin
       denyJoin
       setInputMode
+    other
+      ping
+      core.health
+      preference.get
+      preference.set
+      debug.currentSelection
 ```
 
 All of these operations are commands executed by the worker; the renderer
 never manipulates stores, keys, peers, or terminal processes directly.
 Worker-originated events remain renderer-facing `zbterm:event` messages.
-Hot data events are binary across the shell/core seam and then forwarded to
-the renderer in the standard event shape.
+Hot data events (`session:data`, `player:data`) are binary across the
+shell/core seam and then forwarded to the renderer in the standard event shape.
+
+A few methods never reach the worker: the Electron shell answers them itself
+(`electron/main.js`'s `zbterm:invoke` handler). Renderer `profile.*` calls —
+including the shell-only `profile.current` and `profile.select`, which starts
+the engine for a profile — are served from the shell's own `ProfileManager`
+(`electron/engine-lifecycle.js`), since a profile has to be chosen before any
+worker runs; the engine's own `profile.*` methods are there for other hosts.
+`app.*` (`app.info`, `app.updateCheck`, `app.preference.get`/`set`,
+`app.chooseDirectory`) and most `debug.*` methods are shell-only. The
+`identity.ssh*` trio is forwarded to the worker even while it is still
+booting, because the identity wizard reads SSH keys early.
 
 ## 5. Data Model
 
 ### 5.1 Profile Model
 
 A ZBTerm profile is the primary ownership boundary for local application
-state. Each profile has its own profile lock, account data, Corestore,
+state. Each profile has its own profile lock, account data, session cores,
 session catalog, snapshot cache, and peer-to-peer identity.
 
 ```mermaid
@@ -547,31 +665,47 @@ erDiagram
 Profile storage shape:
 
 ```text
-profiles/
+<userData>/zbterm-profiles/
   profiles.json
   <profileId>/
-    lock
+    lock/owner.json
     account/
+      identity/              (owned by the zxterm-core sidecar: self.json,
+                              peers/, provider-cache/)
+      zxterm-core.sock       (the sidecar's seam, while it runs)
     corestore/
     catalog/
     snapshots/
+    preferences.json
 ```
+
+`<userData>` is ZBTerm's data directory (`--storage <dir>` overrides it). A
+host may instead pass an explicit `profilePath` (`--profile-path`), which is
+used as the profile root as is. A session shared over Freenet additionally
+keeps its sidecar-side history (segment files and a small state file) under
+its session store (§7.5).
 
 Only one process may hold a profile lock at a time; this prevents two
 application instances from writing to the same profile simultaneously.
 Different profiles may run concurrently because they use separate locks and
-separate storage roots. The lock records a format version, process
-identifier, hostname, and creation time, and is owned by the worker — the
-real owner of account state, stores, and the session engine.
+separate storage roots. The lock is a directory (non-recursive `mkdir` is the
+exclusivity gate on both Node and Bare) holding an `owner.json` with the
+format version, process identifiers, hostname, and creation time, and is owned
+by the worker — the real owner of account state, stores, and the session
+engine.
 
 ### 5.2 Session Storage Model
 
 Each terminal session has two principal replicated data structures, both
-kept in a Corestore namespace: a Hypercore log containing the encrypted
-terminal output history, and a Hyperbee store containing structured session
-metadata. The host is the only writer of both canonical structures — the
-single-writer rule. Viewers may replicate the data but never modify the
-canonical history or metadata.
+plain Hypercores in the session's own directory under the profile's
+`corestore/` (`corestore/<sessionId>/log` and `corestore/<sessionId>/meta`;
+the `corestore` package itself is not used): a Hypercore log containing the
+encrypted terminal output history, and a Hyperbee over the meta core
+containing structured session metadata. The host is the only writer of both
+canonical structures — the single-writer rule. Viewers may replicate the data
+but never modify the canonical history or metadata. A Freenet share's history
+travels differently (§7.5), but the host's own recording is still this log,
+and a Freenet viewer's local copy is a store of the same shape.
 
 ```mermaid
 erDiagram
@@ -594,7 +728,7 @@ erDiagram
   META_BEE ||--o{ INVITE : stores
 
   LOG_CORE {
-    string namespace
+    string dir
     uint64 length
   }
 
@@ -718,12 +852,14 @@ erDiagram
   }
 ```
 
-> **2026-09-29 (K9 of zxterm-core, in `zevix/zxterm`).** The identity key and its device proof are made and
-> checked by the Rust `zxterm-core` sidecar (`zxterm_core::idkey`, `X-01`), reached over its seam
-> from `engine/crypto.js` and `engine/account-store.js`; the upstream identity-key package is no
-> longer a dependency. There is no migration (`D-23`, ZBTerm `D-32`): a profile whose identity was
-> made by the old scheme gets a fresh one on its first start under the new one, its self claim is
-> cleared, and one log line (`engine/index.js::OLD_SCHEME_IDENTITY_LOG`) says so.
+The identity key (derived from a mnemonic the account store keeps) and its
+device proof are made and checked by the Rust `zxterm-core` sidecar
+(`zxterm_core::idkey`, `X-01`), reached over its seam (`idkey.*`) from
+`engine/crypto.js` and `engine/account-store.js`; the upstream identity-key
+package the template used is no longer a dependency. There is no migration
+from that older scheme (`D-23`, `D-32`): a profile whose identity was made by
+it gets a fresh one on its first start, its self claim is cleared, and one log
+line (`engine/index.js::OLD_SCHEME_IDENTITY_LOG`) says so.
 
 This separation buys quite a lot: a new device can be added without
 replacing the user's identity, a compromised device can be revoked on its
@@ -782,50 +918,39 @@ about this socket, so a relayed response computed on a different connection
 cannot verify. The claim proves the account owns the identity, and the
 challenge proves the account is on *this* wire.
 
-Two kinds of SSH key can carry a claim. An `ssh-ed25519` key signs and verifies
-through `sodium-native`; an `ssh-rsa` key signs as `rsa-sha2-512` and never as
+Two kinds of SSH key can carry a claim. An `ssh-ed25519` key signs and
+verifies as Ed25519; an `ssh-rsa` key signs as `rsa-sha2-512` and never as
 bare `ssh-rsa`, and a SHA-1 `ssh-rsa` signature is refused by name rather than
 quietly accepted. RSA arrived after the rest of the identity work, for the
 blunt reason that plenty of real GitHub accounts still publish nothing else,
 and a setup wizard that offers no signable key is a wizard nobody can finish.
-Signing an RSA claim happens in the shell, where Node's `crypto` can be handed
-the modulus, exponents and factors parsed out of the OpenSSH container as a
-JWK, or where `ssh-agent` can be asked for the signature with the SHA-2 flag
-set. Verifying one happens in the worker, where neither `sodium-native` nor
-Bare's `crypto` has RSA at all, so `engine/identity/claim.js` recovers the
-encoded message from the signature with its own modular exponentiation and
-compares it byte for byte against the PKCS#1 v1.5 block it rebuilds — never
-parsing what it recovered, which is what makes a low-exponent forgery
-pointless. ECDSA and FIDO (`sk-*`) keys are still discovered and listed, and
-still disabled with a reason. Because the accepted set only ever grew, an older
-build that meets an RSA-signed claim cannot verify it and, by the rule below,
-refuses the connection outright — the incompatibility is one-directional and
-fails closed.
+An RSA claim is signed either from the private key parsed out of the OpenSSH
+container or by asking `ssh-agent` for the signature with the SHA-2 flag set;
+verification recovers the encoded message from the signature and compares it
+byte for byte against the PKCS#1 v1.5 block it rebuilds — never parsing what
+it recovered, which is what makes a low-exponent forgery pointless. ECDSA and
+FIDO (`sk-*`) keys are still discovered and listed, and still disabled with a
+reason. Because the accepted set only ever grew, an older build that meets an
+RSA-signed claim cannot verify it and, by the rule below, refuses the
+connection outright — the incompatibility is one-directional and fails closed.
 
-> **2026-09-29 (K9 of zxterm-core, in `zevix/zxterm`).** Everything this section says `engine/identity/claim.js`,
-> `sodium-native`, Node's `crypto` or `engine/identity/verify.js` computes is now computed by the
-> Rust `zxterm-core` sidecar (`zxterm_core::identity`, `zxterm_core::ssh`), with the same encodings,
-> key types, refusals and error texts; `engine/identity/*.js` are thin call-throughs over its seam.
-> The paragraph below is superseded as described in the note after it.
-
-Neither half can run entirely inside the Bare worker, which is why identity is
-the one place where the shell does more than carry frames. Reading
-`~/.ssh`, talking to `ssh-agent` and issuing an HTTPS request are
-operating-system capabilities the worker deliberately does not have, so
-`electron/ssh-keys.js` and `electron/github-keys.js` live in the shell and are
-driven by the worker through `identity:resolve-request` and the
-`identity.ssh*` invokes. The shell performs the I/O and hands back bytes; it
-never decides whether a peer is verified. That decision stays in the worker, in
-`engine/identity/verify.js`, alongside the session logic it protects.
-
-> **2026-09-29 (K9 of zxterm-core, in `zevix/zxterm`).** Superseded. `electron/ssh-keys.js` and
-> `electron/github-keys.js` are deleted. The Rust `zxterm-core` sidecar, spawned by the Bare worker
-> for the profile, reads `~/.ssh`, talks to `ssh-agent`, fetches `<user>.keys` and decides whether
-> a peer is verified; the shell's `identity.ssh*` invokes are forwarded to the worker, which asks
-> the sidecar. ShareManager's challenge is signed (`_answerIdentityChallenge`) and verified
-> (`_verifyViewerIdentity`, `_verifyHostIdentity`) by the sidecar for every backend alike; the
-> Freenet wire is unchanged (K13 of zxterm-core moves that challenge into the core's session
-> protocol).
+All of this — claim and challenge encoding, SSHSIG signing and verification,
+SSH-key discovery, `ssh-agent`, the `<user>.keys` fetch and the verdict on a
+peer — is computed by the Rust `zxterm-core` sidecar
+(`zxterm_core::identity`, `zxterm_core::ssh`), with the same encodings, key
+types, refusals and error texts the earlier JavaScript implementation had.
+`engine/identity/{claim,verify,resolver,store}.js` are thin call-throughs over
+its seam, kept so the rest of the engine, and the frozen wire constants
+(`claim.js::NAMESPACE` and friends), stay where they were. Reading `~/.ssh`,
+talking to `ssh-agent` and issuing an HTTPS request are operating-system
+capabilities the Bare worker deliberately does not have; they live in a
+separate process rather than in the Electron shell, so the shell never
+touches key material for identity and never decides whether a peer is
+verified. The shell's `identity.ssh*` invokes are forwarded to the worker,
+which asks the sidecar. On Pear and loopback shares, ShareManager's challenge
+is signed (`_answerIdentityChallenge`) and verified (`_verifyViewerIdentity`,
+`_verifyHostIdentity`) through the sidecar; on Freenet shares the challenge is
+part of the sidecar's own session protocol (§9.2).
 
 The refusal rule is deliberately narrow: a join is refused only when a peer
 presents a claim that is affirmatively bad — a signature that does not check
@@ -842,98 +967,115 @@ user for approval at all, and a refused peer is persisted as
 `share:peer-identity` event, never in a record that could later be mistaken for
 a proven one.
 
-State lives under the profile's account directory: `identity/self.json` holds
-the local claim, `identity/peers/<identityKeyHex>.json` one record per peer
-seen (including any local nickname the user attached), and
+State lives under the profile's account directory and is written by the
+sidecar (`zxterm_core::identity::store`): `identity/self.json` holds the local
+claim, `identity/peers/<identityKeyHex>.json` one record per peer seen
+(including any local nickname the user attached), and
 `identity/provider-cache/<provider>/<subject>.json` the cached key lists, kept
-six hours for a positive answer and ten minutes for a negative one. Which
-providers exist at all is a registry, `engine/identity/providers.js`: each
-entry supplies its id, its label, whether it needs a resolver, how it renders a
-display id and how it validates a subject. Nothing else in the identity
-pipeline knows provider names, so adding a second provider is an entry in that
-registry plus a resolver in the shell — not a change to the claim format, the
-handshake, or the storage layout.
+six hours for a positive answer and ten minutes for a negative one
+(`zxterm_core::identity::resolver`; the `.keys` base URL can be overridden with
+`ZBTERM_GITHUB_KEYS_BASE`). Which providers exist at all is a registry,
+`engine/identity/providers.js` on this side and
+`zxterm_core::identity::providers` in the sidecar: each entry supplies its id,
+its label, whether it needs a resolver, how it renders a display id and how it
+validates a subject. Nothing else in the identity pipeline knows provider
+names, so adding a second provider is an entry in that registry plus a
+resolver in the sidecar — not a change to the claim format, the handshake, or
+the storage layout.
 
 ## 7. Peer-to-Peer Networking
 
-> **2026-09-24 (`projects/260924_freenet-backend`, `D-06`/`D-09`, `D-14`).** This section describes
-> the Pear backend. Since the backend-abstraction spike (2026-09-18) share networking sits behind one
-> `ShareBackend` interface (`engine/backends/types.js`), chosen per run through the registry
-> (`engine/backends/index.js`), and `engine/share-manager.js::ShareManager` holds one backend. A
-> second real backend, **Freenet** (`engine/backends/freenet/`), ships in the default package
-> (`forge.config.js::DEFAULT_BUILD_BACKENDS` = `'pear,freenet'`). It is split across the seam: the
-> contract client runs in the Bare worker and talks to a Freenet node the user runs (WebSocket
-> `ws://127.0.0.1:7509`, `engine/backends/freenet/node-client.js`; ZBTerm never manages the node,
-> `D-12`); rendezvous and the signed, encrypted offer/answer exchange go through committed contracts
-> (`engine/backends/freenet/contracts/*.wasm`, `D-10`); the WebRTC half runs in the Electron main
-> process on `node-datachannel` (`electron/rtc-host.js::RtcHost`), driven by the worker through the
-> `BACKEND_*` frames (`FrameKind` 15–21, §3.1) and reached from the worker through
-> `engine/backends/freenet/rtc-remote.js::RtcRemote`, the `engine/pty-remote.js::PtyRemote` pattern.
-> Channels are cut into ≤ 65 536-byte parts in the worker (`engine/backends/freenet/channel.js`); live
-> history replicates over one Noise-wrapped data channel per connection
-> (`engine/backends/freenet/history.js`); offline history is not offered (`D-13`). ICE servers are
-> read by the shell (`electron/ice-servers.js`, `D-11`) and pushed with `share.setIceServers`.
->
-> **2026-09-29 (K11 of zxterm-core, in `zevix/zxterm`; `D-34`, `D-35`).** Correction to the paragraph
-> above: the Freenet backend is no longer split. `engine/backends/freenet/index.js` is a proxy to
-> the Freenet transport service of the Rust `zxterm-core` sidecar (the profile's own, the one
-> identity already uses), which runs the contract client, the contracts (embedded), the
-> offer/answer exchange and WebRTC. The proxy speaks the sidecar's seam: `freenet.*` requests and
-> events, and non-droppable `Chan` frames for channel bytes; JSON channel parts are still cut in
-> the worker, and history still replicates over one Noise-wrapped channel per connection
-> (`history.js`), both over the sidecar's raw channels. `electron/rtc-host.js`, `rtc-remote.js`,
-> `node-client.js`, `channel.js` and the `BACKEND_*` frames are gone. The node's address is the
-> worker's 5th argument (`freenetNode`; `--freenet-node`, `ZBTERM_FREENET_NODE`).
->
-> **2026-09-30 (K17 of zxterm-core, in `zevix/zxterm`; `D-40`, `D-41`).** Correction to the two
-> paragraphs above on history: a Freenet session's history is no longer a Hypercore replicated over
-> a raw channel, and offline history is offered. `engine/backends/freenet/history.js` is gone. The
-> sidecar keeps the history in segment files, serves a viewer's range on the session protocol's own
-> `history` channel and publishes it to the `segment-v1` contract, from which a viewer reads it with
-> the host offline; ZBTerm's `engine/zxterm/history.js` feeds it (the host: `history.import` once at
-> a session's first Freenet share, then `history.append`) and reads it (the viewer: `share.history`
-> while the host is connected, `history.readContract` otherwise), into a local cache that is the
-> viewer's store. Local-only sessions and Pear shares keep their Hypercore (`D-18`).
+Share networking sits behind one `ShareBackend` interface
+(`engine/backends/types.js`: `describe`, `start`/`stop`, `health`,
+`localPeerKey`, `announce`/`withdraw`, `routeFor`, `dial`, `setAdmission`,
+`serveHistory`/`attachHistory`/`historyRouteFor`, `diagnostics`, plus
+`connection`/`debug`/`error` events). The interface never exposes a mux, a
+socket or a swarm. `engine/share-manager.js::ShareManager` owns everything
+above it — link records, caps, approval, the `zbterm/ctl` message set,
+identity, live encryption, rekey and sealed input — and holds at most one
+backend, created on the first `share.createLink` or `share.join`. One backend
+is active per run; a call naming a different one while the first has shares
+or joins fails with `E_BACKEND_UNAVAILABLE`.
+
+The registry, `engine/backends/index.js`, is the only file outside a backend
+directory that reaches into one (`test/backend-boundary.test.js`). It loads
+each backend through a guarded `require`, so a package built without one
+reports it absent rather than failing to boot. Which backends a package
+carries is a build-time choice (`ZBTERM_BUILD_BACKENDS`,
+`forge.config.js::DEFAULT_BUILD_BACKENDS` = `'pear,freenet'`); the worker's
+`backend` spawn argument (`--backend` / `ZBTERM_BACKEND`: `pear`, `freenet`
+or `none` for local-only) only narrows that set at runtime. `share.backends`
+reports each backend's availability.
+
+| Backend | Directory | Transport | History to viewers |
+| --- | --- | --- | --- |
+| `pear` | `engine/backends/pear/` | One shared Hyperswarm/HyperDHT per profile, Protomux channels, optional blind relay (§7.1–§7.4) | Hypercore replication on the same socket |
+| `freenet` | `engine/backends/freenet/` | Proxy to the `zxterm-core` sidecar: Freenet contracts for rendezvous, WebRTC data channels (§7.5) | The sidecar's segment history, live or from a contract |
+| loopback | `engine/backends/loopback.js` | In-process hub, tests only; never listed in `share.backends` | Hypercore replication stream |
+
+The same conformance suite (`test/backends/conformance.js`) runs against all
+three. Invites name their backend: a Pear link is still emitted in the v1
+shape `{ v, linkId, topic, hostDhtKey, claim }` so released builds can join
+it, any other backend's link is v2 `{ v: 2, b, linkId, peer, route, claim }`,
+and `engine/invite.js::decodeLink` normalises both
+(`zbterm://join/<base64url JSON>`).
+
+Sections 7.1–7.4 describe the Pear backend; §7.5 the Freenet backend.
 
 ### 7.1 Shared Swarm Architecture
 
-Each running profile has one shared `Hyperswarm`, owned by the worker-side
-`ShareManager` and using the profile's DHT identity. Hosting and joining
+Each running profile has one shared `Hyperswarm`, owned by the Pear backend
+(`engine/backends/pear/index.js::PearBackend`, created lazily on the first
+announce or dial) and using the profile's DHT identity. Hosting and joining
 both use this same swarm, which avoids creating multiple DHT nodes with the
-same identity and reduces unnecessary network state.
+same identity and reduces unnecessary network state. Everything that names
+`hyperswarm`, `hyperdht` or `protomux` lives under `engine/backends/pear/`;
+the code was moved there from `ShareManager`, not rewritten, so the wire
+behaviour is unchanged and interoperates with earlier builds.
 
 ```mermaid
 flowchart TB
   ShareManager[ShareManager]
-  Swarm[One shared Hyperswarm<br/>profile DHT keypair]
   HostShares[hostShares<br/>sessionId to share]
-  ActiveJoins[activeJoins<br/>linkId to join]
-  LinkIndex[linkIndex<br/>linkId to sessionId]
-  Pinned[pinnedHostKeys<br/>refcounted]
-  SocketPeers[socket to peer set]
+  Joins[joins<br/>viewer join state]
+  LinkIndex[_linkIndex<br/>linkId to sessionId]
+  ConnPeers[_connPeers<br/>connection to peer set]
+  Pear[PearBackend]
+  Swarm[One shared Hyperswarm<br/>profile DHT keypair]
+  Announced[_announced<br/>linkId to topic]
+  Dials[_dials<br/>pending dials]
+  Pinned[_pinnedHostKeys<br/>refcounted]
+  Conns[socket to PearConnection<br/>one Protomux each]
   RelayLookup[relay registry lookup<br/>uses swarm DHT when available]
 
-  ShareManager --> Swarm
   ShareManager --> HostShares
-  ShareManager --> ActiveJoins
+  ShareManager --> Joins
   ShareManager --> LinkIndex
-  ShareManager --> Pinned
-  ShareManager --> SocketPeers
-  ShareManager --> RelayLookup
+  ShareManager --> ConnPeers
+  ShareManager -->|ShareBackend calls| Pear
+  Pear --> Swarm
+  Pear --> Announced
+  Pear --> Dials
+  Pear --> Pinned
+  Pear --> Conns
+  Pear --> RelayLookup
 
-  Swarm -->|"server topic joins"| HostShares
-  Swarm -->|"client topic joins + joinPeer"| ActiveJoins
+  Swarm -->|"server topic joins"| Announced
+  Swarm -->|"client topic joins + joinPeer"| Dials
   Swarm -->|"firewall accepts hosting or pinned hosts"| Pinned
 ```
 
-The `ShareManager` maintains several internal mappings: `hostShares` maps
-session identifiers to hosted-share state; `activeJoins` maps link
-identifiers to viewer join state; `linkIndex` maps a link identifier to the
-session it represents; `pinnedHostKeys` tracks which remote host DHT
-identities are currently allowed; and per-socket peer state tracks the
-relationships carried by each network socket. Because one socket may carry
-multiple session relationships — and both host and viewer roles — peer state
-cannot be stored per socket; it is scoped to the pair `(socket, linkId)`.
+`ShareManager` keeps the session-level mappings: `hostShares` maps session
+identifiers to hosted-share state; `joins` holds viewer join state;
+`_linkIndex` maps a link identifier to the session it represents; and
+`_connPeers` maps each backend connection to the peers it produced, across
+every share it carries. The Pear backend keeps the network-level ones: the
+topics it announces, the dials in flight, `_pinnedHostKeys` (which remote host
+DHT identities are currently allowed), and one `PearConnection` — one
+Protomux — per socket (`engine/backends/pear/connection.js`). Because one
+socket may carry multiple session relationships — and both host and viewer
+roles — peer state cannot be stored per socket; it is scoped to the pair
+`(connection, linkId)`.
 
 Key decisions:
 
@@ -946,7 +1088,8 @@ Key decisions:
 - Hypercore replication is attached in the Protomux pair callback, after the
   channel id identifies the target session.
 - Viewer-side host pinning is explicit: before sending `join-request`, the
-  viewer checks `socket.remotePublicKey === invite.hostDhtKey`.
+  viewer checks that the connection's remote peer key equals
+  `invite.hostDhtKey` (`ShareManager`, on `conn.remotePeerKey`).
 - The union firewall remains defense in depth:
   accept if hosting anything or the remote key is in `pinnedHostKeys`.
 - `hostDhtKey` is mandatory in invites; unpinnable links are rejected.
@@ -955,8 +1098,8 @@ Key decisions:
 
 ### 7.2 Protomux Channel Routing
 
-ZBTerm uses Protomux to carry multiple logical channels over one encrypted
-HyperDHT socket. The control protocol is named `zbterm/ctl`, and each
+The Pear backend uses Protomux to carry multiple logical channels over one
+encrypted HyperDHT socket. The control protocol is named `zbterm/ctl`, and each
 control channel uses the share link identifier as its channel identity: the
 protocol identifies the type of channel, and the link ID identifies the
 specific shared session.
@@ -1018,13 +1161,13 @@ with an invite takes.
 ### 7.4 Relay Fallback and Registry Lookup
 
 Direct peer-to-peer connectivity may fail because of NAT behavior,
-firewalls, or network restrictions. ZBTerm therefore supports an optional
-blind relay fallback. The relay never needs access to terminal plaintext; it
-forwards already-encrypted streams between peers.
+firewalls, or network restrictions. The Pear backend therefore supports an
+optional blind relay fallback. The relay never needs access to terminal
+plaintext; it forwards already-encrypted streams between peers.
 
 ```mermaid
 flowchart LR
-  Share[ShareManager]
+  Share[PearBackend]
   Env[ZBTERM_RELAY_PUBLIC_KEY<br/>optional override]
   Registry[DHT mutable relay registry]
   SwarmDHT[Shared swarm DHT]
@@ -1045,16 +1188,68 @@ flowchart LR
 
 The relay identity may be configured through the environment override
 `ZBTERM_RELAY_PUBLIC_KEY`; otherwise ZBTerm discovers relay information
-through a mutable DHT registry record. Once the profile swarm exists, the
-`ShareManager` reuses the shared swarm's DHT for this lookup; a temporary
-standalone DHT is used only if relay lookup must occur before the shared
-swarm exists.
+through a mutable DHT registry record at a fixed, non-secret address
+(`engine/backends/pear/index.js::REGISTRY_PUBLIC_KEY`), looked up when the
+backend starts and every 15 minutes after. Once the profile swarm exists, the
+backend reuses the shared swarm's DHT for this lookup; a temporary standalone
+DHT is used only if relay lookup must occur before the shared swarm exists.
 
-Relay fallback is offered if forced or if any active join has waited past
-the fallback window. A join started while another join is already past that
-window may get relay fallback early. Direct connection attempts and relay
-attempts race; direct hole-punching can still win and take over the
-connection.
+Relay fallback is offered if forced or if any active dial has waited past
+the fallback window (`ZBTERM_RELAY_FALLBACK_MS`, default 5 s). A join started
+while another join is already past that window may get relay fallback early.
+Direct connection attempts and relay attempts race; direct hole-punching can
+still win and take over the connection.
+
+The relay side lives in `relay/`: `relay/server.js` is a standalone
+`blind-relay` server on one fixed UDP port (`ZBTERM_RELAY_PORT`, default
+49737) with connection caps, and `relay/registry-publish.js` keeps the
+registry record pointing at it, re-publishing every 20 minutes. Both are plain
+Node; `npm run build:relay` (`scripts/build-relay.js`) bundles them into
+standalone executables with `@yao-pkg/pkg`. Running one is described in the
+README's [relay setup](../README.md#relay-setup) section. The Freenet backend
+does not use this relay.
+
+### 7.5 The Freenet Backend
+
+The Freenet backend (`D-06`, `D-09`, `D-14`; reworked in K11 of zxterm-core,
+`D-34`/`D-35`) talks to a Freenet node the user runs — ZBTerm never manages
+the node (`D-12`) — at the WebSocket URL of the worker's `freenetNode` spawn
+argument (default `ws://127.0.0.1:7509/v1/contract/command`). Without a
+reachable node, `share.backends` reports it with a "no Freenet node" detail.
+
+`engine/backends/freenet/index.js` is a thin proxy: every `ShareBackend` call
+becomes a `freenet.*` request to the profile's `zxterm-core` sidecar (the same
+one identity uses), and channel bytes travel as non-droppable `Chan` frames on
+that seam. The sidecar runs the contract client, the rendezvous and
+signalling contracts (embedded in the binary; their sources, `.wasm` builds
+and BLAKE3 pins live in `zevix/zxterm`'s `contracts/`, and ZBTerm keeps no
+copy), the signed and encrypted offer/answer exchange, and WebRTC. JSON
+channel messages are still cut into parts in the worker. ICE servers come
+from the settings field, `--ice-servers`, `ZBTERM_ICE_SERVERS`, or a default
+list of public STUN servers, in that order (`electron/ice-servers.js`,
+`D-11`), and are pushed to the worker with `share.setIceServers` after every
+engine start.
+
+On a Freenet share the session protocol itself is the sidecar's too (K14 of
+zxterm-core, `D-38`; `engine/zxterm/share.js` is ZBTerm's side): the join and
+its identity challenge, approvals, epoch keys and envelopes, live output and
+its lag resync, and sealed input run in the sidecar, on three channels per
+link (`zxterm/ctl`, `zxterm/live`, `zxterm/history`, id `linkId`). ZBTerm keeps
+what it owns — the session store, the engine's sessions, the PTY and the UI's
+events — and §§8–10 note where each step differs. A Freenet invite's route
+carries the session protocol version, and a route from before version 2 is
+refused offline with `E_BACKEND_UNSUPPORTED`.
+
+History is the sidecar's as well (K17 of zxterm-core, `D-40`, `D-41`): instead
+of replicating the Hypercore, the host feeds its recording into the sidecar's
+segment history (`engine/zxterm/history.js::HostHistory`: `history.import`
+once at a session's first Freenet share, then `history.append`), which serves
+a viewer's ranges live on the `history` channel and publishes closed segments
+to the `segment-v1` contract. A viewer reads ranges live while the host is
+connected (`share.history`) and from the contract otherwise
+(`history.readContract`), so history is available with the host offline, and
+appends what it verified to its own local store. Local-only sessions and Pear
+shares keep their Hypercore (`D-18`).
 
 ## 8. Session Lifecycle and Data Flow
 
@@ -1066,7 +1261,7 @@ sequenceDiagram
   participant Shell as Electron Shell
   participant Core as Bare Worker
   participant Pty as PTY Host
-  participant Store as Corestore
+  participant Store as SessionStore
   participant Share as ShareManager
 
   UI->>Shell: zbterm:invoke("session.create", args)
@@ -1114,7 +1309,7 @@ flowchart LR
 ```
 
 Terminal processes can generate data faster than a renderer, worker, or IPC
-connection can consume it, so backpressure is enforced at two levels:
+connection can consume it, so backpressure is enforced at several levels:
 
 - *Renderer acknowledgment flow control.* The renderer acknowledges bytes it
   has processed; when unacknowledged data exceeds a configured limit, the
@@ -1128,30 +1323,30 @@ connection can consume it, so backpressure is enforced at two levels:
 Together these mechanisms propagate pressure back to the source of terminal
 output.
 
-> **2026-09-25 (`S-35`, the `ls -R /` flood).** Two more levels exist since the shared-terminal
-> flood was fixed. *The core's own backlog:* the renderer acks at once, so the acknowledgment
-> limit never engaged while the core's mirror and store fell minutes behind; the PTY is now also
-> paused past `engine/index.js::CORE_BACKLOG_LIMIT` (4 MiB not yet through the mirror or into
-> the store) and resumed once both are below half (`_updateFlow`, one pause for both reasons;
-> `engine/client.js::_setPtyPaused` likewise unions the shell's reasons, so the pipe's drain no
-> longer resumes a PTY the core paused). *Viewers:* live output is sent without a queue limit
-> on any backend, so a viewer whose channel reports backpressure stops receiving live data and,
-> `engine/share-manager.js::LAG_RESYNC_MS` (500 ms) later, is sent the host's current screen
-> (a bootstrap capped at `RESYNC_SCROLLBACK` lines) instead of what it missed; a screen that
-> meets backpressure too doubles the wait up to `LAG_RESYNC_MAX_MS` (8 s). The viewer's
-> recording is unaffected (history replicates separately); only its live view skips ahead.
+**Core backlog and slow viewers** (`S-35`, the `ls -R /` flood). *The core's own
+backlog:* the renderer acks at once, so the acknowledgment limit alone never engaged
+while the core's mirror and store fell minutes behind; the PTY is therefore also
+paused past `engine/index.js::CORE_BACKLOG_LIMIT` (4 MiB not yet through the mirror or into
+the store) and resumed once both are below half (`_updateFlow`, one pause for both reasons;
+`engine/client.js::_setPtyPaused` likewise unions the shell's reasons, so the pipe's drain never
+resumes a PTY the core paused). *Viewers:* live output is sent without a queue limit
+on any backend, so a viewer whose channel reports backpressure stops receiving live data and,
+`engine/share-manager.js::LAG_RESYNC_MS` (500 ms) later, is sent the host's current screen
+(a bootstrap capped at `RESYNC_SCROLLBACK` lines) instead of what it missed; a screen that
+meets backpressure too doubles the wait up to `LAG_RESYNC_MAX_MS` (8 s). The viewer's
+recording is unaffected (history replicates separately); only its live view skips ahead.
 
-> **2026-09-30 (K14 of zxterm-core, in `zevix/zxterm`; `D-38`).** On a Freenet share the lag rule
-> above is the core's, not ZBTerm's: `engine/share-manager.js` hands each PTY chunk to the sidecar
-> (`share.push`, one request in flight at a time, chunks queued behind it joined into one of at
-> most 64 KiB, `engine/zxterm/share.js::OrderedRequests`), and the core seals it, skips a viewer
-> whose live channel reports back-pressure and, after `LAG_RESYNC_MS` (500 ms, doubling to
-> `LAG_RESYNC_MAX_MS`), asks ZBTerm for the screen (`share.bootstrapNeeded`, carrying `scrollback`
-> `RESYNC_SCROLLBACK` and `tailBytes` `RESYNC_TAIL_BYTES`, which `engine/index.js::buildLiveBootstrap`
-> builds and `share.bootstrap` hands back). The four numbers live in `zxterm_core::session` and its
-> `protocol.md` §11 (zxterm `docs/projects/260928_zxterm-core/`); `test/pipe-backpressure-flood.test.js`
-> asserts their effect unchanged. The constants in `engine/share-manager.js` govern the Pear and
-> loopback paths only, which still run the paragraph above as it stands.
+**Freenet shares** (K14 of zxterm-core, `D-38`). On a Freenet share the lag rule
+above is the core's, not ZBTerm's: `engine/share-manager.js` hands each PTY chunk to the sidecar
+(`share.push`, one request in flight at a time, chunks queued behind it joined into one of at
+most 64 KiB, `engine/zxterm/share.js::OrderedRequests`), and the core seals it, skips a viewer
+whose live channel reports back-pressure and, after `LAG_RESYNC_MS` (500 ms, doubling to
+`LAG_RESYNC_MAX_MS`), asks ZBTerm for the screen (`share.bootstrapNeeded`, carrying `scrollback`
+`RESYNC_SCROLLBACK` and `tailBytes` `RESYNC_TAIL_BYTES`, which `engine/index.js::buildLiveBootstrap`
+builds and `share.bootstrap` hands back). The four numbers live in `zxterm_core::session` and its
+`protocol.md` §11 (zxterm `docs/projects/260928_zxterm-core/`); `test/pipe-backpressure-flood.test.js`
+asserts their effect unchanged. The constants in `engine/share-manager.js` govern the Pear and
+loopback paths only, which run the paragraph above as it stands.
 
 ### 8.3 Remote Terminal Input
 
@@ -1162,17 +1357,17 @@ host validates the capability, epoch, and counter before writing the input
 to the local PTY. This prevents unauthorized viewers from controlling the
 terminal and prevents captured input messages from being replayed later.
 
-> **2026-09-30 (K14 of zxterm-core, in `zevix/zxterm`; `D-38`).** On a Freenet share the input path
-> above is the core's, reached over the seam (zxterm `protocol.md` §10). The viewer's
-> `engine/index.js::input` hands the keystrokes to `share.input`; the sidecar seals them to the
-> host's device key under the epoch it holds, counts them (the counter is per device and epoch,
-> so a viewer that restarts and rejoins is heard again, `S-43`) and sends them on the control
-> channel. The host's sidecar runs the checks in the order §8.3 names (input mode `'all'` first,
-> then joined, `SEND_INPUT`, the seal, session, epoch, identity, proof, counter), and hands the
-> opened input to ZBTerm as `share.input`, which `engine/share-manager.js` writes to the PTY. A
-> refusal is a `share.inputRefused` event, raised as the same `engine:error` as before. The
-> `input` message's sealed plaintext is postcard, no longer JSON. Pear and loopback shares seal
-> and open input in `engine/share-manager.js::sealInput` and `_openInputMessage`, as described.
+**Freenet shares** (K14 of zxterm-core, `D-38`). On a Freenet share the input path
+above is the core's, reached over the seam (zxterm `protocol.md` §10). The viewer's
+`engine/index.js::input` hands the keystrokes to `share.input`; the sidecar seals them to the
+host's device key under the epoch it holds, counts them (the counter is per device and epoch,
+so a viewer that restarts and rejoins is heard again, `S-43`) and sends them on the control
+channel. The host's sidecar runs the checks in the order §8.3 names (input mode `'all'` first,
+then joined, `SEND_INPUT`, the seal, session, epoch, identity, proof, counter), and hands the
+opened input to ZBTerm as `share.input`, which `engine/share-manager.js` writes to the PTY. A
+refusal is a `share.inputRefused` event, raised as the same `engine:error` as before. The
+`input` message's sealed plaintext is postcard, not JSON. Pear and loopback shares seal
+and open input in `engine/share-manager.js::sealInput` and `_openInputMessage`, as described.
 
 ## 9. Sharing and Joining
 
@@ -1185,16 +1380,16 @@ sequenceDiagram
   participant Core as Worker
   participant Share as ShareManager
   participant Meta as Session Meta Hyperbee
-  participant Swarm as Shared Hyperswarm
+  participant Swarm as Pear backend (shared Hyperswarm)
 
   HostUI->>Shell: invoke share.createLink(sessionId, opts)
   Shell->>Core: INVOKE share.createLink
   Core->>Share: create linkId, topic, caps, limits
   Share->>Meta: write link/linkId record
-  Share->>Share: linkIndex[linkId] = sessionId
-  Share->>Swarm: join(topic, server=true, client=false)
+  Share->>Share: _linkIndex[linkId] = sessionId
+  Share->>Swarm: announce: join(topic, server=true, client=false)
   Swarm-->>Share: flush announcement
-  Share-->>Core: zbterm://join/{v, linkId, topic, hostDhtKey}
+  Share-->>Core: zbterm://join/{v, linkId, topic, hostDhtKey, claim}
   Core-->>Shell: REPLY_OK invite URI
   Shell-->>HostUI: invite URI
 ```
@@ -1202,9 +1397,12 @@ sequenceDiagram
 The `ShareManager` creates a link ID, swarm topic, capability set, viewer
 limits, and joining rules; writes the link record to the session metadata
 Hyperbee; registers the link in the host's link index; and announces the
-topic in server mode on the shared swarm. The returned invitation URI
-carries a version, the link ID, the swarm topic, and the host's DHT public
-key. The `hostDhtKey` is mandatory — a link without it is invalid.
+topic in server mode on the shared swarm (through the backend's
+`announce`). The returned invitation URI carries a version, the link ID, the
+swarm topic, the host's DHT public key, and the host's identity claim, if it
+has one. The `hostDhtKey` (for a v2 link, `peer`) is mandatory — a link
+without it is invalid. A Freenet link has the v2 shape of §7, its `route`
+opaque to everything but the Freenet backend.
 
 ### 9.2 Viewer Join Flow
 
@@ -1282,42 +1480,45 @@ The flow proceeds in stages:
    receives encrypted bootstrap state and live terminal data, which it
    converts into ordinary session-data events for its local renderer.
 
-> **2026-09-30 (K14 of zxterm-core, in `zevix/zxterm`; `D-38`).** On a Freenet share the join
-> above is the core's, reached over the seam (zxterm `protocol.md` §§5–9), and every step after
-> "Establish the connection" runs in the sidecar. The viewer's `share.join` sends the invite's
-> route, the host key it must pin and the link; the sidecar dials, checks the route's protocol
-> version before anything else (a route without `params.pv = 2` is refused offline, `E_BACKEND_UNSUPPORTED`,
-> "The invite uses an older Freenet session protocol; the host must upgrade and share a new
-> invite"), pins the remote key, opens the three session channels (`zxterm/ctl`, `zxterm/live`,
-> `zxterm/history`, id `linkId`) and sends the join request. The identity challenge runs inside
-> the two sidecars, in-process; `confirm` no longer carries a bootstrap, the first `Bootstrap` on
-> the live channel does, and ZBTerm builds it when the sidecar asks (`share.bootstrapNeeded`).
-> ZBTerm hears the outcome as `share.joinChanged` (`approval-pending`, `confirmed` with the
-> session's keys and envelope, `joined`, `failed`) and turns it into the same `share:join-changed`
-> events as before; on `confirmed` it registers the remote session with the engine and attaches
-> history to the connection the sidecar dialed. On the host, the sidecar raises `share.pending`
-> for an approval (the host UI's `share:approval-pending`), grants, and reports `share.granted`;
-> ZBTerm writes the member and the link's counters to the store. History replication (step 5)
-> is unchanged and still ZBTerm's: it is served on the connection whose `zxterm/ctl` channel the
-> joiner opens, before any join is decided. The host-account device check ZBTerm's store makes
-> (`_isRevoked`) stays ZBTerm's, applied on `share.pending` (`D-39`). Pear and loopback joins run
-> the stages above as they stand.
->
-> **2026-09-30 (K17 of zxterm-core; `D-40`).** Correction to "History replication (step 5) is
-> unchanged and still ZBTerm's" above: on a Freenet share it is the core's. Nothing is served on
-> the connection that opens `zxterm/ctl` any more; the core serves the `history` channel from the
-> history the host opened at `share.hostOpen` (`ShareManager#_coreOpenHistory`), and a viewer
-> asks for ranges through `share.history`.
+**Freenet shares** (K14 and K17 of zxterm-core, `D-38`, `D-40`). On a
+Freenet share the join above is the core's, reached over the seam (zxterm
+`protocol.md` §§5–9), and every step after "Establish the connection" runs in
+the sidecar. The viewer's `share.join` sends the invite's route, the host key
+it must pin and the link; the sidecar dials, checks the route's protocol
+version before anything else (a route without `params.pv = 2` is refused
+offline, `E_BACKEND_UNSUPPORTED`, "The invite uses an older Freenet session
+protocol; the host must upgrade and share a new invite"), pins the remote key,
+opens the three session channels (`zxterm/ctl`, `zxterm/live`,
+`zxterm/history`, id `linkId`) and sends the join request. The identity
+challenge runs inside the two sidecars; `confirm` carries no bootstrap, the
+first `Bootstrap` on the live channel does, and ZBTerm builds it when the
+sidecar asks (`share.bootstrapNeeded`). ZBTerm hears the outcome as
+`share.joinChanged` (`approval-pending`, `confirmed` with the session's keys
+and envelope, `joined`, `failed`) and turns it into the same
+`share:join-changed` events Pear joins produce; on `confirmed` it registers the
+remote session with the engine. On the host, the sidecar raises
+`share.pending` for an approval (the host UI's `share:approval-pending`),
+grants, and reports `share.granted`; ZBTerm writes the member and the link's
+counters to the store. The host-account device check ZBTerm's store makes
+(`_isRevoked`) stays ZBTerm's, applied on `share.pending` (`D-39`). Step 5
+does not apply: nothing is replicated on the connection; the core serves the
+`history` channel from the history the host opened at `share.hostOpen`
+(`ShareManager#_coreOpenHistory`), and a viewer asks for ranges through
+`share.history` (§7.5). Pear and loopback joins run the stages above as they
+stand.
 
 ## 10. Cryptographic Model
 
 The cryptographic design uses several distinct key layers: the user identity
-key (the upstream identity-key package's scheme until 2026-09-29, `zxterm_core::idkey` since), the device key attested by the identity, the DHT
+key (`zxterm_core::idkey`, made and checked in the sidecar, §6.1), the device key attested by the identity, the DHT
 keypair used for Noise-authenticated network connections, and the session
 epoch master key. For each epoch, the host generates a master key K_e, from
 which separate history and live keys are derived: the history key encrypts
 stored terminal packets, and the live key encrypts live peer traffic.
-Separate derivation limits cross-purpose key reuse.
+Separate derivation limits cross-purpose key reuse. The `crypto_kdf` contexts
+of the history, live and snapshot keys (`engine/crypto.js`) are zxterm's
+since K11 of zxterm-core (`D-36`), with no compatibility: history, snapshots
+and live traffic keyed under the earlier contexts no longer decrypt.
 
 ```mermaid
 flowchart TD
@@ -1371,18 +1572,18 @@ decrypt future data. This is forward-secure revocation. No system can force
 a viewer to forget plaintext it has already seen, and ZBTerm makes no such
 claim: revocation protects future epochs, not already-disclosed information.
 
-> **2026-09-30 (K14 of zxterm-core, in `zevix/zxterm`; `D-38`).** On a Freenet share the epoch
-> master key, its derived keys and the sealed envelopes of §10.2 are the core's: `share.hostOpen`
-> mints the first epoch the sidecar holds (one above the store's, so the host never encrypts under
-> an epoch another process minted), and every rotation (a join, a member's revocation, a link's
-> revocation with a member behind it; a disconnect rotates nothing, owner's `Q-15`) reaches ZBTerm
-> as `share.epoch` with the host's own envelope, one per member device and, for a joiner, the
-> history-only envelopes of the earlier epochs. The core persists nothing:
-> `engine/session-store.js::applyCoreEpoch` writes them to the session's meta core exactly where
-> `rotateEpoch` would have (`epoch/<n>`, `env/<n>/local`, `env/<n>/<deviceKeyHex>`,
-> `epoch/current`), and a session marked sensitive gets its keys in memory only. The
-> derivations, the AEAD and the envelope bytes are unchanged (zxterm `protocol.md` §3). Pear and
-> loopback shares mint and seal in `session-store.js::rotateEpoch`, as §10.2 and §10.4 describe.
+**Freenet shares** (K14 of zxterm-core, `D-38`). On a Freenet share the epoch
+master key, its derived keys and the sealed envelopes of §10.2 are the core's: `share.hostOpen`
+mints the first epoch the sidecar holds (one above the store's, so the host never encrypts under
+an epoch another process minted), and every rotation (a join, a member's revocation, a link's
+revocation with a member behind it; a disconnect rotates nothing, owner's `Q-15`) reaches ZBTerm
+as `share.epoch` with the host's own envelope, one per member device and, for a joiner, the
+history-only envelopes of the earlier epochs. The core persists nothing:
+`engine/session-store.js::applyCoreEpoch` writes them to the session's meta core exactly where
+`rotateEpoch` would have (`epoch/<n>`, `env/<n>/local`, `env/<n>/<deviceKeyHex>`,
+`epoch/current`), and a session marked sensitive gets its keys in memory only. The
+derivations, the AEAD and the envelope bytes are unchanged (zxterm `protocol.md` §3). Pear and
+loopback shares mint and seal in `session-store.js::rotateEpoch`, as §10.2 and §10.4 describe.
 
 ### 10.5 Invariants
 
@@ -1483,6 +1684,11 @@ Restart policy:
 - PTYs survive because they live in the shell.
 - Swarm connections and in-flight join approvals are lost, matching
   whole-app restart semantics but scoped to the worker.
+- The old worker's `zxterm-core` sidecar exits with it (its stdin pipe
+  closes), taking any Freenet connections along; the new worker starts a
+  fresh one on first use, retrying five times, 100 ms apart, while the old one
+  still holds the profile.
+- ICE servers are pushed to the new worker again once it reports ready.
 - Viewers are not auto-reconnected by this architecture.
 
 ## 13. Security Boundaries and Invariants
@@ -1495,14 +1701,20 @@ flowchart TB
   Preload[Preload API<br/>limited bridge]
   Shell[Shell<br/>Node/Electron + PTY capability]
   Worker[Worker<br/>network/storage/crypto core]
+  Sidecar[zxterm-core sidecar<br/>identity, SSH keys, Freenet transport]
   Network[Network peers<br/>untrusted]
+  Provider[Provider key lists<br/>e.g. github.com/user.keys]
   Disk[Local profile disk]
 
   Renderer -->|only exposed invoke/event API| Preload
   Preload --> Shell
   Shell -->|framed private IPC| Worker
+  Worker -->|profile-local socket| Sidecar
   Worker -->|Noise sockets + Protomux| Network
+  Sidecar -->|Freenet node, WebRTC| Network
+  Sidecar -->|HTTPS| Provider
   Worker --> Disk
+  Sidecar --> Disk
   Shell -->|PTY process handles stay here| Shell
 ```
 
@@ -1510,7 +1722,10 @@ The renderer is treated as an untrusted web user-interface boundary and
 communicates only through the limited preload API. The shell owns native
 application and PTY capabilities and communicates with the worker over a
 private framed IPC protocol. The worker owns network, storage, replication,
-session authorization, and cryptography. Network peers are untrusted.
+session authorization, and cryptography. The `zxterm-core` sidecar holds the
+OS capabilities identity needs (`~/.ssh`, `ssh-agent`, HTTPS to the provider)
+and the Freenet transport; it is reached only from the worker, over a socket
+in the profile's own `account/` directory. Network peers are untrusted.
 Profile storage is local but contains encrypted and security-sensitive
 state.
 
@@ -1530,7 +1745,8 @@ firewalls are defense in depth.
 
 ### 13.2 Core Architectural Invariants
 
-1. One running profile owns one core engine and one shared swarm.
+1. One running profile owns one core engine, one active share backend
+   (for Pear, one shared swarm), and one `zxterm-core` sidecar.
 2. The Bare worker owns the profile lock, account state, stores, crypto,
    sessions, playback, and sharing.
 3. `node-pty` remains in the Electron shell.
@@ -1586,6 +1802,9 @@ Additional required protections:
 | App-layer host pinning plus union firewall | Exact per-join host verification with firewall defense in depth |
 | Require `hostDhtKey` in links | Every join must be pinnable before sending identity material |
 | One engine implementation, worker-only | No in-process twin of the engine to keep in sync; the test gates carry the risk instead |
+| Share networking behind one `ShareBackend` interface | Pear and Freenet (and a test loopback) pass one conformance suite; a build can drop a backend without code changes |
+| Identity and the Freenet transport in a Rust sidecar, spawned by the worker | One implementation shared with `zevix/zxterm`; OS capabilities (`~/.ssh`, `ssh-agent`, HTTPS, WebRTC) stay out of both the Bare worker and the Electron shell; no Freenet traffic on the shell/worker pipe |
+| No OTA updater (`D-08`, `D-25`) | Installs update like any desktop app or through npm; no `pear-runtime`, upgrade key or staging pipeline to maintain |
 
 Several of these decisions trade simplicity in one place for complexity in
 another. One shared swarm per profile reduces duplicated DHT state but makes
@@ -1609,8 +1828,16 @@ implementations always develop; the test suite carries that risk instead.
 An architecture with this many moving parts is only as good as the checks
 that keep it honest. The gates that must stay green:
 
-- `npm test` — the unit and integration suite, including RPC schema
-  round-trip and garbage-input tests for the shell/worker seam.
+- `npm test` — the unit and integration suite (`test/*.test.js` and
+  `test/backends/*.test.js`), including RPC schema round-trip and
+  garbage-input tests for the shell/worker seam, the `zxterm-core` seam codec
+  and client, the core contract and core boundary gates
+  (`test/core-contract.test.js`, `test/core-boundary.test.js`,
+  `test/backend-boundary.test.js`), and the `ShareBackend` conformance suite
+  run against the Pear (local `hyperdht` testnet), Freenet (throwaway
+  local-mode node, `test/helpers/freenet-node.js`) and loopback backends. A
+  test that reaches identity code installs the sidecar host from
+  `test/helpers/zxterm-core.js`.
 - `node test/debug-server-e2e.js` — end-to-end coverage through the debug
   REST API.
 - Multi-hosted-session e2e: several sessions hosted concurrently on one
@@ -1622,6 +1849,13 @@ that keep it honest. The gates that must stay green:
   instances against a stubbed `.keys` endpoint — a host that proves its
   provider account, a viewer that verifies it, and a host whose claim names a
   key the provider does not publish and whose join must be refused.
+- `npm run test:canary <storage-dir>` — scans a profile's storage for a
+  plaintext canary string, proving recorded output is only stored encrypted.
+- `node scripts/core-headless-smoke.js` — the core runs without Electron.
+- `npm run pack:check` and `npm run smoke:install` — the npm tarball's
+  contents, and a throwaway global install of it (`zbterm doctor` green, the
+  Bare engine boots when a display is available). CI (`integrate.yml`) runs
+  lint and a cross-platform `npm install -g` matrix on every push and PR.
 - Manual smoke: create a session, share it, join from another profile,
   revoke, play back, and inspect diagnostics.
 
@@ -1639,51 +1873,89 @@ A few things are out of scope on purpose:
 
 ### A.1 Scripts
 
+npm only — `pnpm` breaks `forge.config.js`.
+
 | Script | Runs |
 | ------ | ---- |
-| `npm start` | `electron-forge start -- --no-updates` |
-| `npm test` | `brittle-node test/*.test.js` |
+| `npm start` | `electron-forge start -- --no-updates` (`--no-updates` is accepted for compatibility and does nothing) |
+| `npm test` | `brittle-node test/*.test.js test/backends/*.test.js` |
 | `npm run test:debug-server` | `node test/debug-server-e2e.js` |
-| `npm run lint` | `prettier --check .` + `lunte` |
-| `npm run format` | `prettier --write .` + `lunte --fix` |
-| `npm run package` | `electron-forge package` (no distributables) |
+| `npm run test:canary` | `node test/canary-scan.js <storage-dir> [canary]` |
+| `npm run lint` | `prettier --check` + `lunte` on `package.json`, `forge.config.js`, `electron/`, `engine/`, `renderer/`, `test/` |
+| `npm run format` | The same files, `prettier --write` + `lunte --fix` |
+| `npm run vendor:assets` | `node scripts/vendor-assets.js` (copies xterm and Font Awesome into `renderer/vendor/`; also runs as `prestart`, `pretest`, `prepack`) |
+| `npm run package` | `electron-forge package` (no distributables; `ZBTERM_FORGE_OUT_DIR` redirects `out/`) |
 | `npm run make` | `electron-forge make` (build distributables) |
+| `npm run build:sidecar` | `node scripts/sidecar.js build` (builds the Rust `zxterm-core` from the `zxterm/` submodule and stages it under `npm/zxterm-core-<platform>-<arch>/`; run before packaging) |
 | `npm run build:relay` | `node scripts/build-relay.js` (standalone relay executables; `--jobs N` builds N targets at once) |
+| `npm run icons` / `npm run logo` | Regenerate the logo and icons from `renderer/logo-ascii.js` / print the logo in the terminal |
+| `npm run pack:check` | `scripts/npm-pack-check.sh`: lint, tests, `npm pack`, tarball assertions |
+| `npm run smoke:install` | `scripts/npm-smoke-install.sh <tarball>`: install into a throwaway prefix and check it |
+| `npm run release:npm` | `scripts/release-npm.sh`: dry-run plan by default; `--tag` makes the version commit and tag (publishing happens in CI on the tag) |
 | `./build_all.sh` | Builds everything: relay executables (all platforms), the `zxterm-core` sidecar for the host, GUI app package for every platform whose sidecar is staged under `npm/` (others, and win32, are skipped with a note) + GUI installer for the host platform only. `--relay-only`, `--gui-only`, `--no-make` narrow it down; `-j [N]` builds N relay targets at once (default: all) alongside the sidecar and GUI steps. |
+| `./install_deps.sh` | System packages (Ubuntu/Debian/Fedora), `rustup`, `npm install`; `build_all.sh` and `run.sh` offer to run it |
+| `./run.sh` | Run from source (`--dev`), from `out/` (`--packaged`) or the relay (`--relay`); `--scratch` uses a throwaway `HOME` and storage |
 
-### A.2 Peer-to-Peer OTA Updates
+### A.2 Distribution and Updates
 
-ZBTerm is built on `pear-runtime` and can be staged, provisioned and
-multisig'd for peer-to-peer distribution the same way any Pear/Electron app
-can — see the [pear-runtime docs](https://docs.pears.com) and the
-[Electron Forge Pear plugin](https://www.electronforge.io) for the
-stage/provision/multisig release flow, signing (macOS notarization, Windows
-code signing), and store submission (Flathub, Snap Store) if you need to set
-up a production release pipeline. That flow is generic to any Pear/Electron
-app and isn't specific to ZBTerm. Development builds keep the Pear OTA
-updater wiring intact, but `npm start` passes `--no-updates` by default.
+ZBTerm has no peer-to-peer OTA updater in any build (`D-08`, `D-25`): it does
+not depend on `pear-runtime`, and there is no `pear.json`, no
+`package.json#upgrade`, no `workers/main.js` and no forge upgrade gate. It
+ships through two independent channels:
 
-> **2026-09-19 (`D-08`).** This section is historical. ZBTerm no longer depends on
-> `pear-runtime` and has no peer-to-peer OTA updater in any build: `workers/main.js`,
-> `electron/updater-available.js`, `pear.json` and `package.json#upgrade` were deleted, and
-> `forge.config.js` no longer reads `UPGRADE_KEY` or requires `pear-link`. `--no-updates` is
-> still accepted and does nothing. The only update mechanism is the npm registry check on npm
-> installs (`electron/update-channel.js`, `renderer/app.js::wireNpmUpdater`).
+- **Desktop installers** — `npm run make` (AppImage, Flatpak and Snap on
+  Linux, dmg on macOS, MSIX on Windows — the makers `forge.config.js`
+  configures; `.github/workflows/build-release.yml`, manual). A packaged build
+  updates by installing a newer package. The `zxterm-core` binary is staged
+  by `npm run build:sidecar` and shipped inside the package; asar stays off
+  because the Bare worker and the sidecar are spawned from real file paths.
+- **npm** — `npm install -g zbterm` (Linux and macOS, x64 and arm64), published
+  from a `v*` tag by `.github/workflows/publish.yml` after `integrate.yml`
+  passes. The platform's sidecar arrives as the optional dependency
+  `@zbterm/zxterm-core-<platform>-<arch>` (built per platform by
+  `.github/workflows/packages.yml` and injected into `optionalDependencies`
+  at publish time only). `bin/zbterm.js` launches Electron
+  on the app (retrying with `--no-sandbox` when Chromium's SUID sandbox is
+  unavailable) and adds four subcommands: `zbterm update` (runs
+  `npm install -g zbterm@latest`), `zbterm doctor` (one actionable line per
+  thing an npm install can get wrong, `bin/lib/doctor.js`), and
+  `zbterm install-desktop` / `uninstall-desktop` (a user-scoped Linux desktop
+  entry and `zbterm://` scheme handler, `bin/lib/desktop.js`). The install
+  script (`bin/lib/postinstall.js`) prunes other platforms' prebuilds and
+  refuses native addons linked against the host's shared Node runtime
+  (`bin/lib/native-linkage.js`).
+
+The only update mechanism inside the app is a registry check on npm installs:
+`electron/update-channel.js` detects the channel (`npm`, `packaged` or `dev`)
+and, for `npm` only, polls the registry for a newer `zbterm`
+(`--no-update-check` turns it off), and the renderer shows the result
+(`renderer/app.js::wireNpmUpdater`). See [`RELEASING.md`](RELEASING.md) and
+the README's [Updating](../README.md#install-update) section.
 
 ### A.3 Code Pointers
 
-- Share control protocol and relay/registry lookup:
-  `engine/share-manager.js` (including the hardcoded, non-secret
-  `REGISTRY_PUBLIC_KEY` used to resolve the default relay).
+- Share control protocol, links, approval, live encryption and sealed input:
+  `engine/share-manager.js`; the `ShareBackend` contract:
+  `engine/backends/types.js`; the registry: `engine/backends/index.js`.
+- Pear backend, shared swarm, pinning and relay/registry lookup:
+  `engine/backends/pear/index.js` (including the hardcoded, non-secret
+  `REGISTRY_PUBLIC_KEY` used to resolve the default relay) and
+  `engine/backends/pear/connection.js`; the relay itself: `relay/`.
+- Freenet backend: `engine/backends/freenet/index.js` (proxy to the sidecar);
+  the Freenet session protocol and history on ZBTerm's side:
+  `engine/zxterm/share.js` and `engine/zxterm/history.js`.
+- Invite codec: `engine/invite.js`.
+- Shell/worker frames: `engine/rpc/schema.js`, `engine/rpc/pipe.js`; worker
+  spawn and supervision: `engine/client.js`, `engine/spawn-worker.js`,
+  `engine/worker.js`, `electron/engine-lifecycle.js`.
 - Permission capability bitmask definitions: `engine/caps.js`.
-- Identity claim/challenge byte formats and SSHSIG handling:
-  `engine/identity/claim.js`; verification rules: `engine/identity/verify.js`;
-  provider registry: `engine/identity/providers.js`; the shell-side capabilities
-  they drive: `electron/ssh-keys.js` and `electron/github-keys.js`.
-
-  > **2026-09-29 (K9 of zxterm-core, in `zevix/zxterm`).** `electron/ssh-keys.js` and `electron/github-keys.js` are
-  > deleted, and `engine/identity/{claim,verify,resolver,store}.js` are thin call-throughs. The
-  > code is the Rust `zxterm-core` sidecar's, in `zevix/zxterm`: `zxterm_core::identity::{claim,
-  > verify,resolver,store,github,providers}`, `zxterm_core::ssh`, `zxterm_core::idkey`, served over
-  > `zxterm_core::seam::methods::Dispatcher`. ZBTerm's side of that seam:
-  > `engine/zxterm/{core,client,codec}.js` and the host module `electron/zxterm-core-host.js`.
+- Identity: `engine/identity/{claim,verify,resolver,store}.js` are thin
+  call-throughs, `engine/identity/providers.js` the provider registry. The
+  code is the Rust `zxterm-core` sidecar's, in `zevix/zxterm` (the `zxterm/`
+  submodule): `zxterm_core::identity::{claim,verify,resolver,store,github,providers}`,
+  `zxterm_core::ssh`, `zxterm_core::idkey`, served over
+  `zxterm_core::seam::methods::Dispatcher`. ZBTerm's side of that seam:
+  `engine/zxterm/{core,client,codec}.js` and the host module
+  `electron/zxterm-core-host.js`; build and staging: `scripts/sidecar.js`.
+- Freenet contracts (`pointer-v1`, `segment-v1`, `signalling-v1`) and their
+  pins: `zxterm/contracts/`.
