@@ -17,7 +17,7 @@ jobs:
           allow-git: all
       - run: npm run lint
 
-  # `npm install -g zbterm` has to work on Windows and macOS, not just Linux:
+  # `npm install -g zbterm` has to work on macOS, not just Linux:
   # every native dependency is N-API and ships prebuilds (sodium-native via
   # require-addon, @lydell/node-pty as six per-platform OPTIONAL dependencies,
   # bare-sidecar directly), so nothing here compiles - but "designed to
@@ -31,7 +31,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
-      # One red platform must not hide the state of the other three.
+      # One red platform must not hide the state of the others.
       fail-fast: false
       matrix:
         include:
@@ -45,14 +45,27 @@ jobs:
             label: macos-arm64 (doctor only, no headless display)
           - os: macos-26-intel
             label: macos-x64 (doctor only, no headless display)
-          - os: windows-latest
-            label: windows-x64 (doctor only, no headless display)
+          # No windows-latest: the zxterm-core sidecar has no Windows build
+          # yet (its named-pipe listener is not implemented), so
+          # package.json#os leaves win32 out and `npm install` refuses there.
+          # The Windows smoke step below stays for when it comes back.
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # The zxterm-core sidecar, built from the zxterm/ submodule and staged
+      # under npm/; the smoke install puts its platform package next to the
+      # zbterm tarball, as the published optional dependency would be.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zxterm
+      - name: Build the sidecar
+        run: node scripts/sidecar.js build
 
       # A full dev install: `npm pack` runs `prepack`, which vendors the
       # renderer assets out of devDependencies.

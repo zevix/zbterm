@@ -6,7 +6,8 @@
 // identity code (engine/crypto.js, engine/account-store.js,
 // engine/identity/*, a SessionEngine, a ShareManager).
 //
-// The binary is the `zxterm-core-prebuilds` package's, or `ZXTERM_CORE_BIN`.
+// The binary is the one electron/zxterm-core-host.js resolves: the platform
+// package, the one `npm run build:sidecar` staged, or `ZXTERM_CORE_BIN`.
 const os = require('os')
 const fs = require('fs')
 const path = require('path')

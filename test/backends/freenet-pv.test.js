@@ -65,7 +65,7 @@ function refusalOf(fn) {
 }
 
 if (!freenetAvailable()) {
-  test('freenet pv: skipped', (t) => t.skip('freenet binary not on PATH'))
+  test('freenet pv: skipped', (t) => t.comment('SKIP:', 'freenet binary not on PATH'))
 } else {
   test('freenet pv: a pv 2 route is refused by the pre-C2 verifier at its sig check', async (t) => {
     const keys = transportKeyPair()

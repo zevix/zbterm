@@ -201,8 +201,9 @@ package.
   (`test/core-boundary.test.js`). The command is
   `zxterm-core sidecar --profile <profile>/account --exit-on-stdin-eof`; its identity store is
   `<profile>/account/identity`, the files `IdentityStore` always used.
-- **Where the binary is.** `node_modules/zxterm-core-prebuilds/prebuilds/<platform>-<arch>/zxterm-core[.exe]`
-  (`X-13`), then `prebuilds/<platform>-universal/`; `ZXTERM_CORE_BIN` overrides both. A missing
+- **Where the binary is.** `node_modules/@zbterm/zxterm-core-<platform>-<arch>/zxterm-core[.exe]`
+  (the platform's optional dependency), then `npm/zxterm-core-<platform>-<arch>/` in the app
+  directory (staged by `scripts/sidecar.js`); `ZXTERM_CORE_BIN` overrides both. A missing
   binary is a named `E_BACKEND_UNAVAILABLE` ("zxterm-core sidecar binary not found ... looked in
   ..."), never a hang.
 - **The seam.** A local socket, `<profile>/account/zxterm-core.sock` (a named pipe on Windows,

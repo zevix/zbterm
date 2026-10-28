@@ -27,8 +27,9 @@ Checks, in order:
      electron/main.js, renderer/vendor/, at least one build/icon/icon-*.png,
      and a non-empty renderer/logo-ascii.js.
   6. The tarball contains none of out/, node_modules/, test/, docs/, spikes/,
-     assets/, relay/, forge.config.js.
-  7. The tarball is 5 MB or smaller.
+     assets/, relay/, npm/, zxterm/, forge.config.js.
+  7. No dependency is a local file:/link: path.
+  8. The tarball is 5 MB or smaller.
 
 Output: progress on stdout, and the absolute tarball path as the last line.
 Exit status: 0 when every check passed, 1 otherwise.
@@ -175,7 +176,28 @@ forbid '^package/docs/' 'docs/'
 forbid '^package/spikes/' 'spikes/'
 forbid '^package/assets/' 'assets/'
 forbid '^package/relay/' 'relay/'
+# The sidecar ships as its own platform packages, never inside this one.
+forbid '^package/npm/' 'npm/'
+forbid '^package/zxterm/' 'zxterm/'
 forbid '^package/forge\.config\.js$' 'forge.config.js'
+
+step "Checking dependency specs"
+# A file:/link: dependency installs from the publisher's own disk, so the
+# published package could never install anywhere else.
+LOCAL_DEPS=$(node -e '
+  const pkg = require("./package.json")
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    for (const [name, spec] of Object.entries(pkg[field] || {})) {
+      if (/^(file:|link:|\.{0,2}\/)/.test(spec)) console.log(field + ": " + name + "@" + spec)
+    }
+  }
+')
+if [ -z "$LOCAL_DEPS" ]; then
+  ok "no local file:/link: dependencies"
+else
+  bad "local dependencies cannot be published:"
+  echo "$LOCAL_DEPS" | sed 's/^/      /' >&2
+fi
 
 step "Checking tarball size"
 TARBALL_BYTES=$(wc -c <"$TARBALL")

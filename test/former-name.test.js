@@ -156,7 +156,8 @@ test('no product file names the upstream identity-key package', (t) => {
   })
     .split('\n')
     .filter(Boolean)
-    .filter((rel) => fs.existsSync(path.join(root, rel)))
+    // Files only: the zxterm/ submodule is listed too, as a directory.
+    .filter((rel) => fs.statSync(path.join(root, rel), { throwIfNoEntry: false })?.isFile())
     .filter((rel) => rel !== 'THIRD-PARTY-NOTICES.md' && !rel.startsWith('docs/'))
   t.ok(files.length > 100, `sanity: the working tree lists files (${files.length})`)
   for (const manifest of ['package.json', 'engine/package.json', 'package-lock.json']) {

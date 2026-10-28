@@ -31,12 +31,13 @@
   submission — see [README](../README.md) for where the current build lands.
 - deb/rpm/AppImage makers are configured; zip is not. The prebuild plugins
   rename (not merge) darwin prebuilds and prune non-target platforms.
-- The Rust `zxterm-core` sidecar ships as the `zxterm-core-prebuilds` package, a
-  plain `dependency` and a local `file:../zxterm/npm/zxterm-core-prebuilds` (X-13 of
-  zxterm-core; never published), so `npm install` symlinks it and Forge's
-  `derefSymlinks` copies it. Its binaries sit in `prebuilds/<platform>-<arch>/`,
-  the shape those two plugins prune; stage them with `zevix/zxterm`'s
-  `scripts/build-prebuilds.sh` before packaging. A packaged app keeps production
+- The Rust `zxterm-core` sidecar is built from the `zxterm/` git submodule by
+  `scripts/sidecar.js`. The npm release publishes it as one package per
+  platform, `@zbterm/zxterm-core-<platform>-<arch>`, which `publish.yml`
+  injects into `optionalDependencies` at publish time only (the committed
+  manifest and lockfile never list them). A desktop build ships the binary
+  that `npm run build:sidecar` staged under `npm/zxterm-core-<platform>-<arch>/`;
+  run it before packaging. Forge ignores the submodule itself. A packaged app keeps production
   dependencies only: `bare-subprocess`, which the worker uses to spawn the
   sidecar, is a dev dependency at the root (it is declared in
   `engine/package.json`, D-31), so `electron/zxterm-core-host.js` falls back to

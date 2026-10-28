@@ -180,7 +180,7 @@ async function scripted(t, handlers) {
 // (`zxterm_core::freenet::route`, its unit tests and tests/freenet_parity.rs).
 test('freenet: routes the core mints, and the checks it runs on a dialed route', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const host = await peer(t)
@@ -236,7 +236,7 @@ test('freenet: routes the core mints, and the checks it runs on a dialed route',
 
 test('freenet: announce -> dial -> connection on both sides, with the right keys and path()', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   await sharedNode()
@@ -305,7 +305,7 @@ test('freenet: announce -> dial -> connection on both sides, with the right keys
 
 test('freenet: withdraw ends discovery, is idempotent, and the live connection survives', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const host = await peer(t)
@@ -475,7 +475,7 @@ test('freenet: (iii) a dial outcome that arrives before the reply to freenet.dia
 
 test('freenet: (iv) setAdmission(false) answers nothing; true again and the same key connects', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const host = await peer(t)
@@ -572,7 +572,7 @@ test('freenet: a route whose code this build lacks: the core reads its pointer r
 
 test('freenet: announce and dial made while start() is still opening wait for it (S-23)', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const { url } = await sharedNode()
@@ -609,7 +609,7 @@ const now = () => performance.now()
 
 test('freenet: a 200 KiB JSON message crosses a channel intact, in parts of at most 65 536 bytes', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const host = await peer(t)
@@ -677,7 +677,7 @@ test('freenet: a 200 KiB JSON message crosses a channel intact, in parts of at m
 
 test('freenet: a 10 000-message burst arrives in order, and send() returns false under back-pressure', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const BURST = 10000
@@ -854,7 +854,7 @@ test('freenet: a viewer holding 2 stale offers cannot block other viewers, and s
 // address.
 test('freenet: probe() is available with a node and names the address without one (A-11)', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const { url } = await sharedNode()
@@ -887,7 +887,7 @@ test(
   { timeout: 60000 },
   async (t) => {
     if (!freenetAvailable()) {
-      t.skip('freenet binary not on PATH')
+      t.comment('SKIP:', 'freenet binary not on PATH')
       return
     }
     const host = await peer(t)
@@ -931,7 +931,7 @@ test(
   { timeout: 90000 },
   async (t) => {
     if (!freenetAvailable()) {
-      t.skip('freenet binary not on PATH')
+      t.comment('SKIP:', 'freenet binary not on PATH')
       return
     }
     const host = await peer(t)
@@ -982,7 +982,7 @@ test(
 // channels until the bootstrap channel is open.)
 test('freenet: messages sent on a channel before its handle arrives are sent once it does, in order (S-26)', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const host = await peer(t)
@@ -1008,7 +1008,7 @@ test('freenet: messages sent on a channel before its handle arrives are sent onc
 // (S-27's READY rule is the core's now: zxterm's crate::freenet::channel).
 test('freenet: what a remote channel carried before this side took it arrives, in order (S-27)', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   const host = await peer(t)

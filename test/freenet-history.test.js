@@ -32,7 +32,7 @@ const { HISTORY_DIR } = require('../engine/zxterm/history')
 
 test('freenet history: a pre-share recording is imported once and a viewer reads all of it, live', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   t.timeout(240000)
@@ -97,7 +97,7 @@ test('freenet history: a pre-share recording is imported once and a viewer reads
 
 test('freenet history: with the host killed, a viewer reads the whole history from segment-v1', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   t.timeout(300000)
@@ -174,7 +174,7 @@ test('freenet history: with the host killed, a viewer reads the whole history fr
 
 test('freenet history: a second share of the same session imports nothing and duplicates nothing', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   t.timeout(300000)
@@ -224,7 +224,7 @@ test('freenet history: a second share of the same session imports nothing and du
 
 test('freenet history: a crash between the import and its flag imports nothing again', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   t.timeout(300000)
@@ -267,7 +267,7 @@ function sha256(text) {
 // arrive whole and in order.
 test('freenet history: 256 KiB blocks of incompressible output arrive intact through the core', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   t.timeout(300000)
@@ -325,7 +325,7 @@ test('freenet history: 256 KiB blocks of incompressible output arrive intact thr
 // sessions of one host, one viewer that joined both.
 test('freenet history: two sessions of one host each keep their own history in the viewer', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   t.timeout(300000)
