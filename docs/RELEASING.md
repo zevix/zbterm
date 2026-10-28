@@ -30,6 +30,14 @@ ZBTerm runs the Rust `zxterm-core` sidecar, whose source is the `zxterm/` git su
 The committed `package.json` and lockfile never list the platform packages, so a checkout installs
 without them; `npm run build:sidecar` builds and stages the sidecar locally instead.
 
+To get installable builds without publishing, run the **Packages** workflow by hand (Actions >
+Packages > Run workflow). Its `zbterm-packages` artifact holds the zbterm tarball and every platform
+package; install the zbterm tarball together with the one for your machine:
+
+```sh
+npm install -g zbterm-<version>.tgz zbterm-zxterm-core-<platform>-<arch>-<version>.tgz
+```
+
 To ship a sidecar change, land it in zxterm, then bump the submodule here:
 
 ```sh
