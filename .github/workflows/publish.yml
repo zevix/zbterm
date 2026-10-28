@@ -12,39 +12,9 @@ jobs:
   integrate:
     uses: ./.github/workflows/integrate.yml
 
-  # The Rust zxterm-core sidecar, built from the zxterm/ submodule for every
-  # target in scripts/sidecar.js#TARGETS, each on its own native runner.
-  # Linux builds on ubuntu-22.04 so the binary needs no newer glibc than 2.35.
-  sidecar:
-    name: Sidecar ${{ matrix.dir }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - { triple: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, dir: linux-x64 }
-          - { triple: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, dir: linux-arm64 }
-          - { triple: x86_64-apple-darwin, runner: macos-26-intel, dir: darwin-x64 }
-          - { triple: aarch64-apple-darwin, runner: macos-latest, dir: darwin-arm64 }
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Rust toolchain (zxterm/rust-toolchain.toml)
-        working-directory: zxterm
-        run: rustup show active-toolchain
-      - name: Build and stage
-        run: node scripts/sidecar.js build ${{ matrix.triple }}
-      - name: Smoke test
-        run: npm/zxterm-core-${{ matrix.dir }}/zxterm-core --version
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zxterm-core-${{ matrix.dir }}
-          path: npm/zxterm-core-${{ matrix.dir }}/zxterm-core
-          if-no-files-found: error
+  # The zxterm-core sidecar for every target, and the tarballs (packages.yml).
+  packages:
+    uses: ./.github/workflows/packages.yml
 
   # The platform packages first, then zbterm, whose optionalDependencies are
   # written only here (scripts/sidecar.js inject), pinned to this version.
@@ -53,7 +23,7 @@ jobs:
   # @zbterm/zxterm-core-* package on npmjs.com, or set an NPM_TOKEN secret
   # in the `npm` environment for the first release.
   publish:
-    needs: [integrate, sidecar]
+    needs: [integrate, packages]
     runs-on: ubuntu-latest
     environment:
       name: npm
