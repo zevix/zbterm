@@ -122,6 +122,12 @@ for a newer version and tells you to run `npm install -g zbterm@latest`.
 Installers built with electron-forge (deb/rpm/AppImage/flatpak/snap/dmg/msix)
 have no update channel: install a newer package to update.
 
+The AppImage needs FUSE 2, which recent distributions no longer install by
+default (`dlopen(): error loading libfuse.so.2`): install `libfuse2t64`
+(Ubuntu 24.04+, Debian 13+), `libfuse2` (older Debian/Ubuntu) or `fuse-libs`
+(Fedora) — `./install_deps.sh --optional` does it — or run it without FUSE
+with `./ZBTerm-<version>-x64.AppImage --appimage-extract-and-run`.
+
 #### Prerequisites (Linux) <a name="install-prereqs"></a>
 
 `node-pty` is a native module and is compiled from source when no prebuilt
@@ -159,6 +165,21 @@ npm run build:sidecar   # cargo-builds zxterm-core and stages it under npm/
 npm test
 npm start
 ```
+
+On Ubuntu, Debian or Fedora, `./install_deps.sh` installs all of the above
+(the system packages, Rust through rustup, `npm install`; `--optional` adds
+the snap/flatpak makers' tools), and `./run.sh` wraps the run step:
+
+```sh
+./run.sh                           # npm start (offers to build the sidecar if it's missing)
+./run.sh --packaged                # the packaged app in out/, repackaging if it's stale
+./run.sh --relay                   # node relay/server.js
+./run.sh --scratch --debug-server  # throwaway HOME/storage, debug API on a free port
+./run.sh --profile work -- --devtools   # anything after -- goes to the app
+```
+
+`./build_all.sh` and `./run.sh` both check for Node.js, npm and `node_modules`
+first and offer to run `./install_deps.sh` when something is missing.
 
 `npm start` passes `--no-updates`; the flag is kept for compatibility and has
 no effect.
@@ -325,6 +346,7 @@ just that one file to the box:
 npm run build:relay              # this host's platform/arch
 npm run build:relay -- --all     # linux/macos/win, x64 + arm64
 npm run build:relay -- linux-x64 win-x64   # specific targets
+npm run build:relay -- --all --jobs 4      # up to 4 targets at once
 ```
 
 Output goes to `out/relay/zbterm-relay-<version>-<platform>-<arch>` (e.g.
@@ -531,8 +553,11 @@ Local packaging (no distribution, no signing needed):
 npm run package                        # → out/ZBTerm-<platform>-<arch>/
 npm run make                           # → installers in out/make/
 ZBTERM_FORGE_OUT_DIR=<dir> npm run make  # write into a scratch dir instead of out/
-./build_all.sh                         # relay executables (all platforms) + GUI package (all
-                                        # platforms) + GUI installers (host platform only)
+./build_all.sh                         # relay executables (all platforms) + the sidecar for this
+                                        # machine + GUI package (every platform with a staged
+                                        # sidecar) + GUI installers (host platform only)
+./build_all.sh -j                      # the same, the relay targets in parallel alongside the
+                                        # sidecar + GUI steps (-j N: N relay targets at once)
 ```
 
 Signed, distributable builds are cut by the `Build Release` GitHub Actions

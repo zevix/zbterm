@@ -32,7 +32,9 @@ npm start                                          # dev (electron-forge start -
 npm run package                                    # → out/<ProductName>-<platform>-<arch>/
 ZBTERM_FORGE_OUT_DIR=<dir> npm run package         # package into a scratch dir instead of out/
 npm run make                                       # → installers in out/make/
-./build_all.sh                                     # relay executables (all platforms) + GUI package/make
+./build_all.sh [-j [N]]                            # relay executables (all platforms) + host sidecar + GUI package (platforms with a staged sidecar)/make; -j builds the relay in parallel
+./install_deps.sh                                  # system packages (Ubuntu/Debian/Fedora), rustup, npm install; build_all.sh/run.sh offer it
+./run.sh [--dev|--packaged|--relay] [--scratch]    # run from source / out/ / the relay; --scratch = throwaway HOME + storage
 ```
 
 Always give a test run its own `HOME` and a short `TMPDIR` (under 20 characters): a

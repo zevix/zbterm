@@ -1648,8 +1648,8 @@ A few things are out of scope on purpose:
 | `npm run format` | `prettier --write .` + `lunte --fix` |
 | `npm run package` | `electron-forge package` (no distributables) |
 | `npm run make` | `electron-forge make` (build distributables) |
-| `npm run build:relay` | `node scripts/build-relay.js` (standalone relay executables) |
-| `./build_all.sh` | Builds everything: relay executables (all platforms) + GUI app package (all platforms) + GUI installer for the host platform only. `--relay-only`, `--gui-only`, `--no-make` narrow it down. |
+| `npm run build:relay` | `node scripts/build-relay.js` (standalone relay executables; `--jobs N` builds N targets at once) |
+| `./build_all.sh` | Builds everything: relay executables (all platforms), the `zxterm-core` sidecar for the host, GUI app package for every platform whose sidecar is staged under `npm/` (others, and win32, are skipped with a note) + GUI installer for the host platform only. `--relay-only`, `--gui-only`, `--no-make` narrow it down; `-j [N]` builds N relay targets at once (default: all) alongside the sidecar and GUI steps. |
 
 ### A.2 Peer-to-Peer OTA Updates
 
