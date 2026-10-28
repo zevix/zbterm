@@ -9,10 +9,43 @@ or update mechanism.
 
 It complements:
 
-- [terminal-share-requirements.md](terminal-share-requirements.md), which
-  defines product and security requirements; and
 - [ARCHITECTURE.md](ARCHITECTURE.md), which documents the existing
-  Node/Pear implementation.
+  implementation (Electron shell, Bare worker core, the Pear and Freenet share
+  backends, the Rust `zxterm-core` sidecar) and its product and security
+  invariants; and
+- [CORE-CONTRACT.md](CORE-CONTRACT.md), the frozen, host-independent contract of
+  the core (`engine/`, published as `zbterm-core`): its method and event
+  surface, sidecar launch and PTY-host interface.
+
+> **Status, 2026-10-28.** Most of this document is still a target design. What
+> exists today:
+>
+> - Only the network-facing seam is a real port: one `ShareBackend` interface
+>   (`engine/backends/types.js`) that merges the transport, discovery and
+>   share-time history roles of §16, §17 and §14 (deviations `A-3`, `A-10`,
+>   `A-11` are listed in that file's header). A registry
+>   (`engine/backends/index.js`) picks a backend per run; `ShareManager`
+>   (`engine/share-manager.js`) holds one and owns everything above it (links,
+>   caps, approval, live encryption, rekey, sealed input).
+> - Two shipping backends: `pear` (`engine/backends/pear/`, Hyperswarm/HyperDHT)
+>   and `freenet` (`engine/backends/freenet/`, a proxy to the Rust `zxterm-core`
+>   sidecar, `D-34`/`D-35`). A third, `engine/backends/loopback.js`, is an
+>   in-process test backend that is never offered to users. All three run the
+>   same conformance suite (`test/backends/conformance*.js`).
+> - Terminal, local state, session storage and keys are not separate providers:
+>   the PTY host lives in the Electron shell (`electron/pty-host.js`, interface in
+>   [CORE-CONTRACT.md](CORE-CONTRACT.md) §6), and storage and session crypto are
+>   modules of the core (`engine/session-store.js`, `engine/crypto.js`, …).
+> - Every identity path (SSH keys, claims, verification, the identity key) runs
+>   in the Rust `zxterm-core` sidecar (repository `zevix/zxterm`, the `zxterm/`
+>   submodule here), one per profile, reached over a socket at
+>   `<profile>/account/zxterm-core.sock` (`engine/zxterm/*`, spawned through the
+>   host module `electron/zxterm-core-host.js`).
+> - There is no update provider: the OTA updater was removed (`D-08`, `D-25`).
+>
+> `D-nn`, `S-nn`, `A-nn` and project ids cited here refer to the project's
+> decision and security registers and project folders, which are not part of
+> this repository.
 
 The design has two goals:
 
@@ -94,12 +127,15 @@ Identity management and software updates are optional:
 - without an identity provider, the application still has device keys and can
   use anonymous bearer links;
 - without an update provider, the application reports that updates are managed
-  externally;
+  externally (this is ZBTerm's behavior today: there is no updater, and npm
+  installs only get a registry check, `electron/update-channel.js`);
 - without discovery, an invitation must contain a complete dial route;
 - without distributed history storage, sharing may be live-only and history
   remains local;
 - without an ephemeral bidirectional transport, viewer input must be disabled
-  rather than written into a persistent message store.
+  rather than written into a persistent message store (implemented:
+  `ShareManager` strips `SEND_INPUT` from new links when the backend lacks
+  `EPHEMERAL_DELIVERY`, deciding by capability, not by backend name).
 
 ## 2. Layered architecture
 
@@ -199,7 +235,9 @@ The dispatcher is the stable façade for all entry points. It:
 - emits progress independently from final command completion.
 
 The command model remains equivalent to the session, player, profile, account,
-share, preference, update, and diagnostics families in the requirements.
+device, identity, share, preference, and diagnostics families of the current
+engine API ([CORE-CONTRACT.md](CORE-CONTRACT.md) §5). The core has no update
+family; with no updater, update checks are a host concern.
 
 ### 3.3 Session coordinator
 
@@ -513,6 +551,13 @@ The core owns profiles, session state, authorization, and provider composition.
 The terminal broker owns native terminal handles. Key operations may run in the
 core, OS vault, hardware module, or a separate delegate.
 
+ZBTerm uses this shape today: the Electron renderer (UI), the Electron main
+process (windows, IPC and the `node-pty` terminal broker), the Bare worker
+(`engine/`, the core, spawned through `bare-sidecar`) and, per profile, the Rust
+`zxterm-core` sidecar (identity, identity key, and the Freenet backend and its
+history). The worker cannot spawn processes itself; the host injects the spawn
+function for the sidecar.
+
 ### 6.3 Background daemon
 
 Recommended for detached sessions and cross-device access:
@@ -554,6 +599,11 @@ select one after benchmarking. Regardless of encoding:
 - maximum sizes and recursion depths are specified;
 - every top-level record carries a schema version.
 
+No neutral schema has been chosen yet. Today the shell–worker pipe uses
+`compact-encoding` frames (`engine/rpc/schema.js`), and the worker–`zxterm-core`
+seam uses `postcard` frames whose payloads are JSON text
+(`engine/zxterm/codec.js`).
+
 ### 7.2 In-process interfaces
 
 Each language maps the neutral interfaces idiomatically:
@@ -571,6 +621,10 @@ Each language maps the neutral interfaces idiomatically:
 
 A provider implemented in another language runs as a sidecar by default.
 The sidecar protocol uses the same framed command/event model as the core.
+
+`zxterm-core` is the existing example: a Rust binary that the JS core reaches
+over a local socket with request, reply, event, output and channel-bytes frames
+(`engine/zxterm/client.js`). The model is the same; the codec is not (see §7.1).
 
 Avoid exposing language runtimes directly through FFI for asynchronous,
 long-lived providers. If FFI is necessary:
@@ -750,6 +804,15 @@ Providers can be mixed. A “Freenet bundle,” for example, may use Freenet for
 history/discovery, an OS vault for keys, and a direct QUIC adapter for ephemeral
 live input.
 
+No bundle object exists in the code yet. A profile's core holds one
+`ShareBackend` chosen through `engine/backends/index.js` (`resolve`, `create`,
+and an optional static `probe`, which reports a backend that loads but cannot be
+used as `broken`); the selection is narrowed by the build
+(`ZBTERM_BUILD_BACKENDS`) and at runtime (`--backend` / `ZBTERM_BACKEND`). The
+shipping Freenet backend is close to the mix above: Freenet contracts for
+rendezvous, signalling and offline history, and WebRTC data channels for
+ephemeral live output and input (§23).
+
 `BackendBundle.start` validates cross-provider compatibility:
 
 - shared crypto-suite support;
@@ -890,6 +953,21 @@ CONTENT_ADDRESSING
 The core requires local durability and ordered reconstruction. It does not
 require global linearizability.
 
+### 14.3 Current implementation
+
+There is no `SessionStoreProvider` yet. A session's canonical history is a
+Hypercore log plus a Hyperbee metadata core (`engine/session-store.js`).
+`ShareBackend` carries only the share-time part: `serveHistory`,
+`attachHistory` (a handle with `fetch({start, end})`) and `historyRouteFor`, and
+the capability bits `HISTORY_SPARSE_READ`, `HISTORY_HEAD_WATCH`,
+`HISTORY_EVENTUAL_MERGE` and `HISTORY_OFFLINE_HOST` (`engine/backends/types.js`).
+Pear shares replicate the Hypercore itself. A Freenet share's history is kept by
+`zxterm-core` in segment files and published to the `segment-v1` contract, so a
+viewer can read it with the host offline; `engine/zxterm/history.js` feeds and
+reads it (`D-40`). No backend currently sets `HISTORY_EVENTUAL_MERGE` or
+`HISTORY_OFFLINE_HOST`; the Freenet backend offers offline history without
+advertising the latter bit.
+
 ## 15. KeyProvider
 
 Keys are referenced by opaque handles.
@@ -924,6 +1002,13 @@ profile/session scope. Sensitive sessions request memory-only epoch keys.
 
 The session manifest names the crypto suite. A viewer must reject a session
 whose suite is unsupported; silent downgrade is forbidden.
+
+There is no `KeyProvider` yet, and keys are not opaque handles. Session key
+derivation, AEAD and device envelopes are `sodium-native` calls in the core
+(`engine/crypto.js`). Identity-key creation, derivation and proof verification
+are `zxterm-core` requests (`idkey.create`, `idkey.derive`, `idkey.verify`), but
+the mnemonic still passes through the JS core, so this is not yet a key
+boundary in the sense of this section.
 
 ## 16. TransportProvider
 
@@ -982,6 +1067,20 @@ PATH_MIGRATION
 `EPHEMERAL_DELIVERY` is required for viewer input under the default security
 policy. A persistent broker stream does not satisfy it.
 
+### 16.3 Current implementation
+
+Implemented, in reduced form, as `ShareBackend` (`engine/backends/types.js`):
+`bind`/`accept`/`listener_routes` collapse into `announce`, the `'connection'`
+event and `routeFor`; `dial(route, expectedPeerKey, { signal })` returns a
+cancellable handle that only resolves for the expected peer key; `setAdmission`
+gates inbound connections. A `PeerConnection` carries channels of JSON messages
+(`openChannel`/`onChannel`), not `DuplexByteStream`s (`A-10`); `request_id`s and
+deadlines are omitted (an `AbortSignal` replaces them). The §16.2 capabilities
+are the `CAP` bitset in that file, and `path()` returns the same four values.
+Pear advertises every transport capability except `BROKERED`; Freenet
+advertises neither `DIRECT_DIAL`, `RELAY` (`zxterm-core` has no TURN client) nor
+`PATH_MIGRATION`, and adds `BROKERED`.
+
 ## 17. DiscoveryProvider
 
 ```text
@@ -1000,6 +1099,14 @@ plaintext or epoch keys.
 
 Implementations include DHT records, rendezvous services, broker key/value
 entries, local-network discovery, direct invitations, or a null provider.
+
+In the code, discovery is part of `ShareBackend` (`A-3`): `announce`/`withdraw`
+publish and stop publishing a link's opaque route, and `dial` resolves it. Pear
+routes are DHT topics; Freenet routes are minted and resolved through Freenet
+contracts (`pointer-v1`, `signalling-v1`) inside `zxterm-core`. `withdraw` ends discovery of a
+route, not reachability of the host (`D-04`); refusing joins on a withdrawn or
+revoked link is the share manager's job. `--backend none` (or
+`ZBTERM_BACKEND=none`) runs without any share backend, i.e. local-only.
 
 ## 18. IdentityProvider
 
@@ -1036,6 +1143,12 @@ provider never returns private keys.
 The null identity provider returns `ANONYMOUS` and lets the key provider create
 a self-signed device identity.
 
+Not yet an interface. ZBTerm's identity is fixed: device and identity keys plus
+an optional provider claim (a GitHub username, proved with the user's SSH key
+and the account's published `<user>.keys`), described in
+[ARCHITECTURE.md](ARCHITECTURE.md) §6. Every identity path runs in the
+`zxterm-core` sidecar; `engine/identity/*.js` are thin call-throughs to it.
+
 ## 19. UpdateProvider
 
 ```text
@@ -1055,6 +1168,12 @@ enforce anti-rollback policy and report whether rollback is available.
 
 The null provider reports `EXTERNALLY_MANAGED`. Operating-system package
 managers can therefore own updates without special UI logic.
+
+ZBTerm today has only the null case: the Pear OTA updater was removed from
+every build (`D-08`, `D-25`). A packaged build is updated by installing a newer
+package; for the npm distribution, the Electron shell checks the npm registry at
+most once a day for a newer `zbterm` (`electron/update-channel.js`); updating
+is then `npm install -g zbterm@latest`. That check lives in the host, not in the core.
 
 ## 20. Backend event contract
 
@@ -1105,10 +1224,12 @@ Migration modes:
 
 # Part III — Four high-level designs
 
-## 22. Example A — Node + Pear stack
+## 22. Example A — Node/Bare + Pear stack
 
 This example describes the existing architecture through the new interfaces.
 It remains a valid provider bundle rather than the definition of the product.
+The shipping app also carries a second share backend, Freenet, whose network
+half is the Rust sidecar of §23; the rows below describe a Pear share.
 
 ### 22.1 Process topology
 
@@ -1116,28 +1237,31 @@ It remains a valid provider bundle rather than the definition of the product.
 flowchart LR
   R["Electron renderer"]
   E["Electron shell<br/>window, IPC, native PTY"]
-  W["Bare worker<br/>domain core + providers"]
+  W["Bare worker (engine/, zbterm-core)<br/>domain core + Pear backend"]
+  Z["zxterm-core sidecar (Rust)<br/>identity, identity key"]
   P["Pear/Holepunch network"]
   D["Profile data"]
 
   R <-->|"command/event IPC"| E
   E <-->|"framed engine + PTY protocol"| W
+  W <-->|"socket seam"| Z
   W <--> P
   W <--> D
+  Z <--> D
 ```
 
 ### 22.2 Provider mapping
 
 | Interface | Adapter |
 | --- | --- |
-| `TerminalProvider` | Native PTY broker in the Electron shell |
+| `TerminalProvider` | Native PTY broker in the Electron shell (`electron/pty-host.js`, `node-pty`) |
 | `LocalStateProvider` | Profile files, catalog, encrypted snapshot cache |
-| `SessionStoreProvider` | Per-session append log plus structured metadata store |
-| `KeyProvider` | Software key vault backed by current crypto libraries |
-| `TransportProvider` | Encrypted peer sockets with logical stream multiplexing |
-| `DiscoveryProvider` | Topic/DHT discovery, direct peer dial, optional relay |
-| `IdentityProvider` | Current identity/device key implementation; partial UI |
-| `UpdateProvider` | Pear update worker |
+| `SessionStoreProvider` | Per-session Hypercore log plus Hyperbee metadata (`engine/session-store.js`) |
+| `KeyProvider` | Software keys in the core (`engine/crypto.js`, `sodium-native`); identity-key operations in `zxterm-core` |
+| `TransportProvider` | `ShareBackend` `pear` (`engine/backends/pear/`): Hyperswarm/HyperDHT sockets, Protomux channels, relay fallback |
+| `DiscoveryProvider` | Same backend: DHT topics, direct peer dial, optional relay |
+| `IdentityProvider` | Device/identity keys plus GitHub claims, all served by `zxterm-core` |
+| `UpdateProvider` | None; the Pear OTA updater was removed (`D-08`, `D-25`) |
 
 ### 22.3 Adapter behavior
 
@@ -1145,8 +1269,9 @@ flowchart LR
 - Structured metadata maps manifests, epochs, envelopes, links, and members.
 - The transport adapter maps one logical protocol stream per link/session.
 - Discovery invitations include topic/route and expected host transport key.
-- The shell/worker framed protocol implements the neutral backend sidecar
-  contract.
+- The shell/worker framed protocol (`engine/rpc/schema.js`, frozen in
+  [CORE-CONTRACT.md](CORE-CONTRACT.md)) plays the role of the neutral backend
+  sidecar contract.
 - Existing renderer commands and events become the application façade.
 
 ### 22.4 Strengths
@@ -1155,31 +1280,32 @@ flowchart LR
 - Efficient append and sparse replication.
 - Direct peer transport with relay fallback.
 - Native terminal isolated from network/storage logic.
-- Existing packaging and update path.
+- Existing packaging (native installers and an npm distribution).
 
 ### 22.5 Risks and cleanup needed
 
-- Product semantics are currently intertwined with concrete storage/network
-  APIs in the sharing and store implementations.
+- Storage and history remain tied to Hypercore: only share networking sits
+  behind an interface (`ShareBackend`), and its history calls operate on
+  Hypercores (`A-11`).
 - Identity and device-management features are incomplete in the UI.
-- The software key vault exposes more key material to the core process than a
+- The software key handling exposes more key material to the core process than a
   delegate or OS keystore design.
-- Provider interfaces should first be introduced around the existing behavior,
-  with golden protocol tests, before replacing any infrastructure.
+- Provider interfaces should be introduced around the existing behavior, with
+  golden protocol tests, before replacing any infrastructure. This has been done
+  for share networking: the Pear, Freenet and loopback backends pass one
+  conformance suite (`test/backends/conformance.js`).
 
 ## 23. Example B — Rust + Freenet
 
 > **2026-09-18.** A spike that implements the network-facing part of this design in the
-> existing Node/Bare core is planned in
-> [`projects/260918_backend-abstraction/`](projects/260918_backend-abstraction/). It signs the
-> hybrid mode of §23.6 (`D-01` in [`decisions.md`](decisions.md)) and deviates from Part II in
+> existing Node/Bare core is planned in project `260918_backend-abstraction`. It signs the
+> hybrid mode of §23.6 (`D-01`) and deviates from Part II in
 > three places: one `ShareBackend` object in place of separate transport, discovery and
 > session-store providers; JSON-message channels in place of `DuplexByteStream`; and history
 > calls that operate on Hypercores, not backend-neutral segments.
 >
 > **2026-09-18 (B9).** The spike is done. The Freenet adapter design that came out of it is
-> [`projects/260918_backend-abstraction/freenet-backend-design.md`](projects/260918_backend-abstraction/freenet-backend-design.md),
-> grounded in the measurements in `probes.md` beside it. The three deviations are recorded as
+> that project's `freenet-backend-design.md`, grounded in the measurements in `probes.md` beside it. The three deviations are recorded as
 > assumptions in that project's `QnA_assumptions.md` and in the header of
 > `engine/backends/types.js`: **A-3** (one `ShareBackend` object, not the three providers of
 > §23.3), **A-10** (a channel carries JSON messages, not a `DuplexByteStream`) and **A-11**
@@ -1190,6 +1316,26 @@ flowchart LR
 > history from a segment contract (§23.4) is an open problem there, because a read-only
 > Hypercore replica cannot be fed from contract bytes (design §8.2). The §23.8 gates for
 > segment rate and summary/delta size were not measured.
+>
+> The project files and the decision ledger named in these two notes are not in this
+> repository (`docs/decisions.md` is git-ignored here). The 2026-09-18 project predates the
+> 2026-09-28 fork, so it remains in the predecessor repository, whose final commit is `b856e15`.
+>
+> **2026-09-29 / 2026-09-30 (K11, K17 of zxterm-core; `D-34`, `D-35`, `D-40`).** Both further
+> departures above are superseded. The Freenet backend now ships (`engine/backends/freenet/`,
+> in the default build with Pear) as a thin proxy to the Rust `zxterm-core` sidecar
+> (`zevix/zxterm`), the per-profile process that already serves identity. The sidecar runs the
+> Freenet node client, the contracts (`pointer-v1`, `signalling-v1`, `segment-v1`; sources and
+> BLAKE3-pinned `.wasm` in zxterm's `contracts/`, embedded in the binary), the signed offer/answer
+> exchange and WebRTC data channels (`str0m`). So the direct transport of §23.6 is a Rust
+> adapter after all, and the split adapter (`electron/rtc-host.js`, the `BACKEND_*` frames) is
+> gone. Offline history is offered: the sidecar keeps a Freenet session's history in segment
+> files, serves it live on the session's `history` channel and publishes it to `segment-v1`,
+> from which a viewer reads it with the host offline (`engine/zxterm/history.js`). The rest of
+> the app is not Rust: UI, core and Pear backend stay Electron and Node/Bare. Keys use no Freenet
+> delegate (§23.5 remains design only), and ZBTerm does not run the Freenet node: the user does,
+> at `ws://127.0.0.1:7509` by default (`--freenet-node`, `ZBTERM_FREENET_NODE`). The backend
+> advertises no `RELAY` (no TURN client), `DIRECT_DIAL` or `PATH_MIGRATION`.
 
 ### 23.1 Current Freenet model
 
@@ -1673,7 +1819,7 @@ Costs:
 
 ## 26. Comparison
 
-| Dimension | Node + Pear | Rust + Freenet | Python + py-libp2p | Python + NATS/SQLite |
+| Dimension | Node/Bare + Pear | Rust + Freenet | Python + py-libp2p | Python + NATS/SQLite |
 | --- | --- | --- | --- | --- |
 | Network shape | Direct P2P + relay | Decentralized contract network; optional direct live path | Direct P2P + relay | Brokered/federated |
 | Durable history | Distributed append log | Mergeable signed contract segments | Local CAS + peer block exchange | SQLite + JetStream stream |
@@ -1685,6 +1831,11 @@ Costs:
 | Offline history | Yes, with local blocks/keys | Yes, with subscribed contract state/keys | Yes, with local segments/keys | Yes, with SQLite/JetStream/keys |
 | Operations burden | Low-to-medium | Local Freenet node and evolving app model | Bootstrap/relay operations | NATS cluster/account operations |
 | Main risk | Coupling to current stack | Consistency/latency/API maturity | Python and implementation maturity | Central service dependency/configuration |
+
+The columns compare target designs. ZBTerm today ships the first column and a
+hybrid slice of the second: Freenet contracts for rendezvous, signalling and
+offline history plus WebRTC for live output and input, in a Rust sidecar under a
+Node/Bare core, with software keys rather than a delegate (§23).
 
 ## 27. Recommended implementation sequence
 
@@ -1702,6 +1853,15 @@ Costs:
 7. Run the same conformance suite against every bundle.
 8. Add mixed-provider tests, especially storage from one bundle with transport,
    identity, keys, or updates from another.
+
+Progress as of 2026-10-28: step 2 is done for share networking only, as one
+`ShareBackend` (§16.3); step 3 exists as the loopback share backend
+(`engine/backends/loopback.js`); step 4 has a local-only run mode (`--backend none`) but no
+backend-neutral migration;
+step 5 is under way in the sidecar direction (identity, the Freenet backend and
+Freenet history moved to the Rust `zxterm-core`); step 6 delivered Freenet; step
+7 runs for share backends (`test/backends/conformance-{pear,freenet,loopback}.test.js`).
+Steps 1 and 8, and the non-network providers of step 2, are not done.
 
 ## 28. Provider conformance suite
 
