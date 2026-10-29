@@ -1,31 +1,31 @@
 // Single source of truth for the ZBTerm mark. Edit this, then run `npm run
 // icons` to regenerate renderer/logo.svg and every packager icon from it.
-// The mark is split down the middle: the left half of the Freenet rabbit, facing
-// left as in the Freenet logo, and the right half of the Pear (pears.com) pear,
-// pixelated the same way - the two networks ZBTerm shares over.
+// The mark stacks the two networks ZBTerm shares over: the blue Freenet
+// rabbit's head (ears, eyes, chin) on top of the green Pear (pears.com) pear,
+// with a small blue rabbit tail off the pear's right side.
 // Cells: '.' background, '-' scanline grey, 'G' accent green, 'B' Freenet blue.
 // Two horizontal cells make up one SVG unit; one vertical cell makes up one unit.
 window.STARTUP_LOGO_RAW_LINES = [
-  '.---------------------------GG-----------------------------------.',
-  '-------------------------BBBGG------------------------------------',
+  '.---------------------------------------BBBB---------------------.',
+  '------------------------BBBBBB--------BBBBBB----------------------',
   '..................................................................',
-  '-----------------------BBBBBBBGGGGGGG-----------------------------',
-  '---------------------BBBBBBBBGGGGGGGG-----------------------------',
+  '------------------BBBBBBBBBBBBBB----BBBBBB------------------------',
+  '----------------BBBB------BBBBBBBBBBBBBBBB------------------------',
   '..................................................................',
-  '--------------------BBBBBBBBBBGGGGGGGGG---------------------------',
-  '------------------BBBBBBBBBBBGGGGGGGGGG---------------------------',
+  '----------------------BBBBB..BBBBBBBB..BBBBB----------------------',
+  '------------------------BBBBBBBB..BBBBBBBB------------------------',
   '..................................................................',
-  '------------------BBBBBBBB---GGGGGGGGGGGG-------------------------',
-  '----------------BBBBBBBBBBBBBGGGGGGGGGGGG-------------------------',
+  '----------------------------BBBBBBBBBB----------------------------',
+  '----------------------------GGGGGGGGGG----------------------------',
   '..................................................................',
-  '--------------BBBBBBBBBBBBBBBGGGGGGGGGGGGGGGG---------------------',
-  '--------------BBBBBBBBBBBBBBBGGGGGGGGGGGGGGGG---------------------',
+  '------------------------GGGGGGGGGGGGGGGGGG------------------------',
+  '----------------------GGGGGGGGGGGGGGGGGGGGGG----------------------',
   '..................................................................',
-  '--------------------BBBBBBBBBGGGGGGGGGGGGGGGG---------------------',
-  '-------------------BBBBBBBB--GGGGGGGGGGGGGGGG---------------------',
+  '--------------------GGGGGGGGGGGGGGGGGGGGGGGGGG-BBBB---------------',
+  '--------------------GGGGGGGGGGGGGGGGGGGGGGGGGG-BBB----------------',
   '..................................................................',
-  '------------------BBBB-------GGGGGGGGGGGG-------------------------',
-  '.-----------------B----------GGGGGGGGGGGG------------------------.'
+  '--------------------GGGGGGGGGGGGGGGGGGGGGGGGGG--------------------',
+  '.-----------------------GGGGGGGGGGGGGGGGGG-----------------------.'
 ]
 
 window.STARTUP_LOGO_COLORS = {
