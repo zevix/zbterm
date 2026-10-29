@@ -668,6 +668,25 @@ test('a core cache takes the packets the core verified, in order, and refuses a 
   t.absent(raw.includes('core-1'), 'and the cache is sealed on disk')
 })
 
+test('a core cache does not repeat timeline entries the host already sent', async (t) => {
+  const dir = await temp()
+  const device = await loadOrCreateLocalDevice({ root: dir })
+  const { store } = await coreCacheStore(dir, device)
+  t.teardown(() => store.close().catch(() => {}))
+  // The host's timeline messages reach the viewer before the core's verified
+  // history does, so the entries for seqs 1..3 are already there.
+  store.timeline = corePackets(1, 3).map((p) => ({ seq: p.seq, tsMs: p.tsMs, hd: false }))
+  await store.appendVerified(corePackets(1, 3))
+  // A live timeline entry for seq 4, then the core's packet for it.
+  store.timeline.push({ seq: 4, tsMs: 1004, hd: false })
+  await store.appendVerified(corePackets(4, 5))
+  t.alike(
+    store.timeline.map((e) => e.seq),
+    [1, 2, 3, 4, 5],
+    'every seq once, in order'
+  )
+})
+
 test('what the host says of its history is kept with the joined session and survives a reopen', async (t) => {
   const dir = await temp()
   const device = await loadOrCreateLocalDevice({ root: dir })
