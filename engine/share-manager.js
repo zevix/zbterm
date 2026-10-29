@@ -58,14 +58,19 @@ const JOIN_REASONS = Object.freeze({
 })
 const MAX_GROUP_VIEWERS = 99
 // Live output towards a viewer that cannot keep up (drop-to-snapshot; see
-// broadcastData). A viewer whose channel reports backpressure - its `send`
-// returned false - stops getting live data; LAG_RESYNC_MS later it gets the
-// host's current screen as a bootstrap instead of what it missed, and live
-// data resumes. A resync that itself meets backpressure doubles the wait, up
-// to LAG_RESYNC_MAX_MS, so a link that cannot carry even the screens is sent
-// one screen per LAG_RESYNC_MAX_MS, never an unbounded queue.
+// broadcastData). `send` returning false is advisory: the message is still
+// queued and delivered, and on Pear it says so as soon as the socket holds
+// ~16 KiB, which the session's own history replication on the same socket
+// does routinely. So a viewer only counts as lagging once LAG_BACKLOG_BYTES
+// of live data went out with no send getting through clean in between; it
+// then stops getting live data, LAG_RESYNC_MS later it gets the host's
+// current screen as a bootstrap instead of what it missed, and live data
+// resumes. Each lag that follows a resync the link could not take either
+// doubles the wait, up to LAG_RESYNC_MAX_MS; a clean send resets it. The
+// queue a viewer can build is bounded by LAG_BACKLOG_BYTES plus one screen.
 const LAG_RESYNC_MS = 500
 const LAG_RESYNC_MAX_MS = 8000
+const LAG_BACKLOG_BYTES = 1024 * 1024
 // A resync screen carries this much scrollback, not the mirror's full 5000
 // lines: a full screen is about 1 MiB under a flood, which is past any
 // backend's write buffer on its own, so `send` said "backpressure" for every
@@ -859,10 +864,17 @@ class ShareManager extends EventEmitter {
         continue
       }
       const message = this._encryptLiveMessage(share, runtime, 'data', data, { hd: !!opts.hd })
-      // The message that met backpressure is still delivered (backpressure
-      // is advisory on every backend), so the viewer's stream stays whole up
-      // to here; everything after it is replaced by the resync's screen.
-      if (peer.message.send(message) === false) this._lagPeer(share, peer)
+      // A message that met backpressure is still delivered (backpressure is
+      // advisory on every backend), so the viewer's stream stays whole up to
+      // the point it lags; everything after that is replaced by the resync's
+      // screen.
+      if (peer.message.send(message) === false) {
+        peer.backlogBytes = (peer.backlogBytes || 0) + data.byteLength
+        if (peer.backlogBytes > LAG_BACKLOG_BYTES) this._lagPeer(share, peer)
+      } else {
+        peer.backlogBytes = 0
+        peer.lagDelay = LAG_RESYNC_MS
+      }
     }
   }
 
@@ -910,11 +922,13 @@ class ShareManager extends EventEmitter {
       bytes: bootstrap.data ? bootstrap.data.length : 0,
       backpressure: ok === false
     })
+    // Live data resumes either way: the screen is queued even when `send`
+    // reports backpressure, and then counts towards the next lag. A screen
+    // the link could not take makes the next lag wait longer.
     peer.lagging = false
     peer.lagSkippedBytes = 0
-    // A screen that met backpressure too: the next resync waits longer.
+    peer.backlogBytes = ok === false ? Buffer.byteLength(bootstrap.data || '') : 0
     peer.lagDelay = ok === false ? Math.min(LAG_RESYNC_MAX_MS, peer.lagDelay * 2) : LAG_RESYNC_MS
-    if (ok === false) this._lagPeer(share, peer)
   }
 
   // _syncTimelineToPeer only catches a peer up to the backlog that existed
@@ -3276,6 +3290,7 @@ module.exports._test = {
   selectSnapshotSyncItems,
   SNAPSHOT_SYNC_MAX,
   LAG_RESYNC_MS,
+  LAG_BACKLOG_BYTES,
   LAG_RESYNC_MAX_MS
 }
 
