@@ -59,9 +59,14 @@ jobs:
         run: |
           git submodule update --init --depth 1 zxterm
           node scripts/sidecar.js build
+      # sfw: false - the Socket firewall only vets package downloads, and
+      # dependencies are installed in an earlier step. Its proxy env
+      # (HTTP_PROXY=127.0.0.1:<port>) is passed into snapcraft's LXD build
+      # container, where 127.0.0.1 is the container itself, so apt fails.
       - uses: holepunchto/actions/make-pear-app@v1
         with:
           channel: ${{ env.CHANNEL }}
+          sfw: false
           linux_appimage: >-
             ${{ format('{0}-{1}-{2}.AppImage',
                 needs.prebuild.outputs.package-name,
@@ -103,10 +108,15 @@ jobs:
         run: |
           git submodule update --init --depth 1 zxterm
           node scripts/sidecar.js build
+      # sfw: false - the Socket firewall only vets package downloads, and
+      # dependencies are installed in an earlier step. Its proxy env
+      # (HTTP_PROXY=127.0.0.1:<port>) is passed into snapcraft's LXD build
+      # container, where 127.0.0.1 is the container itself, so apt fails.
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
         with:
           channel: ${{ env.CHANNEL }}
+          sfw: false
           linux_appimage: >-
             ${{ format('{0}-{1}-{2}.AppImage',
                 needs.prebuild.outputs.package-name,
