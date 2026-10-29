@@ -37,14 +37,13 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux-x64 (doctor + headless engine boot)
-          # macos-latest and macos-14 are BOTH arm64, so pairing them would buy
-          # no extra coverage. macos-26-intel is the x64 image this repo
-          # already builds releases on (see build-release.yml); macos-13 is the
-          # older x64 image.
-          - os: macos-latest
-            label: macos-arm64 (doctor only, no headless display)
-          - os: macos-26-intel
-            label: macos-x64 (doctor only, no headless display)
+          # Paused: no macOS builds until sharing works on Linux.
+          # Uncomment to bring them back. macos-latest is arm64,
+          # macos-26-intel is x64.
+          # - os: macos-latest
+          #   label: macos-arm64 (doctor only, no headless display)
+          # - os: macos-26-intel
+          #   label: macos-x64 (doctor only, no headless display)
           # No windows-latest: the zxterm-core sidecar has no Windows build
           # yet (its named-pipe listener is not implemented), so
           # package.json#os leaves win32 out and `npm install` refuses there.
