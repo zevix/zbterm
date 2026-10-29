@@ -148,6 +148,7 @@
   const STARTUP_LOGO_WIDTH = Math.max(...STARTUP_LOGO_LINES.map((line) => line.length))
   const STARTUP_LOGO_GREEN_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.green)
   const STARTUP_LOGO_GREEN_FG = hexToAnsiFg(window.STARTUP_LOGO_COLORS.green)
+  const STARTUP_LOGO_BLUE_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.blue)
   const STARTUP_LOGO_BLACK_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.black)
 
   const state = {
@@ -848,6 +849,7 @@
     const slate = `\x1b[48;2;${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE}m`
     const black = STARTUP_LOGO_BLACK_BG
     const green = STARTUP_LOGO_GREEN_BG
+    const blue = STARTUP_LOGO_BLUE_BG
     const greenText = STARTUP_LOGO_GREEN_FG
     const blockHeight = STARTUP_LOGO_LINES.length + 3
     const startRow = Math.max(1, Math.floor((STARTUP_LOGO_ROWS - blockHeight) / 2) + 1 - 2)
@@ -858,7 +860,7 @@
       const cells = STARTUP_LOGO_LINES[rowIndex].padEnd(STARTUP_LOGO_WIDTH, '.')
       for (let colIndex = 0; colIndex < cells.length; colIndex++) {
         const char = cells[colIndex]
-        const color = char === '-' ? slate : char === 'G' ? green : black
+        const color = char === '-' ? slate : char === 'G' ? green : char === 'B' ? blue : black
         cellsToDraw.push(`\x1b[${startRow + rowIndex};${startCol + colIndex}H${color} \x1b[0m`)
       }
     }
@@ -871,7 +873,7 @@
     )
     await writeCenteredTerminalText(
       startRow + STARTUP_LOGO_LINES.length + 2,
-      '© MMXXVI by PassCall Advanced Technologies Ltd.'
+      'Written by Zeev Kotzer'
     )
     // No newline after the last line: the block already reaches the bottom row
     // of the fixed grid, and a line feed there scrolls it, leaving scrollback
@@ -1027,6 +1029,7 @@
     const slate = `\x1b[48;2;${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE}m`
     const black = STARTUP_LOGO_BLACK_BG
     const green = STARTUP_LOGO_GREEN_BG
+    const blue = STARTUP_LOGO_BLUE_BG
     const terminalCols = Number.isFinite(cols) ? Math.floor(cols) : STARTUP_LOGO_COLS
     const lineWidth = Math.max(1, Math.min(STARTUP_LOGO_WIDTH, terminalCols - 1))
     const cropStart = Math.max(0, Math.floor((STARTUP_LOGO_WIDTH - lineWidth) / 2))
@@ -1043,6 +1046,7 @@
       for (const char of visibleLine) {
         if (char === '-') out += `${slate} ${ANSI_RESET}`
         else if (char === 'G') out += `${green} ${ANSI_RESET}`
+        else if (char === 'B') out += `${blue} ${ANSI_RESET}`
         else out += `${black} ${ANSI_RESET}`
       }
       return out
@@ -1051,8 +1055,8 @@
       ...logo,
       '',
       centered(`ZBTerm v${bridge.pkg().version}`),
-      centered('(c) MMXXVI by PassCall Advanced Technologies Ltd.'),
-      '\r\n\r\n', // '(c) MMXXVI by PassCall Advanced Technologies Ltd.\r\n',
+      centered('Written by Zeev Kotzer'),
+      '\r\n\r\n',
       'Based on modules and examples by pears.com/holepunch.to',
       `See ${projectUrl()} for more information`,
       '',

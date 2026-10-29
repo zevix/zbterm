@@ -18,3 +18,10 @@ and the project uses [semantic versioning](https://semver.org/) as described in
 - `zbterm doctor`, `zbterm install-desktop` / `uninstall-desktop`, and a localhost debug REST API.
 - The Rust `zxterm-core` sidecar, built from the `zxterm/` submodule and shipped as one optional
   npm package per platform (`@zbterm/zxterm-core-<platform>-<arch>`).
+
+### Changed
+
+- The logo is now half Pear pear, half Freenet rabbit, and the splash screen credits "Written by
+  Zeev Kotzer".
+- `docs/` updated to the current architecture: both share backends, the `zxterm-core` sidecar,
+  and distribution without an OTA updater.
