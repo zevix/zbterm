@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">ZBTerm</h1>
 <h3 align="center">Secure terminal recording, playback and peer-to-peer sharing</h3>
-<h3 align="center">built on the Pear/Electron stack</h3>
+<h3 align="center">over Pear (Hyperswarm) or Freenet, built on Electron and Bare</h3>
 
 <p align="center">
   <a href="https://vimeo.com/1209702239">
@@ -16,14 +16,19 @@
 - Interactive PTY-backed shells, with encrypted terminal output recorded to a
   local session catalog and played back with a scrubber.
 - Peer-to-peer live sharing of a running terminal (host and one or more
-  viewers) over Hyperswarm, with per-link permission caps and optional relay
-  fallback for NAT traversal.
+  viewers) over two networks: Pear (Hyperswarm), with optional relay fallback
+  for NAT traversal, and, experimentally, [Freenet](#freenet). Each share picks
+  its network, and Pear and Freenet shares can run at the same time.
+- Per-link permission caps, host approval, keyboard sharing and key rotation.
 - A localhost REST API for debugging and automation.
 
 ZBTerm uses [Hypercore](https://docs.pears.com/reference/building-blocks/hypercore/)/[Hyperbee](https://docs.pears.com/reference/building-blocks/hyperbee/) for encrypted session history
 storage and [Hyperswarm](https://docs.pears.com/reference/building-blocks/hyperswarm/) for real-time peer-to-peer communication,
 demonstrating the power, extreme performance, simplicity and versatility of
-the Pear/Bare platform.
+the Pear/Bare platform. The core runs in a [Bare](https://github.com/holepunchto/bare)
+worker, separate from the Electron shell. Identity and the Freenet transport
+run in `zxterm-core`, a Rust sidecar built from the
+[zevix/zxterm](https://github.com/zevix/zxterm) submodule.
 
 Note: ZBTerm is not affiliated with Holepunch.to or pears.com
 
@@ -45,6 +50,8 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Ended sessions can be extended at any time by the host
 - Key rotation on user join and exit
 - Debugging and instrumentation REST server for e2e tests and live debugging
+- Sharing over Freenet (experimental; needs your own Freenet node), alongside
+  Pear: each share picks its network in the Share dialog
 
 ### Experimental / not yet exposed
 - Role-based authorization (unused except for keyboard access)
@@ -81,10 +88,21 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## Install & Run <a name="install-run"></a>
 
+> **Status:** ZBTerm has not been published yet: there is no `zbterm` package
+> on npm and no release with installers. Until there is, run it
+> [from a clone](#install-dev) (or build your own installers with `npm run make`).
+> The npm instructions below describe the npm distribution the release
+> tooling produces.
+
+Platforms: Linux (x64 and arm64, glibc) is the platform being built and
+tested. macOS (Apple silicon and Intel) is a supported target, but its CI and
+release builds are paused until sharing works on Linux, and a release
+publishes nothing while they are. Windows is not supported: the
+`zxterm-core` sidecar has no Windows build yet.
+
 ### Install from npm <a name="install-npm"></a>
 
-Supported platforms: Linux (x64 and arm64, glibc) and macOS (Apple silicon and Intel). Windows
-is not supported yet. Needs Node.js 20 or newer. The install downloads an Electron runtime (roughly
+Needs Node.js 20 or newer. The install downloads an Electron runtime (roughly
 150 MB). On macOS the npm build is unsigned, so Gatekeeper warns on first launch.
 
 ```sh
@@ -95,8 +113,9 @@ zbterm doctor              # check this machine can actually run it
 ```
 
 `zbterm doctor` is the first thing to run if anything looks wrong: it reports
-Node, the Electron binary, `node-pty`, the Bare sidecar prebuild, the data
-directory, `$DISPLAY` and the Chromium sandbox, and exits non-zero when
+Node, the Electron binary, `node-pty`, the Bare sidecar prebuild, the
+`zxterm-core` binary, the data directory, `$DISPLAY` and the Chromium sandbox,
+plus the installed version and update channel, and exits non-zero when
 something is genuinely broken. Add `--json` for machine-readable output.
 
 #### Linux desktop integration <a name="install-desktop"></a>
@@ -118,9 +137,11 @@ zbterm update                  # prints the same command after checking npm
 ```
 
 ZBTerm has no built-in auto-updater. An npm install checks the npm registry
-for a newer version and tells you to run `npm install -g zbterm@latest`.
-Installers built with electron-forge (deb/rpm/AppImage/flatpak/snap/dmg/msix)
-have no update channel: install a newer package to update.
+for a newer version and tells you to run `npm install -g zbterm@latest`
+(`--no-update-check` or `ZBTERM_NO_UPDATE_CHECK=1` turns that off).
+Installers built with electron-forge (AppImage, Flatpak and Snap on Linux,
+dmg on macOS; the Windows msix is configured but not built) have no update
+channel: install a newer package to update.
 
 The AppImage needs FUSE 2, which recent distributions no longer install by
 default (`dlopen(): error loading libfuse.so.2`): install `libfuse2t64`
@@ -202,8 +223,9 @@ leaves you with a `zbterm` that cannot start. Always run `npm install` from
 the repo root.
 
 **Changing the logo.** [`renderer/logo-ascii.js`](renderer/logo-ascii.js) is the
-single source of truth for the mark: a grid of cells (`.` background, `-`
-scanline grey, `G` accent green) plus the palette in `STARTUP_LOGO_COLORS`. The
+single source of truth for the mark — the blue Freenet rabbit's head on the
+green Pear pear: a grid of cells (`.` background, `-` scanline grey, `G` accent
+green, `B` Freenet blue) plus the palette in `STARTUP_LOGO_COLORS`. The
 terminal splash draws it directly. Edit it, then run:
 
 ```sh
@@ -221,11 +243,21 @@ needs only the `sharp` devDependency.
 
 ## Storage <a name="storage"></a>
 
-The app stores local data under Electron `userData`:
+The app stores local data under Electron `userData` (or `--storage <dir>`).
+The default profile lives in `zbterm/`, every other profile in
+`zbterm-profiles/<id>/`, and each profile directory holds:
 
-- `zbterm/corestore/` — per-session encrypted Hypercore logs and metadata
-- `zbterm/catalog/` — local session catalog
-- `zbterm/snapshots/<sessionId>/` — encrypted local playback snapshots
+- `corestore/<sessionId>/` — per-session encrypted Hypercore logs and metadata
+- `catalog/` — local session catalog
+- `snapshots/<sessionId>/` — encrypted local playback snapshots
+- `account/` — account and device state; `account/identity/` holds the
+  identity, and `account/zxterm-core.sock` is the `zxterm-core` sidecar's
+  socket while it runs
+- `preferences.json` — per-profile settings, such as pinned sessions and the
+  default session
+
+App-wide settings, such as the theme and the STUN/TURN servers, are kept in
+`preferences.json` directly under Electron `userData`.
 
 Use `--profile <id-or-name>` / `--profile-path <dir>` (or `ZBTERM_PROFILE` /
 `ZBTERM_PROFILE_PATH`) to run multiple isolated profiles side by side, or
@@ -237,11 +269,14 @@ running and you don't name a profile, the app asks you to pick or create one.
 ## Sharing <a name="sharing"></a>
   
 A host creates a share link for a live session (`share.createLink`); a viewer
-joins it (`share.join`). Both sides connect over a Hyperswarm topic derived
-from the link, dial the host's DHT public key directly, and speak an
+joins it (`share.join`). The link is a `zbterm://join/…` invite that names its
+network. On Pear, both sides connect over a Hyperswarm topic derived from the
+link, the viewer dials the host's DHT public key directly, and they speak an
 encrypted control protocol for join requests, approvals, terminal data, and
-input. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how sharing
-works internally.
+input; on Freenet, see [Freenet](#freenet). A session is shared over one
+network at a time, but different sessions (and joins) can use Pear and
+Freenet at once. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how
+sharing works internally.
 
 ### Link Options <a name="link-options"></a>
 
@@ -250,11 +285,12 @@ server's `POST /sessions/:sessionId/share`):
 
 | Option        | Values                    | Default                    | Meaning |
 | ------------- | ------------------------- | --------------------------- | ------- |
+| `backend`     | `'pear'` \| `'freenet'`  | the build's default (`pear`) | Network to share over (an `id` from `share.backends`). A session already shared over another network is refused with `E_BACKEND_UNAVAILABLE`. |
 | `type`        | `'single'` \| `'group'`   | `'single'`                  | `single` links are consumed after one viewer joins; `group` links allow multiple concurrent viewers. |
-| `maxViewers`  | integer                   | 1 (`single`) / 8 (`group`)  | Cap on concurrent viewers for a `group` link. |
+| `maxViewers`  | integer, 1–99             | 1 (`single`) / 99 (`group`) | Cap on concurrent viewers for a `group` link. |
 | `autoJoin`    | boolean                   | `true`                      | Whether a join request is auto-approved or requires host approval (see `share:approval-pending`). |
 | `caps`        | bitmask (see below)       | derived from other options  | Explicit permission bitmask; overrides the individual flags below if set. |
-| `sendInput`/`input` | boolean             | `true`                      | Whether the viewer is granted `SEND_INPUT`. |
+| `sendInput`   | boolean                   | `true`                      | Whether the viewer is granted `SEND_INPUT`. Typing still needs keyboard sharing turned on for the session (`share.setInputMode`). |
 | `quickCatchup`| boolean                   | `true`                      | Whether the viewer gets a fast-forwarded backlog on join. |
 | `admin`       | boolean                   | `false`                     | Grants `ADMIN` cap. |
 
@@ -450,7 +486,8 @@ npm start -- --debug-server
 
 Listens on `http://127.0.0.1:17077` by default (`--debug-server-port <port>`
 or `ZBTERM_DEBUG_SERVER_PORT` to change it). All routes except a few
-renderer/popup ones require the engine to be initialized.
+renderer/popup/window ones require the engine to be initialized. While the
+debug server runs, the npm update check is off.
 
 ```sh
 curl -s -X POST http://127.0.0.1:17077/sessions \
@@ -479,10 +516,10 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | `GET /sessions/:sessionId` | Session summary. |
 | `POST /sessions/:sessionId/switch` | Select a session (without opening it live). |
 | `POST /sessions/:sessionId/live` | Open a session live (pauses playback if needed). |
-| `POST /sessions/:sessionId/extend` | Resize/extend a session. |
+| `POST /sessions/:sessionId/extend` | Reopen an ended session live (`session.extend`). |
 | `POST /sessions/:sessionId/input` | Send input to a specific session. |
 | `POST /sessions/:sessionId/resize` | Resize (`cols`, `rows`). |
-| `POST /sessions/:sessionId/share` | Create a share link — see [Link Options](#link-options). |
+| `POST /sessions/:sessionId/share` | Create a share link — see [Link Options](#link-options) (`type`, `maxViewers`, `caps`, `autoJoin`, `backend`; `inputMode` first calls `share.setInputMode`). |
 | `GET /sessions/:sessionId/shares` | List share links for a session. |
 | `DELETE /sessions/:sessionId/shares/:linkId` | Revoke a share link. |
 | `POST /sessions/:sessionId/approvals/:requestId/approve` \| `/deny` | Approve/deny a pending join request. |
@@ -492,7 +529,14 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | `POST /invoke` | Call any `engine.invoke(method, args)` method directly, e.g. `{"method":"share.diagnostics"}`. |
 | `GET /popups` \| `POST /popups/:popupId/actions/:action` | Renderer popup inspection/control. |
 | `GET /renderer/layout` | Renderer layout snapshot. |
+| `POST /renderer/command` | Run a renderer debug command. |
+| `GET /window/bounds` \| `POST /window/bounds` | Read or set the window position and size. |
+| `GET /debug/worker-pid` | PID of the Bare worker. |
 | `GET /sessions/:sessionId/input/diagnostics` | Input pipeline diagnostics. |
+
+[`docs/debug_server_howto.md`](docs/debug_server_howto.md) has the request
+and response details for every route, the popup actions and the renderer
+commands.
 
 ## Environment Variables <a name="env-vars"></a>
 
@@ -508,6 +552,13 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | `ZBTERM_INVITE_V2` | core (`engine/invite.js`) | `1` makes Pear share links use the v2 invite shape (`b`, `peer`, `route`) while keeping the v1 fields beside it. Default: off, so Pear links stay v1 and released builds can join them. A link for any other backend is always v2. Read each time a link is made. The core runs in a Bare worker whose environment is not reliably inherited from the app, so treat it as a development switch. |
 | `ZBTERM_ELECTRON_USER_DATA` | app | Custom Chromium/Electron user data dir. |
 | `ZXTERM_CORE_BIN` | app | Path to a `zxterm-core` sidecar binary to run instead of the installed or staged one, e.g. a debug build from the `zxterm/` submodule. |
+| `ZBTERM_NO_UPDATE_CHECK` | app (npm installs) | `1` turns off the npm registry update check (same as `--no-update-check`). |
+| `ZBTERM_REGISTRY_URL` | app (npm installs) | Registry to ask for updates instead of registry.npmjs.org, e.g. a local fake for tests. Setting it also keeps the check on under `--debug-server`. |
+| `ZBTERM_CHANNEL` | app | Force the install channel: `npm`, `packaged` or `dev`. Default: detected from where the app runs. |
+| `ZBTERM_GITHUB_KEYS_BASE` | `zxterm-core` sidecar | Base URL for `<user>.keys` lookups instead of github.com, for tests. |
+| `ZBTERM_SKIP_POSTINSTALL` | `npm install` (postinstall) | `1` skips the postinstall step entirely. |
+| `ZBTERM_KEEP_ALL_PREBUILDS` | `npm install` (postinstall) | `1` keeps native prebuilds for every platform instead of pruning to this one. |
+| `ZBTERM_ALLOW_HOST_NODE_LINKAGE` | `npm install` (postinstall) | `1` installs even when a native module is linked against the host Node instead of Electron (it will crash at runtime). |
 | `ZBTERM_DEBUG` | app | `1` enables verbose packaged debug logging (same as `--debug`). |
 | `ZBTERM_DEBUG_SERVER` | app | `1` starts the debug REST API (same as `--debug-server`). |
 | `ZBTERM_DEBUG_SERVER_PORT` | app | Port for the debug REST API. |
@@ -526,18 +577,22 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | Flag | Meaning |
 | ---- | ------- |
 | `--storage <dir>` | Custom ZBTerm data directory. Default: app user data dir. |
+| `--electron-user-data <dir>` | Custom Chromium/Electron user data dir (same as `ZBTERM_ELECTRON_USER_DATA`). Default: a per-process temp dir. |
 | `--profile <id-or-name>` | Open a specific ZBTerm profile by id or name. Default: auto-select the default profile when possible, otherwise show the picker. |
 | `--profile-path <dir>` | Open an explicit ZBTerm profile data directory. Default: none. |
 | `--backend <pear\|freenet\|none>` | Limit network sharing to one backend, or `none` for local-only. It only narrows what the build carries. Default: every backend in this build. |
 | `--freenet-node <url>` | The WebSocket URL of the Freenet node the Freenet backend talks to. Wins over `ZBTERM_FREENET_NODE`. Default: `ws://127.0.0.1:7509/v1/contract/command`. |
 | `--ice-servers <list>` | STUN/TURN servers for Freenet's direct connections, comma-separated ICE URLs; `''` for none (host candidates only). Wins over `ZBTERM_ICE_SERVERS`; a non-empty "STUN/TURN servers" setting wins over it. Default: Google and Cloudflare STUN. |
 | `--no-updates` | Accepted for compatibility with older launchers; has no effect. |
+| `--no-update-check` | Start without the npm registry update check. Default: on for npm installs. |
 | `--debug` | Enable verbose packaged debug logging. Default: off. |
 | `--debug-server` | Start the localhost debug REST API. Default: off. |
 | `--debug-server-port <port>` | Port for `--debug-server`. Default: `17077`. |
 | `--devtools` | Open renderer developer tools on startup. Default: off. |
-| `--disable-gpu` | Start without Chromium GPU acceleration (useful headless). Default: GPU enabled. |
-| `--help` | Print CLI flag help and exit without starting the UI. |
+| `--no-sandbox` | Start without the Chromium sandbox. Default: sandbox enabled. |
+| `--disable-gpu` | Start without Chromium GPU acceleration (useful headless). Without WebGL2 the terminal falls back to the DOM renderer on its own. Default: GPU enabled. |
+| `--ozone-platform <platform>` / `--ozone-platform-hint <platform>` | Pass Chromium's ozone platform (hint), e.g. `wayland` or `x11`. Default: Electron's. |
+| `--help`, `-h` | Print CLI flag help and exit without starting the UI. |
 
 ## For Developers <a name="developers"></a>
 
@@ -562,7 +617,8 @@ ZBTERM_FORGE_OUT_DIR=<dir> npm run make  # write into a scratch dir instead of o
 
 Signed, distributable builds are cut by the `Build Release` GitHub Actions
 workflow (manual dispatch), gated on a `release` environment holding these
-secrets:
+secrets. Only its Linux jobs run today: the macOS jobs are paused and the
+Windows job is disabled until the sidecar has a Windows build.
 
 | Secret | Platform | Notes |
 | ------ | -------- | ----- |
