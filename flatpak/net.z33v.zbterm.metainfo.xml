@@ -12,8 +12,8 @@
   <metadata_license>MIT</metadata_license>
   <project_license>Apache-2.0</project_license>
 
-  <developer id="com.passcall">
-    <name>PassCall Advanced Technologies Ltd.</name>
+  <developer id="net.z33v">
+    <name>Zeev Kotzer</name>
   </developer>
 
   <content_rating type="oars-1.1"/>

@@ -675,9 +675,8 @@ redistribute it, including commercially, subject to the terms of that license.
 
 Contributions are accepted under the same license, per Apache-2.0 §5.
 
-The names "ZBTerm", "PassCall" and "PassCall Advanced Technologies", and the
-associated icons, logos and visual identity, are trademarks of PassCall
-Advanced Technologies Ltd. Apache-2.0 §6 grants no trademark rights, so a
+The name "ZBTerm" and its associated icons, logos and visual identity are
+trademarks of Zeev Kotzer. Apache-2.0 §6 grants no trademark rights, so a
 redistributed fork should carry its own name and icons.
 
 Third-party components (Electron, Chromium, Node.js, Bare, the Pear runtime,
