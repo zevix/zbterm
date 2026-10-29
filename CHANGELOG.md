@@ -21,7 +21,7 @@ and the project uses [semantic versioning](https://semver.org/) as described in
 
 ### Changed
 
-- The logo is now half Pear pear, half Freenet rabbit, and the splash screen credits "Written by
-  Zeev Kotzer".
+- The logo is now the left half of the Freenet rabbit and the right half of the Pear pear, and the
+  splash screen credits "Written by Zeev Kotzer".
 - `docs/` updated to the current architecture: both share backends, the `zxterm-core` sidecar,
   and distribution without an OTA updater.
