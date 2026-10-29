@@ -597,3 +597,13 @@ test('the startup logo text ends on the last row without scrolling', async (t) =
     'no line feed after the last line: it sits on the bottom row and would scroll'
   )
 })
+
+test('the WebGL renderer is optional: it loads after open(), inside its try', (t) => {
+  const js = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8')
+  const open = js.indexOf('state.term.open(els.terminal)')
+  const load = js.indexOf('state.term.loadAddon(webgl)')
+  t.ok(open > 0 && load > open, 'the addon is loaded into an open terminal')
+  const tryAt = js.lastIndexOf('try {', load)
+  t.ok(tryAt > open, 'inside the try that falls back to the DOM renderer')
+  t.ok(js.includes('webgl.onContextLoss('), 'a lost context also falls back')
+})

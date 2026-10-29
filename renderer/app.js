@@ -739,15 +739,25 @@
     state.liveFontSize = state.term.options.fontSize
     state.fit = new FitAddon()
     state.term.loadAddon(state.fit)
+    state.term.open(els.terminal)
+    // After open(): the addon starts WebGL when it is loaded into an open
+    // terminal, so a machine without WebGL2 throws here, inside the try, and
+    // keeps the DOM renderer. Loaded before open(), the same error escaped
+    // from open() and failed the whole startup.
     if (WebglAddon) {
       try {
-        state.webgl = new WebglAddon()
-        state.term.loadAddon(state.webgl)
+        const webgl = new WebglAddon()
+        state.term.loadAddon(webgl)
+        webgl.onContextLoss(() => {
+          webgl.dispose()
+          if (state.webgl === webgl) state.webgl = null
+        })
+        state.webgl = webgl
       } catch (err) {
+        state.webgl = null
         console.warn('webgl renderer unavailable, using DOM renderer', err)
       }
     }
-    state.term.open(els.terminal)
     enablePausedTerminalSelection()
     state.term.parser.registerOscHandler(52, copyFromOsc52)
     els.terminal.addEventListener('keydown', noteTerminalGesture, true)
