@@ -4620,21 +4620,22 @@
   // A radio group over every backend the core reports, or null when it
   // reports at most one or none is usable (the core then shares over its
   // default). A broken backend is a disabled radio with the core's reason as
-  // its text (D-14). Once a backend is active the core serves every share
-  // over it, so the group shows it and is disabled.
+  // its text (D-14). Backends can run side by side, so the choice stays open
+  // whichever ones are already in use.
   function shareBackendPicker(settings) {
     const usable = usableShareBackends()
     const listed = (state.shareBackends && state.shareBackends.backends) || []
     if (!usable || !usable.length || listed.length < 2) return null
     const info = state.shareBackends
-    const active = info.active || null
-    settings.backend = active || settings.backend || info.default || usable[0].id
+    const usableIds = usable.map((backend) => backend.id)
+    if (!usableIds.includes(settings.backend)) {
+      settings.backend = usableIds.includes(info.default) ? info.default : usableIds[0]
+    }
 
     const group = document.createElement('fieldset')
     group.className = 'share-backend-picker'
-    group.disabled = !!active
     const legend = document.createElement('legend')
-    legend.textContent = active ? 'Network (in use)' : 'Network'
+    legend.textContent = 'Network'
     group.append(legend)
     for (const backend of listed) {
       const broken = backend.state !== 'available'

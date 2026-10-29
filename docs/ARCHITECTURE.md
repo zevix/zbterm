@@ -992,10 +992,10 @@ Share networking sits behind one `ShareBackend` interface
 `connection`/`debug`/`error` events). The interface never exposes a mux, a
 socket or a swarm. `engine/share-manager.js::ShareManager` owns everything
 above it — link records, caps, approval, the `zbterm/ctl` message set,
-identity, live encryption, rekey and sealed input — and holds at most one
-backend, created on the first `share.createLink` or `share.join`. One backend
-is active per run; a call naming a different one while the first has shares
-or joins fails with `E_BACKEND_UNAVAILABLE`.
+identity, live encryption, rekey and sealed input — and starts each backend on
+the first `share.createLink` or `share.join` that needs it. Several backends can
+run at once: each share and each join uses its own, and a session is shared
+over one backend at a time (`E_BACKEND_UNAVAILABLE` otherwise).
 
 The registry, `engine/backends/index.js`, is the only file outside a backend
 directory that reaches into one (`test/backend-boundary.test.js`). It loads

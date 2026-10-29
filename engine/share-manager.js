@@ -96,8 +96,8 @@ class ShareManager extends EventEmitter {
     // relay, channels, history replication) lives behind it. None is held
     // until the first createLink() or join() asks for one (_ensureBackend):
     // the registry decides which backends this build carries, `opts.limit`
-    // (the host's --backend / ZBTERM_BACKEND) narrows that set, and only one
-    // backend is active at a time.
+    // (the host's --backend / ZBTERM_BACKEND) narrows that set, and each
+    // share or join starts the backend it names (several may run at once).
     this._registry = opts.registry || backendRegistry
     this._backendLimit = opts.limit === undefined || opts.limit === null ? '' : String(opts.limit)
     // Constructor options for every backend the registry creates, also handed
@@ -112,9 +112,13 @@ class ShareManager extends EventEmitter {
       ...opts.backendOptions
     }
     this._iceServers = null
-    this._backend = null
-    this._backendId = null
-    this._backendListeners = null
+    // Every backend activated this run, by id: { backend, listeners }. Each
+    // share and each join runs over its own backend, so a Pear share and a
+    // Freenet join (or the other way round) run side by side.
+    this._backends = new Map()
+    // The backend each connection arrived on, for the per-connection calls
+    // (history, identity keys) that must go to that backend.
+    this._connBackends = new WeakMap()
     this._closed = false
     // An injected backend (opts.backend) bypasses the registry and the limit:
     // it is the only backend this manager will ever use, it serves an invite
@@ -169,8 +173,42 @@ class ShareManager extends EventEmitter {
   }
 
   _backendIdOf(backend) {
+    for (const [id, entry] of this._backends) {
+      if (entry.backend === backend) return id
+    }
     const { id } = backend.describe()
     return id
+  }
+
+  // The backend reported as active (backendsInfo().active, diagnostics()):
+  // the default one when it is running, else the first activated. Null while
+  // none is. Reading it never activates anything.
+  get _backend() {
+    const entry = this._primaryEntry()
+    return entry ? entry[1].backend : null
+  }
+
+  get _backendId() {
+    const entry = this._primaryEntry()
+    return entry ? entry[0] : null
+  }
+
+  _primaryEntry() {
+    if (!this._backends.size) return null
+    let preferred = null
+    try {
+      preferred = this._defaultBackendId()
+    } catch {}
+    if (preferred && this._backends.has(preferred)) {
+      return [preferred, this._backends.get(preferred)]
+    }
+    return this._backends.entries().next().value
+  }
+
+  // The backend a connection arrived on; the reported one for a connection
+  // this manager never saw arrive.
+  _backendOfConn(conn) {
+    return (conn && this._connBackends.get(conn)) || this.backend
   }
 
   _defaultBackendId() {
@@ -181,10 +219,6 @@ class ShareManager extends EventEmitter {
   // What the registry selects from: the host's limit.
   _selection() {
     return { limit: this._backendLimit }
-  }
-
-  _busy() {
-    return this.hostShares.size > 0 || this.joins.size > 0
   }
 
   // Throws E_BACKEND_UNSUPPORTED, naming the backend, when `id` cannot be used
@@ -201,9 +235,9 @@ class ShareManager extends EventEmitter {
     )
   }
 
-  // The synchronous part of _ensureBackend: returns the backend for `id` when
-  // it is already active or can be activated without stopping another one,
-  // and null when a swap is needed. Throws like _ensureBackend.
+  // Returns the backend for `id` (the default when empty), activating it if
+  // it is not running yet. Throws E_BACKEND_UNSUPPORTED when this build
+  // cannot use it.
   _backendNow(id) {
     if (this._injected) return this._injected
     const wanted = id || this._defaultBackendId()
@@ -214,19 +248,10 @@ class ShareManager extends EventEmitter {
         { backend: null, limitedBy: this._backendLimit || null }
       )
     }
-    if (this._backend && this._backendId === wanted) return this._backend
+    const running = this._backends.get(wanted)
+    if (running) return running.backend
     this._assertBackendUsable(wanted)
-    if (this._backend) {
-      if (this._busy()) {
-        throw new EngineError(
-          CODES.E_BACKEND_UNAVAILABLE,
-          `The '${this._backendId}' share backend is in use; restart ZBTerm to share or join over '${wanted}'`,
-          { backend: wanted, active: this._backendId }
-        )
-      }
-      return null
-    }
-    this._attachBackend(
+    return this._attachBackend(
       this._registry.create(wanted, {
         ...this._selection(),
         options: {
@@ -236,24 +261,20 @@ class ShareManager extends EventEmitter {
       }),
       wanted
     )
-    return this._backend
   }
 
-  // One backend is active per run (R-6). `id` empty means the default. A
-  // different id while shares or joins exist raises E_BACKEND_UNAVAILABLE;
-  // with none, the old backend is stopped and the new one started.
+  // Several backends may run at once (this replaces R-6's one per run): each
+  // share and each join uses the backend it names. `id` empty means the
+  // default.
   async _ensureBackend(id) {
-    for (;;) {
-      const ready = this._backendNow(id)
-      if (ready) return ready
-      await this._detachBackend()
-    }
+    return this._backendNow(id)
   }
 
   _attachBackend(backend, id) {
     const listeners = {
       connection: (conn, info) => {
         try {
+          this._connBackends.set(conn, backend)
           this._handleConnection(conn, info)
         } catch (err) {
           this.emit('error', EngineError.from(err))
@@ -262,9 +283,7 @@ class ShareManager extends EventEmitter {
       error: (err) => this.emit('error', EngineError.from(err)),
       debug: ({ event, details }) => this._debug(event, details)
     }
-    this._backend = backend
-    this._backendId = id || this._backendIdOf(backend)
-    this._backendListeners = listeners
+    this._backends.set(id || backend.describe().id, { backend, listeners })
     // Inbound admission: accept iff hosting anything (accept-all, unchanged
     // from today). The backend additionally admits any key an active join is
     // dialing - see PearBackend._ensureSwarm.
@@ -281,17 +300,18 @@ class ShareManager extends EventEmitter {
         }
       })
       .catch((err) => this.emit('error', EngineError.from(err)))
+    return backend
   }
 
-  async _detachBackend() {
-    const backend = this._backend
-    if (!backend) return
-    const listeners = this._backendListeners || {}
-    this._backend = null
-    this._backendId = null
-    this._backendListeners = null
-    for (const [name, fn] of Object.entries(listeners)) backend.off(name, fn)
-    await backend.stop()
+  async _detachBackends() {
+    const entries = Array.from(this._backends.values())
+    this._backends.clear()
+    await Promise.all(
+      entries.map(async ({ backend, listeners }) => {
+        for (const [name, fn] of Object.entries(listeners)) backend.off(name, fn)
+        await backend.stop()
+      })
+    )
   }
 
   // share.backends (R-7). Activates nothing.
@@ -310,6 +330,7 @@ class ShareManager extends EventEmitter {
         ],
         default: descriptor.id,
         active: descriptor.id,
+        running: [descriptor.id],
         limitedBy: null
       }
     }
@@ -318,6 +339,8 @@ class ShareManager extends EventEmitter {
       backends: resolved.backends,
       default: resolved.default,
       active: this._backendId,
+      // Every backend running this run; `active` is one of them.
+      running: Array.from(this._backends.keys()),
       limitedBy: resolved.limitedBy
     }
   }
@@ -348,9 +371,8 @@ class ShareManager extends EventEmitter {
   // setIceServers has no use for them.
   setIceServers(iceServers) {
     this._iceServers = Array.isArray(iceServers) ? iceServers.map(String) : null
-    const backend = this._backend
-    if (backend && typeof backend.setIceServers === 'function') {
-      backend.setIceServers(this._iceServers)
+    for (const { backend } of this._backends.values()) {
+      if (typeof backend.setIceServers === 'function') backend.setIceServers(this._iceServers)
     }
     return { iceServers: this._iceServers }
   }
@@ -358,7 +380,7 @@ class ShareManager extends EventEmitter {
   async close() {
     this._closed = true
     await this._closeCoreSessions()
-    await this._detachBackend()
+    await this._detachBackends()
     this.hostShares.clear()
     this.joins.clear()
     this._connPeers.clear()
@@ -402,9 +424,20 @@ class ShareManager extends EventEmitter {
     // `opts.backend` names the backend to share over; the default otherwise.
     // Resolved before anything is recorded, so a build without that backend
     // (or with none) leaves no half-made share behind.
-    const backend = this._backendNow(opts.backend) || (await this._ensureBackend(opts.backend))
+    const backend = this._backendNow(opts.backend)
     const runtime = this.engine.sessions.get(sessionId)
     if (!runtime) throw new EngineError(CODES.E_INTERNAL, 'Only live sessions can be shared')
+    // A session is shared over one backend at a time: its links, peers and
+    // (on Freenet) its core state all live on that backend.
+    const existing = this.hostShares.get(sessionId)
+    if (existing && existing.backend && existing.backend !== backend) {
+      const current = this._backendIdOf(existing.backend)
+      throw new EngineError(
+        CODES.E_BACKEND_UNAVAILABLE,
+        `This session is already shared over '${current}'; stop sharing it to share it over '${this._backendIdOf(backend)}'`,
+        { backend: this._backendIdOf(backend), active: current }
+      )
+    }
     this._debug('host:create-link:start', { sessionId, type: opts.type, autoJoin: opts.autoJoin })
 
     const linkId = crypto.randomBytes(16).toString('hex')
@@ -419,6 +452,8 @@ class ShareManager extends EventEmitter {
     if (!share) {
       share = {
         sessionId,
+        // The backend this session is shared over.
+        backend,
         peers: new Set(),
         links: new Map(),
         pendingApprovals: new Map(),
@@ -508,7 +543,8 @@ class ShareManager extends EventEmitter {
   async listLinks(sessionId) {
     const runtime = this.engine.sessions.get(sessionId)
     if (!runtime) return []
-    const backend = this.backend
+    const share = this.hostShares.get(sessionId)
+    const backend = (share && share.backend) || this.backend
     const out = []
     for await (const node of runtime.store.meta.createReadStream({ gt: 'link/', lt: 'link0' })) {
       out.push({
@@ -553,7 +589,7 @@ class ShareManager extends EventEmitter {
     await runtime.store.meta.put(`link/${link.linkId}`, next)
     const share = this.hostShares.get(link.sessionId)
     if (share && share.links.has(link.linkId)) share.links.set(link.linkId, next)
-    if (share && !link.revoked && this._backend === backend) {
+    if (share && !link.revoked && share.backend === backend) {
       await backend
         .announce(link.linkId, { route, tag: { sessionId: link.sessionId } })
         .catch((err) => this._debug('host:announce:error', { message: err && err.message }))
@@ -567,7 +603,7 @@ class ShareManager extends EventEmitter {
   _inviteFor(backend, linkId, route) {
     return encodeLink({
       v: VERSION,
-      b: this._backendId || this._backendIdOf(backend),
+      b: this._backendIdOf(backend),
       linkId,
       peer: b4a.toString(backend.localPeerKey(), 'hex'),
       route,
@@ -586,8 +622,9 @@ class ShareManager extends EventEmitter {
     // fails: in-band (host:join-deny) on a backend that stays reachable by
     // peer key after withdraw, by a backend error on one that does not. A
     // failure here is reported, never thrown: the link is revoked either way.
-    // `_backend`: revoking never activates a backend.
-    const backend = this._backend
+    // The share's backend: revoking never activates one.
+    const owner = this.hostShares.get(sessionId)
+    const backend = (owner && owner.backend) || this._backend
     if (backend) {
       try {
         await backend.withdraw(linkId)
@@ -688,7 +725,7 @@ class ShareManager extends EventEmitter {
     const invite = decodeLink(uri)
     // The invite's `b` decides the backend. One this build lacks raises
     // E_BACKEND_UNSUPPORTED naming it, before any join state exists.
-    const backend = this._backendNow(invite.b) || (await this._ensureBackend(invite.b))
+    const backend = this._backendNow(invite.b)
     this._debug('viewer:join:start', {
       linkId: invite.linkId,
       topic: invite.topic,
@@ -1092,7 +1129,13 @@ class ShareManager extends EventEmitter {
             : 0
       })),
       // The active backend's own report; null while none is active.
-      backend: active ? { ...network, id: this._backendId, health: active.health() } : null
+      backend: active ? { ...network, id: this._backendId, health: active.health() } : null,
+      // Every running backend's report, the active one included.
+      backends: Array.from(this._backends, ([id, { backend }]) => ({
+        ...backend.diagnostics(),
+        id,
+        health: backend.health()
+      }))
     }
   }
 
@@ -1128,7 +1171,8 @@ class ShareManager extends EventEmitter {
     // Freenet path (K14): the core answers the join on `zxterm/ctl` and, since
     // K17, serves the session's history on its own `zxterm/history` channel:
     // nothing is left for this process to do on the connection.
-    if (this._backend && typeof this._backend.sessionCore === 'function') return
+    const connBackend = this._backendOfConn(conn)
+    if (connBackend && typeof connBackend.sessionCore === 'function') return
     conn.onChannel(PROTOCOL, (id) => {
       const linkId = b4a.toString(id, 'hex')
       const sessionId = this._linkIndex.get(linkId)
@@ -1176,7 +1220,7 @@ class ShareManager extends EventEmitter {
     // spike 2(b); the backend keeps it idempotent per (connection x session)
     // so a second link for the same session on the same connection doesn't
     // double-replicate.
-    this.backend.serveHistory(conn, runtime.store)
+    this._backendOfConn(conn).serveHistory(conn, runtime.store)
 
     const peer = {
       conn,
@@ -1558,7 +1602,7 @@ class ShareManager extends EventEmitter {
       sessionId: sessionId || '',
       challengeId,
       nonce,
-      verifierDhtKey: hex(this.backend.localPeerKey()),
+      verifierDhtKey: hex(this._backendOfConn(conn).localPeerKey()),
       proverDhtKey: hex(conn && conn.remotePeerKey),
       role
     }
@@ -1595,7 +1639,7 @@ class ShareManager extends EventEmitter {
       challengeId: message.challengeId,
       nonce: message.nonce,
       verifierDhtKey: hex(conn && conn.remotePeerKey),
-      proverDhtKey: hex(this.backend.localPeerKey()),
+      proverDhtKey: hex(this._backendOfConn(conn).localPeerKey()),
       role: message.role
     }
     signChallenge(secretKey, challenge, this.engine.core).then(
@@ -2198,7 +2242,7 @@ class ShareManager extends EventEmitter {
     remote.message = state.message
     // Attaches history replication to the join's connection and starts the
     // full-range download of both the log and the meta core.
-    state.history = this.backend.attachHistory(state.conn, remote.store, {
+    state.history = (state.backend || this.backend).attachHistory(state.conn, remote.store, {
       logKey: message.logKey,
       metaKey: message.metaKey
     })
@@ -3093,6 +3137,7 @@ class ShareManager extends EventEmitter {
         // Sessions of this device's own are served on it as on any other.
         if (!this._hostHandled.has(conn)) {
           this._hostHandled.add(conn)
+          this._connBackends.set(conn, state.backend)
           this._handleHostConnection(conn, { client: true })
         }
         return conn
@@ -3100,7 +3145,7 @@ class ShareManager extends EventEmitter {
       await delay(50)
     }
     throw new EngineError(CODES.E_HOST_UNREACHABLE, 'The connection to the share host is gone', {
-      backend: this._backendId
+      backend: this._backendIdOf(state.backend)
     })
   }
 
@@ -3172,12 +3217,15 @@ class ShareManager extends EventEmitter {
 
   // The seam bridge a joined Freenet session's history is read through when
   // nothing connects this run to its host (engine/index.js::
-  // _catchUpJoinedCore): the Freenet backend's, started here when no backend
-  // is active yet. Null when another backend is active (a swap would end its
-  // shares) or this build has no Freenet backend.
+  // _catchUpJoinedCore): the Freenet backend's, started here if it is not
+  // running yet. Null when this build has no Freenet backend.
   async coreHistoryBridge() {
     if (this._closed) return null
-    let backend = this._backend
+    let backend = null
+    for (const entry of this._backends.values()) {
+      if (typeof entry.backend.sessionCore === 'function') backend = entry.backend
+    }
+    if (!backend && this._injected) backend = this._injected
     if (!backend) {
       try {
         backend = await this._ensureBackend('freenet')
