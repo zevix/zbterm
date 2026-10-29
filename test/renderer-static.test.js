@@ -456,7 +456,8 @@ test('share wizard offers a backend picker when the core reports several, broken
     "with the core's reason as its text"
   )
   t.ok(html.includes('.share-backend-broken'), 'index.html styles the broken row')
-  t.ok(js.includes('group.disabled = !!active'), 'disabled once a backend is active')
+  t.absent(js.includes('group.disabled'), 'never locked: backends run side by side')
+  t.absent(js.includes('Network (in use)'), 'and never labelled as taken')
   t.ok(js.includes("input.type = 'radio'"), 'it is a radio group')
   t.ok(
     js.includes('body.replaceChildren(...(picker ? [picker, form.root] : [form.root]))'),

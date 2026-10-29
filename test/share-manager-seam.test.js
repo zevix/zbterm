@@ -61,7 +61,9 @@ test('golden: diagnostics() key set', async (t) => {
     'hostShares',
     'joins',
     // B6 (R-7): appended; every key above keeps its place and meaning.
-    'backend'
+    'backend',
+    // Appended: every running backend's report (several may run at once).
+    'backends'
   ])
   t.is(diag.backend.id, 'pear', 'the active backend reports itself')
   t.is(diag.backend.hostSwarm, diag.hostSwarm, 'the top-level keys alias the backend report')

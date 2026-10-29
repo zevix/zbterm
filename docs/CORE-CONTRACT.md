@@ -84,9 +84,10 @@ Two codes belong to share-backend selection (section 5.1, "Share backends"):
   this run: the build does not carry it, it is broken, or the launch limit
   excludes it. The message names the backend and `details.backend` is its id. It
   is also what every share call answers when no backend is available at all.
-- `E_BACKEND_UNAVAILABLE` — the backend exists, but a different one is active
-  and has shares or joins. One backend is active per run; the message says to
-  restart. `details` is `{ backend, active }`.
+- `E_BACKEND_UNAVAILABLE` — `share.createLink` named a backend for a session
+  that is already shared over another one. A session is shared over one
+  backend at a time; the message says to stop sharing it first. `details` is
+  `{ backend, active }`, `active` being the backend the session is shared over.
   A backend may also answer with this code itself when it is present but
   cannot work right now: `details` is then `{ backend, detail }` (the Freenet
   backend's `detail` values are listed under "Share backends", section 5.1).
@@ -446,11 +447,13 @@ is a bitset; adapters should treat it as opaque unless they ship with the core.
 An empty `backends` means the core is local-only: a host should hide its share
 and join UI, and every share call rejects with `E_BACKEND_UNSUPPORTED`.
 
-One backend is active per run. It is created on the first `share.createLink`
-(its `backend` argument, else `default`) or `share.join` (the invite's backend
-decides). Asking for another one while shares or joins exist rejects with
-`E_BACKEND_UNAVAILABLE`; with none, the core stops the old backend and starts
-the new one.
+Backends can run side by side. Each one starts on the first `share.createLink`
+that names it (its `backend` argument, else `default`) or the first `share.join`
+of an invite for it, and stays running until the core closes. A session is
+shared over one backend at a time: `share.createLink` naming another backend for
+an already shared session rejects with `E_BACKEND_UNAVAILABLE`. `share.backends`
+lists the running ones in `running`; `active` is the default one when it is
+running, else the first started.
 
 **The Freenet backend** (`freenet`) is a proxy, in the worker, to the profile's
 `zxterm-core` sidecar (§3), which runs the Freenet contract client, the WebRTC
