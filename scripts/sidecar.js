@@ -10,10 +10,11 @@
 //   node scripts/sidecar.js stage <platform>-<arch> <binary>
 //       stages an already built binary as its npm package under
 //       npm/zxterm-core-<platform>-<arch>/.
-//   node scripts/sidecar.js inject
-//       writes the platform packages into package.json#optionalDependencies,
-//       pinned to this version. Only publish.yml runs it, on the copy it
-//       publishes: the committed manifest never lists them.
+//   node scripts/sidecar.js inject [<platform>-<arch>...]
+//       writes the platform packages (all targets by default) into
+//       package.json#optionalDependencies, pinned to this version. Only
+//       publish.yml runs it, on the copy it publishes: the committed
+//       manifest never lists them.
 'use strict'
 
 const fs = require('fs')
@@ -98,10 +99,14 @@ function build(triple = hostTriple()) {
   return stage(target, path.join(out, host.executableName(target.platform)))
 }
 
-function inject() {
+function inject(dirs) {
   const manifest = rootManifest()
   const deps = { ...manifest.optionalDependencies }
-  for (const target of TARGETS) {
+  const targets =
+    dirs && dirs.length
+      ? dirs.map((dir) => findTarget((t) => `${t.platform}-${t.arch}` === dir, dir))
+      : TARGETS
+  for (const target of targets) {
     deps[host.packageName(target.platform, target.arch)] = manifest.version
   }
   manifest.optionalDependencies = deps
@@ -117,12 +122,12 @@ function main(argv) {
     const target = findTarget((t) => `${t.platform}-${t.arch}` === args[0], args[0])
     console.log(stage(target, path.resolve(args[1])))
   } else if (command === 'inject') {
-    console.log(JSON.stringify(inject(), null, 2))
+    console.log(JSON.stringify(inject(args), null, 2))
   } else {
     console.error(
       'usage: node scripts/sidecar.js build [<rust-triple>]\n' +
         '       node scripts/sidecar.js stage <platform>-<arch> <binary>\n' +
-        '       node scripts/sidecar.js inject'
+        '       node scripts/sidecar.js inject [<platform>-<arch>...]'
     )
     process.exit(1)
   }

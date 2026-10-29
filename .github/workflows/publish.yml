@@ -32,6 +32,9 @@ jobs:
       id-token: write
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # The platforms this release ships. macOS is paused in packages.yml;
+      # add darwin-x64 darwin-arm64 back here when it is unpaused.
+      PLATFORMS: linux-x64 linux-arm64
     steps:
       - uses: holepunchto/actions/node-base@v1
         with:
@@ -40,6 +43,11 @@ jobs:
         run: git submodule update --init --depth 1 zxterm
       - name: npm with trusted publishing
         run: npm install -g npm@11
+      # With an NPM_TOKEN secret npm publishes with it; without one it falls
+      # back to trusted publishing, which only works once a package exists.
+      - name: npm token
+        if: env.NODE_AUTH_TOKEN != ''
+        run: echo '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' >> ~/.npmrc
       - name: Check the tag
         run: |
           version="$(node -p "require('./package.json').version")"
@@ -56,15 +64,15 @@ jobs:
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
           # Every binary is checked before anything is published, so a
-          # missing target (macOS builds are paused in packages.yml) stops
-          # the release instead of publishing some of the packages.
-          for dir in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+          # missing target stops the release instead of publishing some of
+          # the packages.
+          for dir in $PLATFORMS; do
             test -f "artifacts/zxterm-core-$dir/zxterm-core" || {
               echo "no zxterm-core binary for $dir; not publishing" >&2
               exit 1
             }
           done
-          for dir in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+          for dir in $PLATFORMS; do
             node scripts/sidecar.js stage "$dir" "artifacts/zxterm-core-$dir/zxterm-core"
             name="$(node -p "require('./npm/zxterm-core-$dir/package.json').name")"
             # A re-run after a failed zbterm publish skips what is already up.
@@ -76,5 +84,5 @@ jobs:
           done
       - name: Publish zbterm
         run: |
-          node scripts/sidecar.js inject
+          node scripts/sidecar.js inject $PLATFORMS
           npm publish --provenance --access public
