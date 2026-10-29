@@ -24,9 +24,11 @@ It complements:
 >   (`engine/backends/types.js`) that merges the transport, discovery and
 >   share-time history roles of §16, §17 and §14 (deviations `A-3`, `A-10`,
 >   `A-11` are listed in that file's header). A registry
->   (`engine/backends/index.js`) picks a backend per run; `ShareManager`
->   (`engine/share-manager.js`) holds one and owns everything above it (links,
->   caps, approval, live encryption, rekey, sealed input).
+>   (`engine/backends/index.js`) resolves which backends a build and launch
+>   allow; `ShareManager` (`engine/share-manager.js`) starts each one on the
+>   first share or join that needs it, can run several at once (one per
+>   session share), and owns everything above them (links, caps, approval,
+>   live encryption, rekey, sealed input).
 > - Two shipping backends: `pear` (`engine/backends/pear/`, Hyperswarm/HyperDHT)
 >   and `freenet` (`engine/backends/freenet/`, a proxy to the Rust `zxterm-core`
 >   sidecar, `D-34`/`D-35`). A third, `engine/backends/loopback.js`, is an

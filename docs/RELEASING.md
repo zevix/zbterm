@@ -6,7 +6,7 @@ was removed, `D-08`):
 | Channel    | Artifact                                           | Release path                                    |
 | ---------- | -------------------------------------------------- | ----------------------------------------------- |
 | npm        | `zbterm` and `@zbterm/zxterm-core-*` on npmjs.org  | `scripts/release-npm.sh --tag`, `publish.yml`   |
-| Installers | deb / rpm / AppImage / flatpak / snap / dmg / msix | `Build Release` workflow (manual), `./build_all.sh` |
+| Installers | AppImage / flatpak / snap / dmg / msix              | `Build Release` workflow (manual), `./build_all.sh` |
 
 Cutting an npm release does not cut an installer release, and vice versa. Both share
 `package.json#version`.
@@ -17,6 +17,12 @@ That workflow first runs `integrate.yml` (lint plus the cross-platform `npm inst
 matrix) and `packages.yml` (the sidecar builds) against the tag, refuses a tag that does not equal
 `v` + `package.json#version`, and only then publishes. The script itself never runs
 `npm publish` (its old `--publish` flag now exits with an error).
+
+> **macOS builds are paused** until sharing works on Linux: the macOS entries in `integrate.yml`
+> and `packages.yml` are commented out and the two macOS jobs in `build-release.yml` are
+> `if: false`. `publish.yml` checks every target's sidecar binary (Linux x64/arm64, macOS
+> x64/arm64) before publishing anything, so while macOS is paused a tag publishes nothing,
+> rather than only the Linux packages. Nothing has been published to npm yet.
 
 ## The zxterm-core sidecar
 
@@ -103,7 +109,8 @@ platform packages are up, re-run it: it skips the versions that are already publ
 The **Build Release** workflow (`.github/workflows/build-release.yml`) is started by hand (Actions >
 Build Release > Run workflow; it can also be called by another workflow) and only runs
 `electron-forge make`; nothing in it touches npm. Its jobs (prebuild, Linux x64, Linux arm64,
-macOS arm64, macOS x64, Windows) run in the GitHub `release` environment, which holds the signing
+macOS arm64, macOS x64, Windows; the macOS jobs are paused and the Windows job is disabled, see
+below) run in the GitHub `release` environment, which holds the signing
 secrets (listed in [`agent_docs/releases.md`](../agent_docs/releases.md)). Each platform job checks out the
 `zxterm/` submodule and runs `node scripts/sidecar.js build`, because a desktop build ships the
 sidecar staged under `npm/`.
@@ -111,9 +118,9 @@ sidecar staged under `npm/`.
 Locally, `./build_all.sh` builds the relay executables, this machine's sidecar, and the GUI
 packages for every platform whose sidecar is staged (installers via `make` for the host only).
 
-Known gap: Windows has no sidecar target (`scripts/sidecar.js#TARGETS`), so the Windows job's
-`node scripts/sidecar.js build` step fails with `unsupported target` and `build_all.sh` skips
-win32, until the sidecar gains a Windows build.
+Windows has no sidecar target (`scripts/sidecar.js#TARGETS`), so the Windows job is disabled
+(`if: false`; a Windows package would start without its core) and `build_all.sh` skips win32,
+until the sidecar gains a Windows build.
 
 ## Version policy
 

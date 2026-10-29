@@ -41,9 +41,9 @@ tradeoffs, and non-goals.
 
 ### 1.1 Core Principles
 
-- One running profile owns one core engine instance, one active share
-  backend (for Pear, one shared Hyperswarm/DHT identity), and one Rust
-  `zxterm-core` sidecar.
+- One running profile owns one core engine instance, the share backends it
+  has started (each at most once; for Pear, one shared Hyperswarm/DHT
+  identity), and one Rust `zxterm-core` sidecar.
 - Electron is a shell. It owns windows, renderer IPC, the debug HTTP server,
   supervision of the Bare worker, and native PTY processes.
 - The Bare worker is the core. It owns profiles, locks, account state,
@@ -104,8 +104,8 @@ terminal session.
 **The Bare core worker** is the architectural core. It owns the profile
 manager and profile locks, account and device state, Hypercore and Hyperbee
 data, session creation and lifecycle logic, encryption and key distribution,
-the session catalog, playback, sharing, and the one active share backend for
-the profile (§7). The main orchestrator inside the worker is the
+the session catalog, playback, sharing, and the profile's share backends
+(§7). The main orchestrator inside the worker is the
 `SessionEngine`, which exposes a single public command pattern — invoke a
 method with arguments — used identically by the renderer, the debug server,
 and any future entrypoint.
@@ -267,7 +267,7 @@ entrypoints.
 | `zxterm-core-host.js` | Shell module, loaded in the Bare worker | Locates the `zxterm-core` binary and spawns it on the worker's behalf |
 | `engine/worker.js` | Bare worker | Decodes frames, dispatches invokes, emits events, requests PTY ops |
 | `SessionEngine` | Bare worker | Main command/event API and orchestration (`engine/index.js`) |
-| `ShareManager` | Bare worker | Link lifecycle, caps, approval, join/host protocol, live encryption, sealed input; holds one share backend |
+| `ShareManager` | Bare worker | Link lifecycle, caps, approval, join/host protocol, live encryption, sealed input; starts and holds the share backends |
 | Share backends | Bare worker | `engine/backends/`: `pear` (Hyperswarm, relay fallback) and `freenet` (proxy to the sidecar), behind one `ShareBackend` contract |
 | Stores | Bare worker | Account, catalog, session log Hypercore, meta Hyperbee, snapshot cache |
 | Player | Bare worker | Sparse history fetch, decrypt, seek, frame/data playback |
@@ -1329,12 +1329,18 @@ while the core's mirror and store fell minutes behind; the PTY is therefore also
 paused past `engine/index.js::CORE_BACKLOG_LIMIT` (4 MiB not yet through the mirror or into
 the store) and resumed once both are below half (`_updateFlow`, one pause for both reasons;
 `engine/client.js::_setPtyPaused` likewise unions the shell's reasons, so the pipe's drain never
-resumes a PTY the core paused). *Viewers:* live output is sent without a queue limit
-on any backend, so a viewer whose channel reports backpressure stops receiving live data and,
-`engine/share-manager.js::LAG_RESYNC_MS` (500 ms) later, is sent the host's current screen
+resumes a PTY the core paused). *Viewers:* live output has no fixed queue limit
+on any backend. A channel reporting backpressure is only advisory (the message is still
+queued and delivered; on Pear `send` returns false once the socket holds about 16 KiB, which
+history replication on the same socket does routinely), so a viewer counts as lagging only
+after `engine/share-manager.js::LAG_BACKLOG_BYTES` (1 MiB) of live data went out with no clean
+send in between; a clean send resets that backlog and the retry delay. A lagging viewer stops
+receiving live data and, `LAG_RESYNC_MS` (500 ms) later, is sent the host's current screen
 (a bootstrap capped at `RESYNC_SCROLLBACK` lines) instead of what it missed; a screen that
-meets backpressure too doubles the wait up to `LAG_RESYNC_MAX_MS` (8 s). The viewer's
-recording is unaffected (history replicates separately); only its live view skips ahead.
+the link could not take counts towards the next lag and doubles its wait, up to
+`LAG_RESYNC_MAX_MS` (8 s); after a resync, live data always resumes. The viewer's
+recording is unaffected (history replicates separately); only its live view skips ahead. The
+queue a viewer can build is bounded by `LAG_BACKLOG_BYTES` plus one screen.
 
 **Freenet shares** (K14 of zxterm-core, `D-38`). On a Freenet share the lag rule
 above is the core's, not ZBTerm's: `engine/share-manager.js` hands each PTY chunk to the sidecar
@@ -1745,8 +1751,9 @@ firewalls are defense in depth.
 
 ### 13.2 Core Architectural Invariants
 
-1. One running profile owns one core engine, one active share backend
-   (for Pear, one shared swarm), and one `zxterm-core` sidecar.
+1. One running profile owns one core engine, at most one running instance
+   of each share backend (for Pear, one shared swarm), and one
+   `zxterm-core` sidecar. A session is shared over one backend at a time.
 2. The Bare worker owns the profile lock, account state, stores, crypto,
    sessions, playback, and sharing.
 3. `node-pty` remains in the Electron shell.
