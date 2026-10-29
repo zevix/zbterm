@@ -7535,11 +7535,25 @@
     )
   }
 
+  // Lets the UI react to a debug command before its state is read: the next
+  // animation frame, or 100 ms when none comes. Chromium sends no frames to a
+  // window that is covered, so with several instances on one display a plain
+  // requestAnimationFrame wait never ended and the debug request hung.
+  function debugSettle() {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, 100)
+      window.requestAnimationFrame(() => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
+  }
+
   async function debugClickButton(root, text) {
     const button = debugButtonByText(root, text)
     if (!button) throw new Error(`Debug button not found: ${text}`)
     button.click()
-    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+    await debugSettle()
     return debugModalState()
   }
 
@@ -7553,7 +7567,7 @@
     if (command === 'share-open') {
       window.__zbtermDebugShareAutoJoin = request.autoJoin === false ? false : undefined
       els.shareSession.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'share-select') {
@@ -7562,7 +7576,7 @@
       )
       if (!option) throw new Error(`Debug share option not found: ${request.type}`)
       option.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'share-backend') {
@@ -7572,7 +7586,7 @@
       if (!radio) throw new Error(`Debug share backend not found: ${request.backend}`)
       if (radio.disabled) throw new Error(`Debug share backend is disabled: ${request.backend}`)
       radio.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'share-submit') return await debugClickButton(modal(), 'Share')
@@ -7581,13 +7595,13 @@
       const button = buttons[buttons.length - 1]
       if (!button) throw new Error('Debug share copy button not found')
       button.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'share-done') return await debugClickButton(modal(), 'Done')
     if (command === 'join-open') {
       els.joinLink.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'join-paste') return await debugClickButton(modal(), 'Paste')
@@ -7595,7 +7609,7 @@
     if (command === 'identity-open') {
       // The settings entry point, so it ignores identity.setupDismissed.
       await openIdentityWizard()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'identity-peers') return identityBadgeState()
@@ -7605,7 +7619,7 @@
         name: request.name,
         comment: request.comment
       })
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return identityBadgeState()
     }
     if (String(command || '').startsWith('identity-')) {
@@ -7617,7 +7631,7 @@
       else if (command === 'identity-add-key') await wizard.addKey(request.keyPath)
       else if (command === 'identity-submit') await wizard.submit()
       else throw new Error(`Unknown debug renderer command: ${command}`)
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'modal-state') return debugModalState()

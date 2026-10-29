@@ -63,7 +63,8 @@ curl -s -X POST http://127.0.0.1:17177/sessions/current/input \
 ```
 
 Create a share link. The body is passed to `share.createLink` (`type`,
-`maxViewers`, `caps`, `autoJoin`; `inputMode` first calls `share.setInputMode`).
+`maxViewers`, `caps`, `autoJoin`, and `backend` to pick the network, e.g.
+`"freenet"`; `inputMode` first calls `share.setInputMode`).
 The response is the link record with its `zbterm://join/…` invite in `uri` (and
 again in `key`):
 
