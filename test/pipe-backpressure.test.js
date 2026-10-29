@@ -17,6 +17,7 @@ const test = require('brittle')
 const { PIPE_HIGH_WATER_MARK, tunePipe } = require('../engine/rpc/pipe')
 const ShareManager = require('../engine/share-manager')
 const registry = require('../engine/backends')
+const { VIEW_LIVE } = require('../engine/caps')
 
 // A raw duplex pair whose writes only ever complete when `drained()` lets
 // them - real backpressure, the way the removed test/backend-seam.test.js's
@@ -102,7 +103,7 @@ test('pipe threshold: genuine backlog past PIPE_HIGH_WATER_MARK still reports ba
 
 // --- 2. ShareManager resync recovery ---------------------------------------
 
-const { LAG_RESYNC_MS, LAG_RESYNC_MAX_MS } = ShareManager._test
+const { LAG_RESYNC_MS, LAG_RESYNC_MAX_MS, LAG_BACKLOG_BYTES } = ShareManager._test
 
 function harness() {
   const sessionId = 's1'
@@ -124,8 +125,9 @@ function harness() {
   }
   const manager = new ShareManager(engine, {})
   manager.on('error', () => {})
-  const peer = { conn: null, message: null, confirmed: true, linkId: 'l1', caps: 0 }
+  const peer = { conn: null, message: null, confirmed: true, linkId: 'l1', caps: VIEW_LIVE }
   const share = { sessionId, peers: new Set([peer]), liveSeq: 0 }
+  manager.hostShares.set(sessionId, share)
   return { manager, share, peer }
 }
 
@@ -152,32 +154,24 @@ test('resync recovery: a send() that is honest about capacity clears lagging on 
   t.is(peer.lagDelay, LAG_RESYNC_MS, 'the delay resets, it does not stay escalated')
 })
 
-test('resync recovery: the old 16 KiB threshold never lets a realistic resync through', async (t) => {
+test('resync recovery: a resync over a 16 KiB socket still resumes live data', async (t) => {
   const { manager, share, peer } = harness()
   peer.lagging = true
   peer.lagDelay = LAG_RESYNC_MS
-  // The exact bug: a channel that reports "full" for any single message of
-  // 16 KiB or more, which every resync here is (24 000 bytes of screen).
+  // A Pear socket: `send` reports backpressure for any message of 16 KiB or
+  // more, which every resync here is (24 000 bytes of screen). The screen is
+  // still delivered, so live data resumes after it.
   peer.message = { send: sizeGatedSend(16384) }
 
-  for (let i = 0; i < 4; i++) {
-    await manager._resyncPeer(share, peer)
-    if (peer.lagTimer) {
-      clearTimeout(peer.lagTimer)
-      peer.lagTimer = null
-    }
-  }
+  await manager._resyncPeer(share, peer)
 
-  t.ok(peer.lagging, 'still lagging after several attempts - this is the regression')
-  t.is(
-    peer.lagDelay,
-    LAG_RESYNC_MAX_MS,
-    `the delay only ever climbs, capped at LAG_RESYNC_MAX_MS (${LAG_RESYNC_MAX_MS} ms) - ` +
-      'a resync every 8 s, forever'
-  )
+  t.absent(peer.lagging, 'live data resumes after the screen')
+  t.absent(peer.lagTimer, 'no next resync is scheduled')
+  t.is(peer.lagDelay, LAG_RESYNC_MS * 2, 'the next lag, if one comes, waits longer')
+  t.ok(peer.backlogBytes > 0, 'the screen counts towards the next lag')
 })
 
-test('resync recovery: a resync that still meets real backpressure backs off, capped, and never drops the peer', async (t) => {
+test('resync recovery: a link with no room lags again only after a real backlog, backing off, capped', async (t) => {
   const { manager, share, peer } = harness()
   peer.lagging = true
   peer.lagDelay = LAG_RESYNC_MS
@@ -186,19 +180,50 @@ test('resync recovery: a resync that still meets real backpressure backs off, ca
   const delays = []
   for (let i = 0; i < 5; i++) {
     await manager._resyncPeer(share, peer)
-    delays.push(peer.lagDelay)
-    if (peer.lagTimer) {
-      clearTimeout(peer.lagTimer)
-      peer.lagTimer = null
+    t.absent(peer.lagging, 'each resync resumes live data')
+    let sent = 0
+    while (!peer.lagging) {
+      manager.broadcastData(share.sessionId, Buffer.alloc(16 * 1024))
+      sent += 16 * 1024
     }
+    t.ok(sent >= LAG_BACKLOG_BYTES - 64 * 1024, 'it lags again only once the backlog is real')
+    delays.push(peer.lagDelay)
+    clearTimeout(peer.lagTimer)
+    peer.lagTimer = null
   }
 
-  t.ok(peer.lagging, 'a peer with no real capacity stays in the (bounded) lagging state')
   t.alike(
     delays,
     [1000, 2000, 4000, 8000, 8000],
     'the wait doubles each time and caps at LAG_RESYNC_MAX_MS - never an unbounded queue'
   )
+})
+
+test('live data: advisory backpressure on a busy socket does not drop the viewer to screens', (t) => {
+  const { manager, share, peer } = harness()
+  const delivered = []
+  // The socket also carries the session's history replication, so `send`
+  // keeps saying "full" while the backlog is small; every message is still
+  // delivered.
+  peer.message = {
+    send: (message) => {
+      delivered.push(message)
+      return false
+    }
+  }
+
+  for (let i = 0; i < 200; i++) manager.broadcastData(share.sessionId, Buffer.alloc(1024))
+
+  t.absent(peer.lagging, '200 KiB of live data with "full" answers: still live')
+  t.is(delivered.length, 200, 'every chunk went to the viewer')
+  t.absent(peer.lagTimer)
+
+  peer.message.send = (message) => {
+    delivered.push(message)
+    return true
+  }
+  manager.broadcastData(share.sessionId, Buffer.alloc(1024))
+  t.is(peer.backlogBytes, 0, 'a clean send resets the backlog')
 })
 
 test('sanity: PIPE_HIGH_WATER_MARK is well above a Freenet data-channel part', (t) => {
