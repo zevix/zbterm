@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">ZBTerm</h1>
 <h3 align="center">Secure terminal recording, playback and peer-to-peer sharing</h3>
-<h3 align="center">built on the Pear/Electron stack</h3>
+<h3 align="center">over Pear (Hyperswarm) or Freenet, built on Electron and Bare</h3>
 
 <p align="center">
   <a href="https://vimeo.com/1209702239">
@@ -12,18 +12,23 @@
 </p>
 
 
-## Hilights
+## Highlights
 - Interactive PTY-backed shells, with encrypted terminal output recorded to a
   local session catalog and played back with a scrubber.
 - Peer-to-peer live sharing of a running terminal (host and one or more
-  viewers) over Hyperswarm, with per-link permission caps and optional relay
-  fallback for NAT traversal.
+  viewers) over two networks: Pear (Hyperswarm), with optional relay fallback
+  for NAT traversal, and, experimentally, [Freenet](#freenet). Each share picks
+  its network, and Pear and Freenet shares can run at the same time.
+- Per-link permission caps, host approval, keyboard sharing and key rotation.
 - A localhost REST API for debugging and automation.
 
 ZBTerm uses [Hypercore](https://docs.pears.com/reference/building-blocks/hypercore/)/[Hyperbee](https://docs.pears.com/reference/building-blocks/hyperbee/) for encrypted session history
 storage and [Hyperswarm](https://docs.pears.com/reference/building-blocks/hyperswarm/) for real-time peer-to-peer communication,
 demonstrating the power, extreme performance, simplicity and versatility of
-the Pear/Bare platform.
+the Pear/Bare platform. The core runs in a [Bare](https://github.com/holepunchto/bare)
+worker, separate from the Electron shell. Identity and the Freenet transport
+run in `zxterm-core`, a Rust sidecar built from the
+[zevix/zxterm](https://github.com/zevix/zxterm) submodule.
 
 Note: ZBTerm is not affiliated with Holepunch.to or pears.com
 
@@ -45,17 +50,13 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Ended sessions can be extended at any time by the host
 - Key rotation on user join and exit
 - Debugging and instrumentation REST server for e2e tests and live debugging
+- Sharing over Freenet (experimental; needs your own Freenet node), alongside
+  Pear: each share picks its network in the Share dialog
 
-### Half-baked / unexposed features
+### Experimental / not yet exposed
 - Role-based authorization (unused except for keyboard access)
 - Multi-device support (unused)
 - Headless relay service for cloud hosting — fallback for network configurations that aren't P2P-friendly
-
-### Future Roadmap
-
-Managed in Zeev's [private notes](anytype://object?objectId=bafyreia2xdux2xrhiftnqgpxaybeebohbqctnu3f5u5d45xxb24lf6gd3m&spaceId=bafyreiddaaox2eyyzic63ltzskr6jo2yxrprxysqvea6utb4foiqaqvjpm.33b9b642zrs9q)
-
-<img src="roadmap_pixelated.png" alt="roadmap preview" height="80">
 
 ## Table of Contents
 
@@ -81,10 +82,28 @@ Managed in Zeev's [private notes](anytype://object?objectId=bafyreia2xdux2xrhift
   - [Endpoints](#debug-endpoints)
 - [Environment Variables](#env-vars)
 - [CLI Flags](#cli-flags)
+- [For Developers](#developers)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Install & Run <a name="install-run"></a>
 
+> **Status:** ZBTerm has not been published yet: there is no `zbterm` package
+> on npm and no release with installers. Until there is, run it
+> [from a clone](#install-dev) (or build your own installers with `npm run make`).
+> The npm instructions below describe the npm distribution the release
+> tooling produces.
+
+Platforms: Linux (x64 and arm64, glibc) is the platform being built and
+tested. macOS (Apple silicon and Intel) is a supported target, but its CI and
+release builds are paused until sharing works on Linux, and a release
+publishes nothing while they are. Windows is not supported: the
+`zxterm-core` sidecar has no Windows build yet.
+
 ### Install from npm <a name="install-npm"></a>
+
+Needs Node.js 20 or newer. The install downloads an Electron runtime (roughly
+150 MB). On macOS the npm build is unsigned, so Gatekeeper warns on first launch.
 
 ```sh
 npm install -g zbterm
@@ -94,8 +113,9 @@ zbterm doctor              # check this machine can actually run it
 ```
 
 `zbterm doctor` is the first thing to run if anything looks wrong: it reports
-Node, the Electron binary, `node-pty`, the Bare sidecar prebuild, the data
-directory, `$DISPLAY` and the Chromium sandbox, and exits non-zero when
+Node, the Electron binary, `node-pty`, the Bare sidecar prebuild, the
+`zxterm-core` binary, the data directory, `$DISPLAY` and the Chromium sandbox,
+plus the installed version and update channel, and exits non-zero when
 something is genuinely broken. Add `--json` for machine-readable output.
 
 #### Linux desktop integration <a name="install-desktop"></a>
@@ -116,17 +136,18 @@ npm install -g zbterm@latest   # or:
 zbterm update                  # prints the same command after checking npm
 ```
 
-npm installs **do not use the Pear OTA updater**. The OTA path only applies to
-Pear-distributed builds; an npm install checks the npm registry for a newer
-version and tells you to run `npm install -g zbterm@latest`. Installers built
-with electron-forge (deb/rpm/AppImage/flatpak/snap/dmg/msix) are a third,
-separate distribution channel and are unaffected by either.
+ZBTerm has no built-in auto-updater. An npm install checks the npm registry
+for a newer version and tells you to run `npm install -g zbterm@latest`
+(`--no-update-check` or `ZBTERM_NO_UPDATE_CHECK=1` turns that off).
+Installers built with electron-forge (AppImage, Flatpak and Snap on Linux,
+dmg on macOS; the Windows msix is configured but not built) have no update
+channel: install a newer package to update.
 
-> **2026-09-19 — the Pear OTA updater is gone (`D-08`).** No build of ZBTerm has a Pear OTA
-> updater any more, so there is no "Pear-distributed" update path to contrast with. An npm
-> install still checks the npm registry and tells you to run `npm install -g zbterm@latest`,
-> exactly as described above. An installer build has no update channel: install a newer package
-> to update.
+The AppImage needs FUSE 2, which recent distributions no longer install by
+default (`dlopen(): error loading libfuse.so.2`): install `libfuse2t64`
+(Ubuntu 24.04+, Debian 13+), `libfuse2` (older Debian/Ubuntu) or `fuse-libs`
+(Fedora) — `./install_deps.sh --optional` does it — or run it without FUSE
+with `./ZBTerm-<version>-x64.AppImage --appimage-extract-and-run`.
 
 #### Prerequisites (Linux) <a name="install-prereqs"></a>
 
@@ -153,19 +174,36 @@ binary.
 
 ### Run from a clone (development) <a name="install-dev"></a>
 
+The Rust `zxterm-core` sidecar is built from the [zxterm](https://github.com/zevix/zxterm)
+submodule, so a clone also needs a Rust toolchain (`rustup`; the version is pinned in
+`zxterm/rust-toolchain.toml`), a C compiler and CMake.
+
 ```sh
+git clone --recursive https://github.com/zevix/zbterm.git   # or: git submodule update --init
+cd zbterm
 npm install
+npm run build:sidecar   # cargo-builds zxterm-core and stages it under npm/
 npm test
 npm start
 ```
 
-Development builds keep the Pear OTA updater wiring intact, but `npm start`
-passes `--no-updates` by default — see the development appendix in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) if you need to work with
-staged/provisioned/multisig builds.
+On Ubuntu, Debian or Fedora, `./install_deps.sh` installs all of the above
+(the system packages, Rust through rustup, `npm install`; `--optional` adds
+the snap/flatpak makers' tools), and `./run.sh` wraps the run step:
 
-> **2026-09-19 (`D-08`).** There is no Pear OTA updater wiring left in any build, development
-> ones included. `npm start` still passes `--no-updates`; the flag is accepted and has no effect.
+```sh
+./run.sh                           # npm start (offers to build the sidecar if it's missing)
+./run.sh --packaged                # the packaged app in out/, repackaging if it's stale
+./run.sh --relay                   # node relay/server.js
+./run.sh --scratch --debug-server  # throwaway HOME/storage, debug API on a free port
+./run.sh --profile work -- --devtools   # anything after -- goes to the app
+```
+
+`./build_all.sh` and `./run.sh` both check for Node.js, npm and `node_modules`
+first and offer to run `./install_deps.sh` when something is missing.
+
+`npm start` passes `--no-updates`; the flag is kept for compatibility and has
+no effect.
 
 If your headless Linux environment has GPU issues:
 
@@ -185,8 +223,9 @@ leaves you with a `zbterm` that cannot start. Always run `npm install` from
 the repo root.
 
 **Changing the logo.** [`renderer/logo-ascii.js`](renderer/logo-ascii.js) is the
-single source of truth for the mark: a grid of cells (`.` background, `-`
-scanline grey, `G` accent green) plus the palette in `STARTUP_LOGO_COLORS`. The
+single source of truth for the mark — the blue Freenet rabbit's head on the
+green Pear pear: a grid of cells (`.` background, `-` scanline grey, `G` accent
+green, `B` Freenet blue) plus the palette in `STARTUP_LOGO_COLORS`. The
 terminal splash draws it directly. Edit it, then run:
 
 ```sh
@@ -204,29 +243,40 @@ needs only the `sharp` devDependency.
 
 ## Storage <a name="storage"></a>
 
-The app stores local data under Electron `userData`:
+The app stores local data under Electron `userData` (or `--storage <dir>`).
+The default profile lives in `zbterm/`, every other profile in
+`zbterm-profiles/<id>/`, and each profile directory holds:
 
-- `zbterm/corestore/` — per-session encrypted Hypercore logs and metadata
-- `zbterm/catalog/` — local session catalog
-- `zbterm/snapshots/<sessionId>/` — encrypted local playback snapshots
+- `corestore/<sessionId>/` — per-session encrypted Hypercore logs and metadata
+- `catalog/` — local session catalog
+- `snapshots/<sessionId>/` — encrypted local playback snapshots
+- `account/` — account and device state; `account/identity/` holds the
+  identity, and `account/zxterm-core.sock` is the `zxterm-core` sidecar's
+  socket while it runs
+- `preferences.json` — per-profile settings, such as pinned sessions and the
+  default session
+
+App-wide settings, such as the theme and the STUN/TURN servers, are kept in
+`preferences.json` directly under Electron `userData`.
 
 Use `--profile <id-or-name>` / `--profile-path <dir>` (or `ZBTERM_PROFILE` /
 `ZBTERM_PROFILE_PATH`) to run multiple isolated profiles side by side, or
-`--storage <dir>` to point `pear-runtime` at custom storage entirely.
+`--storage <dir>` to use a custom ZBTerm data directory entirely.
 
-> **2026-09-19 (`D-08`).** `pear-runtime` is no longer a dependency. `--storage <dir>` still
-> names ZBTerm's own data root (`electron/main.js::pearDataRoot`).
-
-Only one instance can be opened per profile, when starting the app where another instance exist and not specifying a profile, the app will prompt you to select or create a profile
+Only one instance can be open per profile. If another instance is already
+running and you don't name a profile, the app asks you to pick or create one.
 
 ## Sharing <a name="sharing"></a>
   
 A host creates a share link for a live session (`share.createLink`); a viewer
-joins it (`share.join`). Both sides connect over a Hyperswarm topic derived
-from the link, dial the host's DHT public key directly, and speak an
+joins it (`share.join`). The link is a `zbterm://join/…` invite that names its
+network. On Pear, both sides connect over a Hyperswarm topic derived from the
+link, the viewer dials the host's DHT public key directly, and they speak an
 encrypted control protocol for join requests, approvals, terminal data, and
-input. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how sharing
-works internally.
+input; on Freenet, see [Freenet](#freenet). A session is shared over one
+network at a time, but different sessions (and joins) can use Pear and
+Freenet at once. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how
+sharing works internally.
 
 ### Link Options <a name="link-options"></a>
 
@@ -235,11 +285,12 @@ server's `POST /sessions/:sessionId/share`):
 
 | Option        | Values                    | Default                    | Meaning |
 | ------------- | ------------------------- | --------------------------- | ------- |
+| `backend`     | `'pear'` \| `'freenet'`  | the build's default (`pear`) | Network to share over (an `id` from `share.backends`). A session already shared over another network is refused with `E_BACKEND_UNAVAILABLE`. |
 | `type`        | `'single'` \| `'group'`   | `'single'`                  | `single` links are consumed after one viewer joins; `group` links allow multiple concurrent viewers. |
-| `maxViewers`  | integer                   | 1 (`single`) / 8 (`group`)  | Cap on concurrent viewers for a `group` link. |
+| `maxViewers`  | integer, 1–99             | 1 (`single`) / 99 (`group`) | Cap on concurrent viewers for a `group` link. |
 | `autoJoin`    | boolean                   | `true`                      | Whether a join request is auto-approved or requires host approval (see `share:approval-pending`). |
 | `caps`        | bitmask (see below)       | derived from other options  | Explicit permission bitmask; overrides the individual flags below if set. |
-| `sendInput`/`input` | boolean             | `true`                      | Whether the viewer is granted `SEND_INPUT`. |
+| `sendInput`   | boolean                   | `true`                      | Whether the viewer is granted `SEND_INPUT`. Typing still needs keyboard sharing turned on for the session (`share.setInputMode`). |
 | `quickCatchup`| boolean                   | `true`                      | Whether the viewer gets a fast-forwarded backlog on join. |
 | `admin`       | boolean                   | `false`                     | Grants `ADMIN` cap. |
 
@@ -287,26 +338,24 @@ The default package also carries an experimental second network, Freenet. The sh
 it beside Pear when more than one network is built in; pick it there. A Freenet share finds its
 viewer through Freenet contracts, then connects the two machines directly over WebRTC.
 
-> **2026-09-29 (K11 of zxterm-core, `D-34`).** The contract client and WebRTC run inside the
-> `zxterm-core` sidecar (a Rust binary every build ships) instead of ZBTerm's worker and main
-> process. A node other than `ws://127.0.0.1:7509` can be named with `--freenet-node <url>` or
-> `ZBTERM_FREENET_NODE`. Without a node the reason reads "no Freenet node at ws://127.0.0.1:7509 —
-> see README "Freenet"". The sidecar has no TURN client, so a `turn:` URL in the list below is
-> ignored for now.
+The Freenet contract client and WebRTC run inside the `zxterm-core` sidecar, a Rust binary
+every build ships (source: [zevix/zxterm](https://github.com/zevix/zxterm)).
 
-ZBTerm does not install, start or update a Freenet node (`D-12`): it needs one already running
-on the same machine, with its WebSocket API at `ws://127.0.0.1:7509` (the node's default; see
-[freenet.org](https://freenet.org)). Without one, the share dialog shows Freenet as unavailable
-with the reason "no Freenet node at ws://127.0.0.1:7509". Both host and viewer need their own node.
+ZBTerm does not install, start or update a Freenet node: it needs one already running, by
+default on the same machine with its WebSocket API at `ws://127.0.0.1:7509` (the node's default;
+see [freenet.org](https://freenet.org)). Name a different node with `--freenet-node <url>` or
+`ZBTERM_FREENET_NODE`. Without one, the share dialog shows Freenet as unavailable with the reason
+"no Freenet node at ws://127.0.0.1:7509". Both host and viewer need their own node.
 
 The direct connection asks STUN servers for each side's public address: by default
-`stun:stun.l.google.com:19302` and `stun:stun.cloudflare.com:3478` (`D-11`). **Using Freenet
+`stun:stun.l.google.com:19302` and `stun:stun.cloudflare.com:3478`. **Using Freenet
 sharing discloses your IP address to that STUN provider.** Replace the list with the settings
 menu's "STUN/TURN servers" field, `--ice-servers` or `ZBTERM_ICE_SERVERS` (comma-separated ICE
 URLs; `turn:user:secret@host:port` for a TURN relay of your own), or turn STUN off with
-`--ice-servers ''` (then only machines on one network connect). ZBTerm runs no TURN server;
-when neither side can reach the other directly, the join fails with "Could not connect directly
-to the host (ICE failed)".
+`--ice-servers ''` (then only machines on one network connect). ZBTerm runs no TURN server,
+and the sidecar has no TURN client yet, so `turn:` URLs are currently ignored. When neither side
+can reach the other directly, the join fails with "Could not connect directly to the host (ICE
+failed)".
 
 ## Setting Up a Relay (Headless VPS) <a name="relay-setup"></a>
 
@@ -333,6 +382,7 @@ just that one file to the box:
 npm run build:relay              # this host's platform/arch
 npm run build:relay -- --all     # linux/macos/win, x64 + arm64
 npm run build:relay -- linux-x64 win-x64   # specific targets
+npm run build:relay -- --all --jobs 4      # up to 4 targets at once
 ```
 
 Output goes to `out/relay/zbterm-relay-<version>-<platform>-<arch>` (e.g.
@@ -436,7 +486,8 @@ npm start -- --debug-server
 
 Listens on `http://127.0.0.1:17077` by default (`--debug-server-port <port>`
 or `ZBTERM_DEBUG_SERVER_PORT` to change it). All routes except a few
-renderer/popup ones require the engine to be initialized.
+renderer/popup/window ones require the engine to be initialized. While the
+debug server runs, the npm update check is off.
 
 ```sh
 curl -s -X POST http://127.0.0.1:17077/sessions \
@@ -465,10 +516,10 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | `GET /sessions/:sessionId` | Session summary. |
 | `POST /sessions/:sessionId/switch` | Select a session (without opening it live). |
 | `POST /sessions/:sessionId/live` | Open a session live (pauses playback if needed). |
-| `POST /sessions/:sessionId/extend` | Resize/extend a session. |
+| `POST /sessions/:sessionId/extend` | Reopen an ended session live (`session.extend`). |
 | `POST /sessions/:sessionId/input` | Send input to a specific session. |
 | `POST /sessions/:sessionId/resize` | Resize (`cols`, `rows`). |
-| `POST /sessions/:sessionId/share` | Create a share link — see [Link Options](#link-options). |
+| `POST /sessions/:sessionId/share` | Create a share link — see [Link Options](#link-options) (`type`, `maxViewers`, `caps`, `autoJoin`, `backend`; `inputMode` first calls `share.setInputMode`). |
 | `GET /sessions/:sessionId/shares` | List share links for a session. |
 | `DELETE /sessions/:sessionId/shares/:linkId` | Revoke a share link. |
 | `POST /sessions/:sessionId/approvals/:requestId/approve` \| `/deny` | Approve/deny a pending join request. |
@@ -478,7 +529,14 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | `POST /invoke` | Call any `engine.invoke(method, args)` method directly, e.g. `{"method":"share.diagnostics"}`. |
 | `GET /popups` \| `POST /popups/:popupId/actions/:action` | Renderer popup inspection/control. |
 | `GET /renderer/layout` | Renderer layout snapshot. |
+| `POST /renderer/command` | Run a renderer debug command. |
+| `GET /window/bounds` \| `POST /window/bounds` | Read or set the window position and size. |
+| `GET /debug/worker-pid` | PID of the Bare worker. |
 | `GET /sessions/:sessionId/input/diagnostics` | Input pipeline diagnostics. |
+
+[`docs/debug_server_howto.md`](docs/debug_server_howto.md) has the request
+and response details for every route, the popup actions and the renderer
+commands.
 
 ## Environment Variables <a name="env-vars"></a>
 
@@ -486,13 +544,21 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | -------- | ------- | ------- |
 | `ZBTERM_PROFILE` | app | Profile id or name to open (same as `--profile`). |
 | `ZBTERM_PROFILE_PATH` | app | Explicit profile data directory (same as `--profile-path`). |
-| `ZBTERM_BACKEND` | app, Tabby plugin (archived 2026-09-19, see the note under this table) | Limit network sharing to one backend: `pear`, `freenet`, or `none` for a local-only run with no share or join (same as `--backend`, which wins). It only narrows what the build carries. Default: no limit. |
-| `ZBTERM_BUILD_BACKENDS` | `electron-forge package` / `make` (`forge.config.js`) | Build variant: which share backends the package carries. ~~`pear` (default), `freenet`, `pear,freenet` or `none`.~~ Corrected 2026-09-24 (`D-14`): `pear`, `freenet`, `pear,freenet` (default) or `none`; see the note under this table. An absent backend loses its `engine/backends/<id>/` directory and its own dependencies, and the package's `package.json` records the list as `zbtermBackends`. With `none` the app hides Share, Join and the keyboard-sharing button and answers a join link with a notice; recording and playback are unchanged. ~~`hyperswarm` and `hyperdht` still ship in every variant, because the OTA updater (`workers/main.js`, `pear-runtime`) uses them.~~ Corrected 2026-09-19 (`D-07`): only a variant with `pear` has the OTA updater; see the note under this table. An unknown value fails the build. |
+| `ZBTERM_BACKEND` | app | Limit network sharing to one backend: `pear`, `freenet`, or `none` for a local-only run with no share or join (same as `--backend`, which wins). It only narrows what the build carries. Default: no limit. |
+| `ZBTERM_BUILD_BACKENDS` | `electron-forge package` / `make` (`forge.config.js`) | Build variant: which share backends the package carries: `pear`, `freenet`, `pear,freenet` (default) or `none`. An absent backend loses its `engine/backends/<id>/` directory and its own dependencies (for `pear`: `hyperswarm` and `hyperdht`), and the package's `package.json` records the list as `zbtermBackends`. With `none` the app hides Share, Join and the keyboard-sharing button and answers a join link with a notice; recording and playback are unchanged. The `zxterm-core` sidecar and `THIRD-PARTY-NOTICES.md` ship in every variant. An unknown value fails the build. |
 | `ZBTERM_FORGE_OUT_DIR` | `electron-forge package` / `make` (`forge.config.js`) | Directory the package is written to instead of `out/`, e.g. to build a variant without replacing the packages already in `out/`. Default: `out`. |
-| `ZBTERM_FREENET_NODE` | app (main process) | The WebSocket URL of the Freenet node the Freenet backend talks to (same as `--freenet-node`, which wins). Default: `ws://127.0.0.1:7509/v1/contract/command`, the node's own default (`D-34`). |
-| `ZBTERM_ICE_SERVERS` | app (main process) | STUN/TURN servers for Freenet's direct connections: comma-separated ICE URLs (`stun:host:port`, `turn:user:secret@host:port`); an empty value means none (host candidates only). `--ice-servers` wins over it, and a non-empty "STUN/TURN servers" setting wins over both. Default: `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478` (`D-11`). The STUN provider sees your IP address; see [Freenet](#freenet). |
+| `ZBTERM_FREENET_NODE` | app (main process) | The WebSocket URL of the Freenet node the Freenet backend talks to (same as `--freenet-node`, which wins). Default: `ws://127.0.0.1:7509/v1/contract/command`, the node's own default. |
+| `ZBTERM_ICE_SERVERS` | app (main process) | STUN/TURN servers for Freenet's direct connections: comma-separated ICE URLs (`stun:host:port`, `turn:user:secret@host:port`); an empty value means none (host candidates only). `--ice-servers` wins over it, and a non-empty "STUN/TURN servers" setting wins over both. Default: `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478`. The STUN provider sees your IP address; see [Freenet](#freenet). |
 | `ZBTERM_INVITE_V2` | core (`engine/invite.js`) | `1` makes Pear share links use the v2 invite shape (`b`, `peer`, `route`) while keeping the v1 fields beside it. Default: off, so Pear links stay v1 and released builds can join them. A link for any other backend is always v2. Read each time a link is made. The core runs in a Bare worker whose environment is not reliably inherited from the app, so treat it as a development switch. |
 | `ZBTERM_ELECTRON_USER_DATA` | app | Custom Chromium/Electron user data dir. |
+| `ZXTERM_CORE_BIN` | app | Path to a `zxterm-core` sidecar binary to run instead of the installed or staged one, e.g. a debug build from the `zxterm/` submodule. |
+| `ZBTERM_NO_UPDATE_CHECK` | app (npm installs) | `1` turns off the npm registry update check (same as `--no-update-check`). |
+| `ZBTERM_REGISTRY_URL` | app (npm installs) | Registry to ask for updates instead of registry.npmjs.org, e.g. a local fake for tests. Setting it also keeps the check on under `--debug-server`. |
+| `ZBTERM_CHANNEL` | app | Force the install channel: `npm`, `packaged` or `dev`. Default: detected from where the app runs. |
+| `ZBTERM_GITHUB_KEYS_BASE` | `zxterm-core` sidecar | Base URL for `<user>.keys` lookups instead of github.com, for tests. |
+| `ZBTERM_SKIP_POSTINSTALL` | `npm install` (postinstall) | `1` skips the postinstall step entirely. |
+| `ZBTERM_KEEP_ALL_PREBUILDS` | `npm install` (postinstall) | `1` keeps native prebuilds for every platform instead of pruning to this one. |
+| `ZBTERM_ALLOW_HOST_NODE_LINKAGE` | `npm install` (postinstall) | `1` installs even when a native module is linked against the host Node instead of Electron (it will crash at runtime). |
 | `ZBTERM_DEBUG` | app | `1` enables verbose packaged debug logging (same as `--debug`). |
 | `ZBTERM_DEBUG_SERVER` | app | `1` starts the debug REST API (same as `--debug-server`). |
 | `ZBTERM_DEBUG_SERVER_PORT` | app | Port for the debug REST API. |
@@ -506,88 +572,33 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | `ZBTERM_RELAY_MAX_SESSION_MS` | `relay/server.js` | Max lifetime of a single relayed session. Default 6h. |
 | `ZBTERM_REGISTRY_SEED` | `relay/registry-publish.js` | Secret controlling the DHT registry record. |
 
-> **2026-09-19 — which builds have OTA updates (`D-07`).** Only a packaged build that carries
-> the Pear backend (`ZBTERM_BUILD_BACKENDS` with `pear`, which is the default) has the Pear OTA
-> updater. A `freenet` or `none` package ships no `workers/main.js`, `pear-runtime`,
-> `pear-runtime-updater`, `corestore`, `hyperswarm` or `hyperdht`; it runs exactly as with
-> `--no-updates`, logs one `[updater] updates unavailable: …` line at start, never shows the
-> update button, and has no replacement update channel: install a newer package to update. npm
-> installs are unchanged: they never used the OTA updater (see [Updating](#install-update)).
-
-> **2026-09-19 — no build has OTA updates (`D-08`, supersedes the note above).** The Pear OTA
-> updater was removed from every build, the default `pear` one included: `workers/main.js`,
-> `electron/updater-available.js`, `pear.json`, `package.json#upgrade` and the `pear-runtime` and
-> `corestore` dependencies are gone, and the `[updater] updates unavailable` line is no longer
-> logged. `ZBTERM_BUILD_BACKENDS` now decides only whether the package carries
-> `engine/backends/pear/` with `hyperswarm` and `hyperdht`. `--no-updates` is still accepted, for
-> existing launchers, and does nothing. The npm registry check is unchanged.
-
-> **2026-09-19 — the Tabby plugin is archived.** `tabby-plugin/` moved to
-> [`archive/tabby-plugin/`](archive/tabby-plugin/) and its plan and changelog to
-> `archive/tabby-plugin/docs/` (see [`archive/README.md`](archive/README.md)). It is not built,
-> tested, linted or packaged any more, so "Tabby plugin" as a consumer of `ZBTERM_BACKEND`
-> describes archived code. The variable's meaning for the app is unchanged.
-
-> **2026-09-28.** `archive/` was not carried into this repository (`Z1` of
-> `docs/projects/260928_zbterm-fork/`); the two links just above do not resolve here. The files
-> they named stay readable in the predecessor repository, frozen at its final commit `b856e15`
-> (see `docs/projects/README.md`).
-
-> **2026-09-24 — the Freenet development switch is gone (freenet-backend F3).** Its row, the
-> variable that made the Freenet **stub** report itself `available`, was removed from this table.
-> The Freenet backend is now a real node client, and nothing reads that variable:
-> `share.backends` lists `freenet` as `broken` / `not yet wired` in every build until its sharing
-> path is wired (phase F9 of `docs/projects/260924_freenet-backend/`).
-
-> **2026-09-24 — Freenet ships by default (freenet-backend F9, `D-14`).** The default package is now
-> `pear,freenet`: `forge.config.js::DEFAULT_BUILD_BACKENDS`, and a default package carries
-> `engine/backends/freenet/` (with its two contract `.wasm` files), `@freenetorg/freenet-stdlib`,
-> `bs58`, `bare-ws`, `bare-encoding`, `node-datachannel` and `THIRD-PARTY-NOTICES.md`; `pear` and
-> `none` leave all of them out. `share.backends` no longer says `not yet wired`: `freenet` is
-> `available` when a Freenet node answers at `ws://127.0.0.1:7509`, and `broken` with "no Freenet
-> node at ws://127.0.0.1:7509" otherwise (see [Freenet](#freenet)).
-
-> **2026-09-29 — the Freenet backend is a proxy to `zxterm-core` (K11 of zxterm-core, `D-34`,
-> `D-37`).** A default package no longer carries `@freenetorg/freenet-stdlib`, `bs58`, `bare-ws`,
-> `bare-encoding`, `node-datachannel` or contract `.wasm` files: the Freenet client, WebRTC and the
-> contracts are inside the `zxterm-core` sidecar every build ships. `engine/backends/freenet/` is
-> two small files, and `THIRD-PARTY-NOTICES.md` ships in every variant. The node's address can be
-> set with `--freenet-node` / `ZBTERM_FREENET_NODE`.
-
 ## CLI Flags <a name="cli-flags"></a>
 
 | Flag | Meaning |
 | ---- | ------- |
-| `--storage <dir>` | Custom storage dir passed to `pear-runtime`. Default: app user data dir. |
+| `--storage <dir>` | Custom ZBTerm data directory. Default: app user data dir. |
+| `--electron-user-data <dir>` | Custom Chromium/Electron user data dir (same as `ZBTERM_ELECTRON_USER_DATA`). Default: a per-process temp dir. |
 | `--profile <id-or-name>` | Open a specific ZBTerm profile by id or name. Default: auto-select the default profile when possible, otherwise show the picker. |
 | `--profile-path <dir>` | Open an explicit ZBTerm profile data directory. Default: none. |
 | `--backend <pear\|freenet\|none>` | Limit network sharing to one backend, or `none` for local-only. It only narrows what the build carries. Default: every backend in this build. |
-| `--freenet-node <url>` | The WebSocket URL of the Freenet node the Freenet backend talks to. Wins over `ZBTERM_FREENET_NODE`. Default: `ws://127.0.0.1:7509/v1/contract/command` (`D-34`). |
-| `--ice-servers <list>` | STUN/TURN servers for Freenet's direct connections, comma-separated ICE URLs; `''` for none (host candidates only). Wins over `ZBTERM_ICE_SERVERS`; a non-empty "STUN/TURN servers" setting wins over it. Default: Google and Cloudflare STUN (`D-11`). |
-| `--no-updates` | Start without OTA updates. Default: updates enabled; `npm start` passes `--no-updates` for development. |
+| `--freenet-node <url>` | The WebSocket URL of the Freenet node the Freenet backend talks to. Wins over `ZBTERM_FREENET_NODE`. Default: `ws://127.0.0.1:7509/v1/contract/command`. |
+| `--ice-servers <list>` | STUN/TURN servers for Freenet's direct connections, comma-separated ICE URLs; `''` for none (host candidates only). Wins over `ZBTERM_ICE_SERVERS`; a non-empty "STUN/TURN servers" setting wins over it. Default: Google and Cloudflare STUN. |
+| `--no-updates` | Accepted for compatibility with older launchers; has no effect. |
+| `--no-update-check` | Start without the npm registry update check. Default: on for npm installs. |
 | `--debug` | Enable verbose packaged debug logging. Default: off. |
 | `--debug-server` | Start the localhost debug REST API. Default: off. |
 | `--debug-server-port <port>` | Port for `--debug-server`. Default: `17077`. |
 | `--devtools` | Open renderer developer tools on startup. Default: off. |
-| `--disable-gpu` | Start without Chromium GPU acceleration (useful headless). Default: GPU enabled. |
-| `--help` | Print CLI flag help and exit without starting the UI. |
+| `--no-sandbox` | Start without the Chromium sandbox. Default: sandbox enabled. |
+| `--disable-gpu` | Start without Chromium GPU acceleration (useful headless). Without WebGL2 the terminal falls back to the DOM renderer on its own. Default: GPU enabled. |
+| `--ozone-platform <platform>` / `--ozone-platform-hint <platform>` | Pass Chromium's ozone platform (hint), e.g. `wayland` or `x11`. Default: Electron's. |
+| `--help`, `-h` | Print CLI flag help and exit without starting the UI. |
 
-> **2026-09-19 (`D-08`).** Two rows above are out of date. `--no-updates`: accepted for
-> compatibility and has no effect; there are no OTA updates to turn off. `--storage <dir>`:
-> ZBTerm's own data directory; nothing is passed to `pear-runtime`, which is no longer a
-> dependency.
+## For Developers <a name="developers"></a>
 
-## For Developers
-
-Internals, design rationale, build/packaging scripts, and the OTA release
-flow are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-Cutting an npm release — the pre-publish checks, the version policy against
-the Pear `upgrade` key, the per-platform manual matrix, and how to deprecate a
-bad version — is documented in [`docs/RELEASE-NPM.md`](docs/RELEASE-NPM.md).
-
-> **2026-09-19 (`D-08`).** There is no OTA release flow and no Pear `upgrade` key any more; both
-> documents carry a dated note where they describe one.
+Internals, design rationale and build/packaging scripts are documented in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Cutting an npm release is
+documented in [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ### Building, signing and store submissions <a name="building-signing"></a>
 
@@ -597,13 +608,17 @@ Local packaging (no distribution, no signing needed):
 npm run package                        # → out/ZBTerm-<platform>-<arch>/
 npm run make                           # → installers in out/make/
 ZBTERM_FORGE_OUT_DIR=<dir> npm run make  # write into a scratch dir instead of out/
-./build_all.sh                         # relay executables (all platforms) + GUI package (all
-                                        # platforms) + GUI installers (host platform only)
+./build_all.sh                         # relay executables (all platforms) + the sidecar for this
+                                        # machine + GUI package (every platform with a staged
+                                        # sidecar) + GUI installers (host platform only)
+./build_all.sh -j                      # the same, the relay targets in parallel alongside the
+                                        # sidecar + GUI steps (-j N: N relay targets at once)
 ```
 
 Signed, distributable builds are cut by the `Build Release` GitHub Actions
 workflow (manual dispatch), gated on a `release` environment holding these
-secrets:
+secrets. Only its Linux jobs run today: the macOS jobs are paused and the
+Windows job is disabled until the sidecar has a Windows build.
 
 | Secret | Platform | Notes |
 | ------ | -------- | ----- |
@@ -647,37 +662,12 @@ locally with `snap install out/make/*.snap --devmode`; publishing needs a
 registered Snap name and `snapcraft login`/`snapcraft upload` — see
 [Snapcraft's publishing docs](https://documentation.ubuntu.com/snapcraft/).
 
-### Remote test host
+## Contributing <a name="contributing"></a>
 
-The Freenet backend is tested against a network-mode Freenet node on a remote machine. The
-fabric recipe [`scripts/infra/freenet_host.py`](scripts/infra/freenet_host.py) provisions one
-(the pinned `freenet`/`fdev` release, Node.js 24.x and a `freenet-node` systemd unit, everything
-under `~/work/zbterm`) and pushes `spikes/freenet/` to it; its docstring lists what it writes
-where. Debian is tested, Fedora is untested.
+See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, see
+[SECURITY.md](SECURITY.md); please don't open a public issue for it.
 
-```
-PYTHONPATH=/ubitron/dev /zp/zdata/work/ubitron/dev/.venv/bin/python scripts/infra/freenet_host.py HOST
-PYTHONPATH=/ubitron/dev /zp/zdata/work/ubitron/dev/.venv/bin/python scripts/infra/freenet_host.py HOST --task sync
-```
-
-`--task repo` pushes this working tree to `~/work/zbterm/repo` (no `node_modules`, `.git`, `out`,
-`archive`) and runs `npm ci` there, so `test/tools/freenet-remote-pair.js` can run one side of a
-Freenet share on the remote host with the shipped backend code.
-
-The Freenet contracts are Rust crates under `engine/backends/freenet/contracts/src/`; the app ships
-their compiled `.wasm`, pinned by BLAKE3 in `contracts/hashes.json`. `bash
-scripts/build-contracts.sh` rebuilds and re-pins them (cargo with the `wasm32-unknown-unknown` target,
-`fdev` and Node on `PATH`). To check that a second machine builds the same bytes, `--task rust`
-installs the pinned Rust toolchain under `~/work/zbterm/rust` and `--task contracts` pushes the
-crates to `~/work/zbterm/contracts/`, where the same script runs.
-
-> **2026-09-29 (K11 of zxterm-core, `D-35`).** The contracts moved to `zevix/zxterm`'s `contracts/`
-> (its `scripts/build-contracts.sh` checks the pins and never rewrites them) and are embedded in the
-> `zxterm-core` binary; this repository's copy, `scripts/build-contracts.sh` and
-> `scripts/contract-fixtures.js` are gone. The `--task contracts` paragraph above describes the
-> removed copy.
-
-## License
+## License <a name="license"></a>
 
 ZBTerm is open source under the
 [Apache License, Version 2.0](LICENSE). You may use, run, modify and
@@ -685,9 +675,8 @@ redistribute it, including commercially, subject to the terms of that license.
 
 Contributions are accepted under the same license, per Apache-2.0 §5.
 
-The names "ZBTerm", "PassCall" and "PassCall Advanced Technologies", and the
-associated icons, logos and visual identity, are trademarks of PassCall
-Advanced Technologies Ltd. Apache-2.0 §6 grants no trademark rights, so a
+The name "ZBTerm" and its associated icons, logos and visual identity are
+trademarks of Zeev Kotzer. Apache-2.0 §6 grants no trademark rights, so a
 redistributed fork should carry its own name and icons.
 
 Third-party components (Electron, Chromium, Node.js, Bare, the Pear runtime,

@@ -311,7 +311,8 @@ class SessionStore {
       expected++
     }
     await this.log.append(blocks)
-    this.timeline.push(...entries)
+    // The host's timeline messages may already have named these seqs.
+    this.timeline = addTimelineEntries(this.timeline, entries)
     this.timelineDirty = true
     return this.log.length
   }
@@ -1101,6 +1102,19 @@ function repackWithoutHd(packets) {
 
   flushData()
   return out
+}
+
+// Adds timeline entries, one per seq, in seq order. A joined Freenet session's
+// cache gets the same seqs twice: from the host's timeline messages and from
+// the packets the core verifies. The verified entry wins.
+function addTimelineEntries(timeline, entries) {
+  const base = Array.isArray(timeline) ? timeline : []
+  const lastSeq = base.length ? base[base.length - 1].seq : 0
+  if (entries.every((entry) => entry.seq > lastSeq)) return base.concat(entries)
+  const bySeq = new Map()
+  for (const entry of base) bySeq.set(entry.seq, entry)
+  for (const entry of entries) bySeq.set(entry.seq, entry)
+  return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq)
 }
 
 module.exports = { SessionStore, MAX_PACKET_BYTES, repackWithoutHd }

@@ -93,10 +93,16 @@ const PACKAGER_DEFAULT_IGNORES = [
 // there carries its own node_modules.
 const ARCHIVE_IGNORE = /^\/archive($|\/)/
 
+// Not a packager default either: the `zxterm/` submodule is the sidecar's
+// Rust source and cargo output. The app ships only the binary that
+// `scripts/sidecar.js build` staged under `npm/zxterm-core-<platform>-<arch>/`.
+const SIDECAR_SOURCE_IGNORE = /^\/zxterm($|\/)/
+
 function ignoreFile(file, env = process.env) {
   const name = String(file)
   if (PACKAGER_DEFAULT_IGNORES.some((pattern) => pattern.test(name))) return true
   if (ARCHIVE_IGNORE.test(name)) return true
+  if (SIDECAR_SOURCE_IGNORE.test(name)) return true
   for (const id of buildBackends(env).absent) {
     const dir = `/engine/backends/${id}`
     if (name === dir || name.startsWith(dir + '/')) return true

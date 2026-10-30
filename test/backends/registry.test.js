@@ -353,7 +353,7 @@ test('share manager: holds no backend until the first createLink, then reports i
   t.is(made.length, 1, 'naming the active backend reuses it')
 })
 
-test('share manager: a second backend is refused while busy, swapped in when idle', async (t) => {
+test('share manager: a second backend runs alongside the first', async (t) => {
   const device = await loadOrCreateLocalDevice({ root: await temp(t) })
   const hub = new LoopbackHub()
   const made = []
@@ -362,32 +362,50 @@ test('share manager: a second backend is refused while busy, swapped in when idl
     beta: () => track(made, new Named('beta', { hub }))
   })
 
-  const busy = new ShareManager(hostEngine(device), { registry: fake })
-  t.teardown(() => busy.close())
-  await busy.createLink('session-a', { type: 'group' })
-  const refused = await outcome(busy.createLink('session-a', { type: 'group', backend: 'beta' }))
-  t.is(refused.code, 'E_BACKEND_UNAVAILABLE', 'a share exists: no swap')
-  t.ok(/restart/i.test(refused.message), 'the message carries the restart hint')
-  t.is(busy.backendsInfo().active, 'alpha', 'the active backend is untouched')
+  const manager = new ShareManager(hostEngine(device), { registry: fake })
+  t.teardown(() => manager.close())
+  const first = await manager.createLink('session-a', { type: 'group' })
+  t.is(invite.decodeLink(first.uri).b, 'alpha')
+
+  const second = await manager.createLink('session-b', { type: 'group', backend: 'beta' })
+  t.is(invite.decodeLink(second.uri).b, 'beta', 'another session shares over the other backend')
+  t.is(made.length, 2)
+  t.ok(
+    made.every((backend) => backend.health().started),
+    'both backends run, nothing was stopped'
+  )
+  t.alike(manager.backendsInfo().running, ['alpha', 'beta'])
+  t.is(manager.backendsInfo().active, 'alpha', 'the default stays the reported one')
+  t.alike(
+    manager.diagnostics().backends.map((backend) => backend.id),
+    ['alpha', 'beta']
+  )
+
+  const refused = await outcome(manager.createLink('session-a', { type: 'group', backend: 'beta' }))
+  t.is(refused.code, 'E_BACKEND_UNAVAILABLE', 'one session is shared over one backend')
+  t.ok(refused.message.includes("'alpha'"), 'the message names the backend it is shared over')
+
+  const listed = await manager.listLinks('session-b')
+  t.is(invite.decodeLink(listed[0].uri).b, 'beta', "a session's links carry its own backend")
+
   const betaInvite = encodeRaw({ v: 2, b: 'beta', linkId: 'l', peer: HOST_KEY, route: { r: 1 } })
-  t.is((await outcome(busy.join(betaInvite))).code, 'E_BACKEND_UNAVAILABLE', 'joins obey it too')
-  t.is(busy.joins.size, 0, 'a refused join leaves no join state')
-  const gamma = await outcome(busy.createLink('session-a', { backend: 'gamma' }))
-  t.is(gamma.code, 'E_BACKEND_UNSUPPORTED', 'an unknown backend is unsupported even while busy')
+  const joined = await manager.join(betaInvite)
+  t.is(joined.status, 'connecting', 'joining over one backend while sharing over another works')
+  t.is(manager.joins.size, 1)
+  for (const state of manager.joins.values()) {
+    t.is(state.backend, made[1], 'the join uses the backend its invite names')
+  }
+
+  const gamma = await outcome(manager.createLink('session-c', { backend: 'gamma' }))
+  t.is(gamma.code, 'E_BACKEND_UNSUPPORTED', 'an unknown backend is still unsupported')
   t.ok(gamma.message.includes("'gamma'"))
 
-  made.length = 0
-  const idle = new ShareManager(hostEngine(device), { registry: fake })
-  t.teardown(() => idle.close())
-  const first = await idle._ensureBackend('alpha')
-  t.is(first.health().started, true)
-  const second = await idle._ensureBackend('beta')
-  t.is(first.health().started, false, 'with nothing shared or joined, the old backend is stopped')
-  t.is(second.health().started, true, 'and the new one started')
-  t.is(idle.backendsInfo().active, 'beta')
-  t.is(first.listenerCount('connection'), 0, 'the old backend is fully detached')
-  const link = await idle.createLink('session-a', { type: 'group', backend: 'beta' })
-  t.is(invite.decodeLink(link.uri).b, 'beta')
+  await manager.close()
+  t.ok(
+    made.every((backend) => !backend.health().started),
+    'close stops every running backend'
+  )
+  t.ok(made.every((backend) => backend.listenerCount('connection') === 0))
 })
 
 test('share manager: an invite for a backend this build lacks raises E_BACKEND_UNSUPPORTED', async (t) => {
@@ -463,6 +481,7 @@ test('acceptance: with the limit none, share.backends is empty and createLink is
     backends: [],
     default: null,
     active: null,
+    running: [],
     limitedBy: 'none'
   })
   const err = await outcome(engine.invoke('share.createLink', { sessionId: 'any' }))
@@ -808,26 +827,27 @@ function fakeRegistry(factories) {
 }
 
 function hostEngine(device) {
-  const stored = new Map()
+  const session = () => {
+    const stored = new Map()
+    return {
+      store: {
+        timeline: [],
+        meta: {
+          put: (key, value) => Promise.resolve(stored.set(key, value)),
+          createReadStream: ({ gt, lt }) =>
+            [...stored.entries()]
+              .filter(([key]) => key > gt && key < lt)
+              .map(([key, value]) => ({ key, value }))
+        }
+      }
+    }
+  }
   return {
     localDevice: device,
     selfIdentityClaim: null,
     sessions: new Map([
-      [
-        'session-a',
-        {
-          store: {
-            timeline: [],
-            meta: {
-              put: (key, value) => Promise.resolve(stored.set(key, value)),
-              createReadStream: ({ gt, lt }) =>
-                [...stored.entries()]
-                  .filter(([key]) => key > gt && key < lt)
-                  .map(([key, value]) => ({ key, value }))
-            }
-          }
-        }
-      ]
+      ['session-a', session()],
+      ['session-b', session()]
     ])
   }
 }

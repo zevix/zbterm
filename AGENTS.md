@@ -32,7 +32,9 @@ npm start                                          # dev (electron-forge start -
 npm run package                                    # → out/<ProductName>-<platform>-<arch>/
 ZBTERM_FORGE_OUT_DIR=<dir> npm run package         # package into a scratch dir instead of out/
 npm run make                                       # → installers in out/make/
-./build_all.sh                                     # relay executables (all platforms) + GUI package/make
+./build_all.sh [-j [N]]                            # relay executables (all platforms) + host sidecar + GUI package (platforms with a staged sidecar)/make; -j builds the relay in parallel
+./install_deps.sh                                  # system packages (Ubuntu/Debian/Fedora), rustup, npm install; build_all.sh/run.sh offer it
+./run.sh [--dev|--packaged|--relay] [--scratch]    # run from source / out/ / the relay; --scratch = throwaway HOME + storage
 ```
 
 Always give a test run its own `HOME` and a short `TMPDIR` (under 20 characters): a
@@ -65,8 +67,9 @@ left to disable.
   worker spawns one per profile on first use, with the host's spawn function: the
   host module's path is the worker's optional 6th argument (`EngineClient`'s
   `coreHost`; ZBTerm's is `electron/zxterm-core-host.js`), because `engine/` may not
-  spawn processes. The binary ships in the `zxterm-core-prebuilds` package
-  (`prebuilds/<platform>-<arch>/`, then `-universal`; `ZXTERM_CORE_BIN` overrides).
+  spawn processes. The binary is built from the `zxterm/` submodule and ships as
+  the optional dependency `@zbterm/zxterm-core-<platform>-<arch>`, or staged under
+  `npm/` by `scripts/sidecar.js` in a checkout or desktop build (`ZXTERM_CORE_BIN` overrides).
   Frozen in [`docs/CORE-CONTRACT.md`](docs/CORE-CONTRACT.md) §3/§4.
 - `package.json#imports` Bare map lives in **`engine/package.json`** (the published
   `zbterm-core` manifest), not the root one: Bare has no `events`/`fs`/`path`/`os`/

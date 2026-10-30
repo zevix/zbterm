@@ -8,3 +8,6 @@ debug_main.log
 .project
 .pydevproject
 docs/decisions.md
+
+# Sidecar packages staged by scripts/sidecar.js
+npm/

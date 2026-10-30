@@ -148,6 +148,7 @@
   const STARTUP_LOGO_WIDTH = Math.max(...STARTUP_LOGO_LINES.map((line) => line.length))
   const STARTUP_LOGO_GREEN_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.green)
   const STARTUP_LOGO_GREEN_FG = hexToAnsiFg(window.STARTUP_LOGO_COLORS.green)
+  const STARTUP_LOGO_BLUE_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.blue)
   const STARTUP_LOGO_BLACK_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.black)
 
   const state = {
@@ -738,15 +739,25 @@
     state.liveFontSize = state.term.options.fontSize
     state.fit = new FitAddon()
     state.term.loadAddon(state.fit)
+    state.term.open(els.terminal)
+    // After open(): the addon starts WebGL when it is loaded into an open
+    // terminal, so a machine without WebGL2 throws here, inside the try, and
+    // keeps the DOM renderer. Loaded before open(), the same error escaped
+    // from open() and failed the whole startup.
     if (WebglAddon) {
       try {
-        state.webgl = new WebglAddon()
-        state.term.loadAddon(state.webgl)
+        const webgl = new WebglAddon()
+        state.term.loadAddon(webgl)
+        webgl.onContextLoss(() => {
+          webgl.dispose()
+          if (state.webgl === webgl) state.webgl = null
+        })
+        state.webgl = webgl
       } catch (err) {
+        state.webgl = null
         console.warn('webgl renderer unavailable, using DOM renderer', err)
       }
     }
-    state.term.open(els.terminal)
     enablePausedTerminalSelection()
     state.term.parser.registerOscHandler(52, copyFromOsc52)
     els.terminal.addEventListener('keydown', noteTerminalGesture, true)
@@ -848,6 +859,7 @@
     const slate = `\x1b[48;2;${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE}m`
     const black = STARTUP_LOGO_BLACK_BG
     const green = STARTUP_LOGO_GREEN_BG
+    const blue = STARTUP_LOGO_BLUE_BG
     const greenText = STARTUP_LOGO_GREEN_FG
     const blockHeight = STARTUP_LOGO_LINES.length + 3
     const startRow = Math.max(1, Math.floor((STARTUP_LOGO_ROWS - blockHeight) / 2) + 1 - 2)
@@ -858,7 +870,7 @@
       const cells = STARTUP_LOGO_LINES[rowIndex].padEnd(STARTUP_LOGO_WIDTH, '.')
       for (let colIndex = 0; colIndex < cells.length; colIndex++) {
         const char = cells[colIndex]
-        const color = char === '-' ? slate : char === 'G' ? green : black
+        const color = char === '-' ? slate : char === 'G' ? green : char === 'B' ? blue : black
         cellsToDraw.push(`\x1b[${startRow + rowIndex};${startCol + colIndex}H${color} \x1b[0m`)
       }
     }
@@ -871,7 +883,7 @@
     )
     await writeCenteredTerminalText(
       startRow + STARTUP_LOGO_LINES.length + 2,
-      '© MMXXVI by PassCall Advanced Technologies Ltd.'
+      'Written by Zeev Kotzer'
     )
     // No newline after the last line: the block already reaches the bottom row
     // of the fixed grid, and a line feed there scrolls it, leaving scrollback
@@ -1027,6 +1039,7 @@
     const slate = `\x1b[48;2;${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE}m`
     const black = STARTUP_LOGO_BLACK_BG
     const green = STARTUP_LOGO_GREEN_BG
+    const blue = STARTUP_LOGO_BLUE_BG
     const terminalCols = Number.isFinite(cols) ? Math.floor(cols) : STARTUP_LOGO_COLS
     const lineWidth = Math.max(1, Math.min(STARTUP_LOGO_WIDTH, terminalCols - 1))
     const cropStart = Math.max(0, Math.floor((STARTUP_LOGO_WIDTH - lineWidth) / 2))
@@ -1043,6 +1056,7 @@
       for (const char of visibleLine) {
         if (char === '-') out += `${slate} ${ANSI_RESET}`
         else if (char === 'G') out += `${green} ${ANSI_RESET}`
+        else if (char === 'B') out += `${blue} ${ANSI_RESET}`
         else out += `${black} ${ANSI_RESET}`
       }
       return out
@@ -1051,8 +1065,8 @@
       ...logo,
       '',
       centered(`ZBTerm v${bridge.pkg().version}`),
-      centered('(c) MMXXVI by PassCall Advanced Technologies Ltd.'),
-      '\r\n\r\n', // '(c) MMXXVI by PassCall Advanced Technologies Ltd.\r\n',
+      centered('Written by Zeev Kotzer'),
+      '\r\n\r\n',
       'Based on modules and examples by pears.com/holepunch.to',
       `See ${projectUrl()} for more information`,
       '',
@@ -4616,21 +4630,22 @@
   // A radio group over every backend the core reports, or null when it
   // reports at most one or none is usable (the core then shares over its
   // default). A broken backend is a disabled radio with the core's reason as
-  // its text (D-14). Once a backend is active the core serves every share
-  // over it, so the group shows it and is disabled.
+  // its text (D-14). Backends can run side by side, so the choice stays open
+  // whichever ones are already in use.
   function shareBackendPicker(settings) {
     const usable = usableShareBackends()
     const listed = (state.shareBackends && state.shareBackends.backends) || []
     if (!usable || !usable.length || listed.length < 2) return null
     const info = state.shareBackends
-    const active = info.active || null
-    settings.backend = active || settings.backend || info.default || usable[0].id
+    const usableIds = usable.map((backend) => backend.id)
+    if (!usableIds.includes(settings.backend)) {
+      settings.backend = usableIds.includes(info.default) ? info.default : usableIds[0]
+    }
 
     const group = document.createElement('fieldset')
     group.className = 'share-backend-picker'
-    group.disabled = !!active
     const legend = document.createElement('legend')
-    legend.textContent = active ? 'Network (in use)' : 'Network'
+    legend.textContent = 'Network'
     group.append(legend)
     for (const backend of listed) {
       const broken = backend.state !== 'available'
@@ -7520,11 +7535,25 @@
     )
   }
 
+  // Lets the UI react to a debug command before its state is read: the next
+  // animation frame, or 100 ms when none comes. Chromium sends no frames to a
+  // window that is covered, so with several instances on one display a plain
+  // requestAnimationFrame wait never ended and the debug request hung.
+  function debugSettle() {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, 100)
+      window.requestAnimationFrame(() => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
+  }
+
   async function debugClickButton(root, text) {
     const button = debugButtonByText(root, text)
     if (!button) throw new Error(`Debug button not found: ${text}`)
     button.click()
-    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+    await debugSettle()
     return debugModalState()
   }
 
@@ -7538,7 +7567,7 @@
     if (command === 'share-open') {
       window.__zbtermDebugShareAutoJoin = request.autoJoin === false ? false : undefined
       els.shareSession.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'share-select') {
@@ -7547,7 +7576,7 @@
       )
       if (!option) throw new Error(`Debug share option not found: ${request.type}`)
       option.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'share-backend') {
@@ -7557,7 +7586,7 @@
       if (!radio) throw new Error(`Debug share backend not found: ${request.backend}`)
       if (radio.disabled) throw new Error(`Debug share backend is disabled: ${request.backend}`)
       radio.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'share-submit') return await debugClickButton(modal(), 'Share')
@@ -7566,13 +7595,13 @@
       const button = buttons[buttons.length - 1]
       if (!button) throw new Error('Debug share copy button not found')
       button.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'share-done') return await debugClickButton(modal(), 'Done')
     if (command === 'join-open') {
       els.joinLink.click()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'join-paste') return await debugClickButton(modal(), 'Paste')
@@ -7580,7 +7609,7 @@
     if (command === 'identity-open') {
       // The settings entry point, so it ignores identity.setupDismissed.
       await openIdentityWizard()
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'identity-peers') return identityBadgeState()
@@ -7590,7 +7619,7 @@
         name: request.name,
         comment: request.comment
       })
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return identityBadgeState()
     }
     if (String(command || '').startsWith('identity-')) {
@@ -7602,7 +7631,7 @@
       else if (command === 'identity-add-key') await wizard.addKey(request.keyPath)
       else if (command === 'identity-submit') await wizard.submit()
       else throw new Error(`Unknown debug renderer command: ${command}`)
-      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await debugSettle()
       return debugModalState()
     }
     if (command === 'modal-state') return debugModalState()

@@ -35,7 +35,8 @@ const CELLS_PER_UNIT_X = 2
 const CELL_COLORS = {
   '.': 'black',
   '-': 'grey',
-  G: 'green'
+  G: 'green',
+  B: 'blue'
 }
 
 const ICON_DIR = path.join(ROOT, 'build', 'icon')

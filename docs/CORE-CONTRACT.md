@@ -1,26 +1,24 @@
 # `zbterm-core` Contract
 
 This is the frozen, host-independent contract of ZBTerm's core. Anything in
-here is what an adapter — a Tabby plugin, a headless CLI, a systemd service, a
-second GUI — is allowed to depend on. Anything not in here is an implementation
-detail and may change without notice.
+here is what an adapter — a headless CLI, a systemd service, a terminal-app
+plugin, a second GUI — is allowed to depend on. Anything not in here is an
+implementation detail and may change without notice.
 
 `test/core-contract.test.js` compares the method and event tables below against
-`engine/index.js` and `engine/rpc/schema.js` at runtime and fails the build when
+`engine/index.js` and `engine/rpc/schema.js` at runtime (and checks that every
+`FrameKind` and the supervision numbers are named here) and fails the build when
 they drift, so this document cannot silently go stale.
 
-> **2026-09-19 — the Tabby plugin is archived.** The one adapter besides the Electron app, the
-> Tabby plugin, moved from `tabby-plugin/` to
-> [`../archive/tabby-plugin/`](../archive/tabby-plugin/) (its plan and changelog to
-> `archive/tabby-plugin/docs/`; see [`../archive/README.md`](../archive/README.md)) and is no
-> longer built, tested, linted or packaged. Where this document names "the Tabby plugin" as a
-> host, read "the archived Tabby plugin, as of 2026-09-19". The contract itself, and every seam
-> the plugin used (attach, the spawn arguments, `ZBTERM_BACKEND`), is unchanged and stays.
->
-> **2026-09-28.** `archive/` was not carried into this repository (`Z1` of
-> `docs/projects/260928_zbterm-fork/`); the links just above do not resolve here. The files they
-> named stay readable in the predecessor repository, frozen at its final commit `b856e15` (see
-> `docs/projects/README.md`).
+The `D-nn`/`S-nn`/`X-nn` ids and the `F`/`K` phase names below refer to the
+project's decision and security registers and to the zxterm-core project plan
+(in `zevix/zxterm`); those ledgers are not part of this repository.
+
+> **History (2026-09-19, 2026-09-28).** The one adapter besides the Electron app was a Tabby
+> terminal plugin. It was archived on 2026-09-19 and was not carried into this repository (`Z1`
+> of the fork); it stays readable in the predecessor repository at its final commit `b856e15`.
+> The contract and every seam it used (attach mode, the spawn arguments, `ZBTERM_BACKEND`) are
+> unchanged. Today the Electron shell (`electron/`) is the only in-tree host.
 
 ---
 
@@ -44,11 +42,15 @@ Node builtins under Bare and fails in ways that look like storage corruption.
 There are two ways to embed the core:
 
 - **In-process.** `new SessionEngine({ userData, profileId, profilePath, ptyHost })`
-  in your own process.
-- **As a sidecar.** `new EngineClient({ userData, profileId, profilePath, ptyHost })`,
-  which launches `worker.js` under Bare and speaks the frame protocol to it.
-  Same `invoke()`/`on()`/`close()` surface, plus `ready()`, `respawn()` and
-  `pid`. The host keeps owning the terminals; only the core moves.
+  in your own process (plus `backendLimit` and `backendOptions`, which is what
+  the worker passes for the 4th and 5th spawn arguments). Identity calls need a
+  `zxterm-core` host installed first (`require('zbterm-core/zxterm/core.js')
+  .setCoreHost(host)`, see §3).
+- **As a sidecar.** `new EngineClient({ userData, profileId, profilePath, ptyHost,
+  backend?, freenetNode?, coreHost?, workerEntrypoint? })`, which launches
+  `worker.js` under Bare and speaks the frame protocol to it. Same
+  `invoke()`/`on()`/`close()` surface, plus `ready()`, `respawn()` and `pid`.
+  The host keeps owning the terminals; only the core moves.
 
 ### Versioning
 
@@ -82,118 +84,96 @@ Two codes belong to share-backend selection (section 5.1, "Share backends"):
   this run: the build does not carry it, it is broken, or the launch limit
   excludes it. The message names the backend and `details.backend` is its id. It
   is also what every share call answers when no backend is available at all.
-- `E_BACKEND_UNAVAILABLE` — the backend exists, but a different one is active
-  and has shares or joins. One backend is active per run; the message says to
-  restart. `details` is `{ backend, active }`.
+- `E_BACKEND_UNAVAILABLE` — `share.createLink` named a backend for a session
+  that is already shared over another one. A session is shared over one
+  backend at a time; the message says to stop sharing it first. `details` is
+  `{ backend, active }`, `active` being the backend the session is shared over.
   A backend may also answer with this code itself when it is present but
-  cannot work (the Freenet stub does: `details` is
-  `{ backend: 'freenet', detail: 'probe only' }`).
-
-  > **2026-09-24 (freenet-backend F3).** The Freenet backend is no longer a stub
-  > and no longer says `probe only`: see "Share backends" (section 5.1) for its
-  > `detail` values.
+  cannot work right now: `details` is then `{ backend, detail }` (the Freenet
+  backend's `detail` values are listed under "Share backends", section 5.1).
+  Every `identity.*` method answers it too when the `zxterm-core` sidecar
+  cannot be reached (no core host, binary missing, sidecar exited; §3).
 
 ---
 
 ## 3. Sidecar launch
 
-Exactly what `EngineClient._spawnWorker()` does. Documented, not changed.
+Exactly what `EngineClient._spawnWorker()` does (`engine/client.js`, through
+`engine/spawn-worker.js::spawnWorker`):
 
 ```js
-const PearRuntime = require('pear-runtime')
-PearRuntime.run(require.resolve('zbterm-core/worker.js'), [
+const Sidecar = require('bare-sidecar')
+const args = [
   userData, // Bare.argv[2]: absolute path, required
   profileId || '', // Bare.argv[3]: '' means "none"
   profilePath || '', // Bare.argv[4]: '' means "none"
-  backend || '' // Bare.argv[5]: share-backend limit, '' means "no limit"
-])
+  backend || '', // Bare.argv[5]: share-backend limit, '' means "no limit"
+  freenetNode || '' // Bare.argv[6]: Freenet node URL, '' means the default
+]
+if (coreHost) args.push(coreHost) // Bare.argv[7]: zxterm-core host module, only when given
+new Sidecar(require.resolve('zbterm-core/worker.js'), args)
 ```
 
 Observed process line on Linux:
 
 ```
 <node_modules>/bare-sidecar/prebuilds/<platform>-<arch>/bare \
-  <…>/zbterm-core/worker.js <userData> <profileId> <profilePath> <backend>
+  <…>/zbterm-core/worker.js <userData> <profileId> <profilePath> <backend> <freenetNode> [<coreHost>]
 ```
 
-> **2026-09-19 (`D-07`, nonpear-no-updater U-2).** The snippet above is no longer literal.
-> `EngineClient._spawnWorker()` now calls `require('./spawn-worker').spawnWorker(entrypoint,
-args)`, which is `new (require('bare-sidecar'))(entrypoint, args, opts)` - exactly what
-> `PearRuntime.run` does outside Bare, so the Sidecar, the argv order and the process line are
-> unchanged. `zbterm-core` depends on `bare-sidecar` directly and no longer on `pear-runtime`.
->
-> **Which builds have OTA updates.** The OTA updater is host code (`workers/main.js`,
-> `pear-runtime`, `corestore`, `hyperswarm`), not part of the core. A package built with the Pear
-> backend has it; a package without (`ZBTERM_BUILD_BACKENDS=freenet` or `none`) ships none of
-> it and the host runs with updates off (`electron/updater-available.js`). A host embedding the
-> core (the Tabby plugin) never had it.
->
-> **2026-09-19 (`D-08`).** The paragraph above is superseded: no build has OTA updates. The
-> updater (`workers/main.js`, `electron/updater-available.js`, the `pear-runtime` and `corestore`
-> dependencies) was removed from the host entirely. Nothing in the core changed; the sidecar
-> launch through `engine/spawn-worker.js::spawnWorker` is as described in the note before it,
-> with "does" read as "did", since `pear-runtime` is no longer installed to compare against.
-
 so inside the worker `Bare.argv[2] = userData`, `Bare.argv[3] = profileId`,
-`Bare.argv[4] = profilePath`, `Bare.argv[5] = backend`. **Argv order is
-contract.** An empty string is coerced to `null` by the worker.
+`Bare.argv[4] = profilePath`, `Bare.argv[5] = backend`,
+`Bare.argv[6] = freenetNode` and, when present, `Bare.argv[7] = coreHost`.
+The argv is `[userData, profileId, profilePath, backend, freenetNode, coreHost?]`,
+with empty strings (never `undefined`) for the four optional ones in between.
+**Argv order is contract.** An empty string is coerced to `null` (or "no
+value") by the worker. The order is pinned by `test/backends/registry.test.js`
+('host: the limit reaches the worker as the 4th spawn argument').
 
 The 4th argument, `backend`, is the **share-backend limit**: `pear`, `freenet`,
 `none`, or `''` for no limit (`EngineClient`'s `backend` option). It only ever
 narrows the set of backends the build carries and never adds one; `none` makes
 the core local-only. It is a spawn argument rather than an invoke so that
 nothing can race it, and rather than an environment variable because the
-worker's environment is not reliably inherited under PearRuntime. It was added
-in a minor version: a host that passes three arguments keeps working (no
-limit), and a core that predates it ignores the extra argument. Resolving the
-value is the host's job — ZBTerm's Electron shell takes `--backend`, then
-`ZBTERM_BACKEND`; the Tabby plugin reads `ZBTERM_BACKEND` only.
+worker's environment was not reliably inherited under the Pear runtime the
+sidecar launch descends from. A host that passes three arguments gets no limit.
+Resolving the value is the host's job — ZBTerm's Electron shell takes
+`--backend`, then `ZBTERM_BACKEND`.
 
-> **2026-09-19.** The Tabby plugin is archived (`archive/tabby-plugin/`, its host code at
-> `archive/tabby-plugin/src/main/host.ts`); no test pins that sentence about it any more.
+The 5th argument, `freenetNode`, is the WebSocket URL of the Freenet node the
+Freenet backend talks to, `''` for its default
+(`ws://127.0.0.1:7509/v1/contract/command`). `EngineClient` takes it as its
+`freenetNode` option (ZBTerm's shell resolves `--freenet-node`, then
+`ZBTERM_FREENET_NODE`); the worker hands it to `SessionEngine` as
+`backendOptions: { nodeUrl }`.
 
-> **2026-09-24 (`260924_freenet-backend` F4).** A **5th argument** follows `backend`:
-> `hostCaps`, `Bare.argv[6]`, a comma-separated list of what the host process offers the core.
-> The one capability today is `rtc`: the host has a WebRTC adapter (`EngineClient`'s `rtcHost`
-> option; `electron/rtc-host.js::RtcHost` in ZBTerm's shell). `EngineClient` derives it -
-> `'rtc'` when an `rtcHost` was passed, else `''` - and never takes it as an option. **An older
-> host that passes none means no capabilities**, and a core that predates it ignores the extra
-> argument. The worker hands it to `SessionEngine` as `opts.hostCaps`, which hands it to the
-> backend registry (`engine/backends/index.js::load` → `Backend.availability({ hostCaps })`): the
-> Freenet backend reports `broken` / `host has no WebRTC adapter` without `rtc`. The argv is
-> therefore `[userData, profileId, profilePath, backend, hostCaps]`, empty strings for the four
-> optional ones (`engine/client.js::EngineClient._spawnWorker`; pinned by
-> `test/backend-seam.test.js` and `test/backends/registry.test.js` 'host: the limit reaches the
-> worker as the 4th spawn argument').
+The optional 6th argument, `coreHost`, is the absolute path of a host module
+exporting `{ spawn(bin, args), bin() }` (ZBTerm's is
+`electron/zxterm-core-host.js`). The worker requires it and installs it with
+`engine/zxterm/core.js::setCoreHost`. `EngineClient` passes it only when given
+its `coreHost` option (ZBTerm's shell always gives it). **A host that passes
+none means no Rust sidecar**: every `identity.*` method then fails at once with
+`E_BACKEND_UNAVAILABLE` naming the reason.
 
-> **2026-09-29 (K9 of zxterm-core, in `zevix/zxterm`).** A **6th argument** may follow
-> `hostCaps`: `coreHost`, `Bare.argv[7]`, the absolute path of a host module exporting
-> `{ spawn(bin, args), bin() }` (ZBTerm's is `electron/zxterm-core-host.js`). `EngineClient` passes
-> it only when given its `coreHost` option (ZBTerm's shell always gives it), so the 5-argument argv
-> above is unchanged for a host that has none. **A host that passes none means no Rust sidecar**:
-> every `identity.*` method then fails with `E_BACKEND_UNAVAILABLE` naming the reason, at once.
+> **History.** Until 2026-09-19 (`D-07`, `D-08`) the launch went through
+> `pear-runtime`'s `PearRuntime.run`, which is the same `new Sidecar(entrypoint, args)` outside
+> Bare; the OTA updater that needed `pear-runtime` was removed, and `zbterm-core` now depends on
+> `bare-sidecar` directly. From 2026-09-24 (`F4`) to 2026-09-29 (`K11`, `D-34`) the 5th argument
+> was `hostCaps` (`'rtc'` when the host offered a WebRTC adapter, `electron/rtc-host.js`); WebRTC
+> moved into the `zxterm-core` sidecar and the slot became `freenetNode`. `EngineClient`'s
+> `rtcHost` option is gone. Host and core ship together, so no host passes `'rtc'` there.
 
-> **2026-09-29 (K11 of zxterm-core, in `zevix/zxterm`; ZBTerm `D-34`).** Correction to the F4 note
-> above: `hostCaps` is gone with the host's WebRTC adapter (WebRTC runs in the `zxterm-core`
-> sidecar). The **5th argument**, `Bare.argv[6]`, is now `freenetNode`: the WebSocket URL of the
-> Freenet node the Freenet backend talks to, `''` for its default
-> (`ws://127.0.0.1:7509/v1/contract/command`). `EngineClient` takes it as its `freenetNode` option
-> (ZBTerm's shell resolves `--freenet-node`, then `ZBTERM_FREENET_NODE`); the worker hands it to
-> `SessionEngine` as `backendOptions: { nodeUrl }`. The argv is therefore
-> `[userData, profileId, profilePath, backend, freenetNode, coreHost?]`, empty strings for the four
-> optional ones (`engine/client.js::EngineClient._spawnWorker`; pinned by
-> `test/backends/registry.test.js` 'host: the limit reaches the worker as the 4th spawn argument').
-> A host older than K11 that passes `'rtc'` there would name a node address `'rtc'`; host and core
-> ship together, so none does. `EngineClient`'s `rtcHost` option is gone.
+### The `zxterm-core` sidecar
 
-### The `zxterm-core` sidecar (K9 of zxterm-core)
-
-Identity crosses a **second seam**, distinct from the Bare `worker.js` seam this section
-describes. The Rust `zxterm-core` sidecar (a separate binary from `zevix/zxterm`; not this npm
-package, `zbterm-core`, whose worker it serves) owns every identity path: SSH-key discovery and
-signing, the identity claim, verification, provider key lookups (`<user>.keys` over HTTPS, base URL
-`ZBTERM_GITHUB_KEYS_BASE`), and the identity key (`X-01`) that replaced the upstream identity-key
-package.
+Identity and the Freenet backend cross a **second seam**, distinct from the Bare
+`worker.js` seam this section describes. The Rust `zxterm-core` sidecar (a separate binary built
+from `zevix/zxterm`, the `zxterm/` submodule; not this npm package, `zbterm-core`, whose worker it
+serves) owns every identity path: SSH-key discovery and signing (files and agent), the identity
+claim, verification, provider key lookups (`<user>.keys` over HTTPS, base URL
+`ZBTERM_GITHUB_KEYS_BASE`), and the identity key (`X-01`). Since K11 (2026-09-29, `D-34`) it also
+runs the Freenet backend's contract client, WebRTC peer connections and session protocol: the
+worker's `engine/backends/freenet/index.js` is a proxy to it (`freenet.*` and `share.*` requests,
+seam events, and `Chan` frames for data-channel bytes). No Freenet traffic crosses the worker pipe.
 
 - **Who spawns it.** The Bare worker, one sidecar per profile, on first use:
   `engine/zxterm/core.js::Core` asks the host module named by `Bare.argv[7]` for the binary
@@ -201,8 +181,9 @@ package.
   (`test/core-boundary.test.js`). The command is
   `zxterm-core sidecar --profile <profile>/account --exit-on-stdin-eof`; its identity store is
   `<profile>/account/identity`, the files `IdentityStore` always used.
-- **Where the binary is.** `node_modules/zxterm-core-prebuilds/prebuilds/<platform>-<arch>/zxterm-core[.exe]`
-  (`X-13`), then `prebuilds/<platform>-universal/`; `ZXTERM_CORE_BIN` overrides both. A missing
+- **Where the binary is.** `node_modules/@zbterm/zxterm-core-<platform>-<arch>/zxterm-core[.exe]`
+  (the platform's optional dependency), then `npm/zxterm-core-<platform>-<arch>/` in the app
+  directory (staged by `scripts/sidecar.js`); `ZXTERM_CORE_BIN` overrides both. A missing
   binary is a named `E_BACKEND_UNAVAILABLE` ("zxterm-core sidecar binary not found ... looked in
   ..."), never a hang.
 - **The seam.** A local socket, `<profile>/account/zxterm-core.sock` (a named pipe on Windows,
@@ -270,31 +251,12 @@ it registered through `attach()` detaches rather than terminates), host → core
 it means _the terminal is gone_, and the core turns that signal-less frame into
 `DETACH_SIGNAL` on its own side.
 
-> **2026-09-24 (`260924_freenet-backend` F4; Freenet design §3.1, `D-06`/`D-09`).** Kinds 15–21,
-> the `BACKEND_*` frames, were appended; 0–14 are untouched (their lines in
-> `engine/rpc/schema.js` are unchanged, the new kinds are added after the literal). They carry the
-> Freenet backend's peer connections across the seam: the core holds the backend, the **host owns
-> the WebRTC peer connections** (`electron/rtc-host.js::RtcHost`, on `node-datachannel`), and the
-> core drives them through `engine/backends/freenet/rtc-remote.js::RtcRemote`, the way
-> `PtyRemote` drives the PTY host. `connId` names one peer connection and `chanId` one data
-> channel, both chosen by the core, except that a channel the remote peer opened gets a
-> host-assigned `chanId` of 2^31 or more. `BACKEND_SIGNAL` carries `offer`/`answer` with `sdp`, or
-> `candidate` with `candidate` and `mid`; core → host it is a remote description the core has
-> already checked. `BACKEND_CHANNEL`'s `op` is `open` (core → host), `opened` (host → core) or
-> `closed` (either). `BACKEND_DATA` is one data-channel message of at most 65 536 bytes (`S-07`),
-> never JSON-wrapped. `BACKEND_FLOW` is the host's back-pressure: `paused` once a channel's
-> `bufferedAmount` passes 1 MiB, cleared on `onBufferedAmountLow`. Toward the core, a `false`
-> pipe write pauses delivery from that channel on the host adapter until the pipe drains (as
-> `PTY_DATA` does). A host with no `rtcHost` answers `BACKEND_OPEN` with `BACKEND_CLOSE`
-> `host has no WebRTC adapter`. Codecs are pinned by `test/backend-frames.test.js`, the host
-> dispatch by `test/backend-seam.test.js`.
-
-> **2026-09-29 (K11 of zxterm-core, in `zevix/zxterm`; ZBTerm `D-34`).** Kinds 15–21 are
-> **removed** with the design they served: WebRTC runs inside the Rust `zxterm-core` sidecar, the
-> Freenet backend is a proxy to it over the sidecar's own seam (`engine/backends/freenet/index.js`),
-> and `electron/rtc-host.js`, `engine/backends/freenet/rtc-remote.js`, `test/backend-frames.test.js`
-> and `test/backend-seam.test.js` are gone. A frame of kind 15–21 now decodes as an unknown kind
-> (`E_CORRUPT`); the numbers stay reserved and are never reused. The table above marks them.
+Kinds 15–21 (`BACKEND_*`) are **removed and reserved**. From 2026-09-24 (`F4`, `D-06`/`D-09`)
+to 2026-09-29 (`K11`, `D-34`) they carried the Freenet backend's WebRTC peer connections between
+the core and a host-side adapter (`electron/rtc-host.js`); WebRTC now runs inside the
+`zxterm-core` sidecar, and that adapter, `engine/backends/freenet/rtc-remote.js` and their tests
+are gone. A frame of kind 15–21 decodes as an unknown kind (`E_CORRUPT`); the numbers are never
+reused, and a new kind is appended after 21.
 
 There is exactly **one** pipe, on purpose: a single ordered stream keeps
 terminal data, replies and lifecycle events in their true relative order.
@@ -350,17 +312,20 @@ applies on top (`electron/engine-lifecycle.js` is the reference implementation;
   session up to `SessionEngine.FLOW_LIMIT` (1 MiB), past which the PTY is
   paused. Nothing is unbounded.
 
-> **2026-09-29 (K9 of zxterm-core).** The Rust `zxterm-core` sidecar (§3) is supervised by the
-> worker that spawned it, like a share backend:
->
-> - **Health** is `core.health`, in the backend `HealthReport` shape
->   (`engine/backends/types.js`): `{ started, listening, detail }`, `detail` the last failure.
-> - **It dies with its worker.** It runs with `--exit-on-stdin-eof` on a stdin pipe nobody writes
->   to, so a worker that exits, crashes or is killed takes it along; `SessionEngine.close()` stops
->   it too.
-> - **Restart.** A sidecar that exited is started again by the next identity call. A start that
->   finds the profile still held by a sidecar that is exiting (a worker restart) is retried five
->   times, 100 ms apart; every attempt is bounded by the seam's connect timeout.
+The Rust `zxterm-core` sidecar (§3) is supervised by the worker that spawned it,
+like a share backend:
+
+- **Health** is `core.health`, in the backend `HealthReport` shape
+  (`engine/backends/types.js`): `{ started, listening, detail }`, `detail` the
+  last failure.
+- **It dies with its worker.** It runs with `--exit-on-stdin-eof` on a stdin
+  pipe nobody writes to, so a worker that exits, crashes or is killed takes it
+  along; `SessionEngine.close()` stops it too.
+- **Restart.** A sidecar that exited is started again by the next identity (or
+  Freenet) call, with none of the old one's state. A start that finds the
+  profile still held by a sidecar that is exiting (a worker restart) is retried
+  up to five attempts, 100 ms apart; every attempt is bounded by the seam's
+  connect timeout, so it never hangs.
 
 ---
 
@@ -423,13 +388,13 @@ JSON object; results are always JSON.
 | `debug.currentSelection` | —                                                                  | **always `null`** — a vestigial stub, see §7                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `preference.get`         | `{ key }`                                                          | stored string or `null`                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `preference.set`         | `{ key, value }`                                                   | `{ key, value }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `share.backends`         | —                                                                  | `{ backends: [{ id, label, capabilities, state, detail }], default, active, limitedBy }` — see "Share backends" below                                                                                                                                                                                                                                                                                                                                                                                 |
-| `share.createLink`       | `{ sessionId, backend?, … }`                                       | a `pear://`-style share URI. `backend` names the share backend (an `id` from `share.backends`); omitted means the default. `E_BACKEND_UNSUPPORTED` when this build lacks it, `E_BACKEND_UNAVAILABLE` when another backend is in use                                                                                                                                                                                                                                                                   |
+| `share.backends`         | —                                                                  | `{ backends: [{ id, label, capabilities, state, detail }], default, active, running, limitedBy }` — `running` lists every started backend; see "Share backends" below                                                                                                                                                                                                                                                                                                                                                                                 |
+| `share.createLink`       | `{ sessionId, backend?, … }`                                       | the stored link record plus `uri`, its `zbterm://join/…` invite. `backend` names the share backend (an `id` from `share.backends`); omitted means the default. `E_BACKEND_UNSUPPORTED` when this build lacks it, `E_BACKEND_UNAVAILABLE` when the session is already shared over another backend                                                                                                                                                                                                                                                                   |
 | `share.listLinks`        | `{ sessionId }`                                                    | issued links                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `share.revokeLink`       | `{ sessionId, linkId }`                                            | revokes one link                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `share.revokeMember`     | `{ sessionId, identityKey }`                                       | revokes one member                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `share.join`             | `{ uri }`                                                          | joins someone else's session                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `share.diagnostics`      | —                                                                  | swarm/relay diagnostics (distinct from `session.diagnostics`). `backend` is the active backend's own report (`{ id, … }`, `null` while none is active); the older top-level keys `relayPublicKey`, `relayFallbackMs`, `hostSwarm` stay as aliases of it                                                                                                                                                                                                                                               |
+| `share.diagnostics`      | —                                                                  | swarm/relay diagnostics (distinct from `session.diagnostics`). `backend` is the active backend's own report (`{ id, … }`, `null` while none is active) and `backends` lists every running backend's report; the older top-level keys `relayPublicKey`, `relayFallbackMs`, `hostSwarm` stay as aliases of it                                                                                                                                                                                                                                               |
 | `share.approveJoin`      | `{ sessionId, requestId }`                                         | approves a pending join                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `share.denyJoin`         | `{ sessionId, requestId }`                                         | denies a pending join                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `share.setInputMode`     | `{ sessionId, mode }`                                              | host/viewer input mode                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -482,102 +447,68 @@ is a bitset; adapters should treat it as opaque unless they ship with the core.
 An empty `backends` means the core is local-only: a host should hide its share
 and join UI, and every share call rejects with `E_BACKEND_UNSUPPORTED`.
 
-One backend is active per run. It is created on the first `share.createLink`
-(its `backend` argument, else `default`) or `share.join` (the invite's backend
-decides). Asking for another one while shares or joins exist rejects with
-`E_BACKEND_UNAVAILABLE`; with none, the core stops the old backend and starts
-the new one.
+Backends can run side by side. Each one starts on the first `share.createLink`
+that names it (its `backend` argument, else `default`) or the first `share.join`
+of an invite for it, and stays running until the core closes. A session is
+shared over one backend at a time: `share.createLink` naming another backend for
+an already shared session rejects with `E_BACKEND_UNAVAILABLE`. `share.backends`
+lists the running ones in `running`; `active` is the default one when it is
+running, else the first started.
 
-> **2026-09-24 (freenet-backend F3).** `freenet`'s `detail` values. In
-> `share.backends` it is listed as `state: 'broken'`, `detail: 'not yet wired'`
-> until its sharing path lands (the project's phase F9); it was `'probe only'`
-> before, and the development switch that made the stub `available` is gone.
-> The backend itself answers `E_BACKEND_UNAVAILABLE` with
-> `details: { backend: 'freenet', detail }`, where `detail` is
-> `'no Freenet node at <nodeUrl>'` when `start()` finds no node (the socket
-> fails or does not open within 5 s), `'no transport key'` when a route is
-> asked for before an identity exists, and `'not yet wired'` for a member that
-> is not implemented yet (`announce`, `dial`, `attachHistory`).
->
-> **2026-09-24 (freenet-backend F6).** `announce` and `dial` are implemented; of the three members
-> above only `attachHistory` still answers `'not yet wired'`. Before `start()` they answer
-> `E_BACKEND_UNAVAILABLE` with `detail` `'not started'`, and without the host's WebRTC adapter
-> `'host has no WebRTC adapter'`. A Freenet join whose peer presents a DTLS certificate other than
-> the one in the SDP the host signed is rejected with **`E_AUTH`**, `details: { backend: 'freenet',
-detail: 'fingerprint mismatch' }`, before any connection is surfaced (Freenet design §6; the
-> library refuses such a certificate itself first, so this is the second check); a peer connection
-> that fails before it is up is `E_HOST_UNREACHABLE` with `detail` `'ice-failed'`. The backend's
-> `'connection'` event (inside the core; ShareManager is its only listener) carries
-> `info: { linkId }` on the hosting side and `info: { linkId: null }` on the dialing side.
->
-> **2026-09-24 (freenet-backend F7).** Correction to the F6 note above: `announce` and `dial`
-> called while `start()` is still opening the node socket now wait for it (ShareManager starts its
-> backend without awaiting); `'not started'` is answered only when no `start()` is under way or it
-> failed. A Freenet connection's channels carry JSON as the other backends' do; a data-channel
-> message on the seam (`BACKEND_DATA`) is one part of such a message, `[flags u8][index u32 LE]`
-> followed by at most 65 531 bytes of UTF-8 JSON (`engine/backends/freenet/channel.js`).
->
-> **2026-09-24 (freenet-backend F8).** Correction to the F3 and F6 notes above: `attachHistory` is
-> implemented and no member answers `'not yet wired'` any more (the backend's `share.backends`
-> entry still does until F9). History rides one more data channel per connection, labelled
-> `zbterm/history 00`, whose `BACKEND_DATA` messages are **not** JSON parts: they are raw
-> fragments, at most 65 536 bytes each, of a byte stream of `u32 LE length ‖ bytes` frames carrying
-> a Noise-wrapped Hypercore replication stream (`engine/backends/freenet/history.js`). On every
-> Freenet data channel except the bootstrap one, the side that did not open it first sends one
-> 5-byte `READY` part (`[0x02][u32 LE 0]`); the opener sends nothing before it (`S-27`).
->
-> **2026-09-24 (freenet-backend F9).** Correction to the F3 and F8 notes above: `freenet` is no
-> longer `'not yet wired'`. Its entry is `available` when the host offers its WebRTC adapter
-> (otherwise `broken` / `'host has no WebRTC adapter'`), and `share.backends` then awaits the
-> backend's optional static `probe(ctx)` (at most 2 s, `engine/backends/index.js::probe`): with no
-> node answering a WebSocket at its address the entry is `broken` with `detail` `'no Freenet node
-at ws://127.0.0.1:7509 — see README "Freenet"'` (the address it tried), and it is then not the
-> `default`. A join whose dial the backend rejects (`E_HOST_UNREACHABLE` / `'ice-failed'`,
-> `E_AUTH` / `'fingerprint mismatch'`, …) now ends at once with `share:join-changed`
-> `{ status: 'failed', code, detail, backend, message }` instead of at the join timeout. The half-open
-> peer connections of a Freenet link expire after 15 s and one viewer key holds at most 2 of the 8
-> (`S-22`). `share.setIceServers` (new) carries the host's ICE list; the Freenet backend's
-> `share.diagnostics` report gains `ice: { servers, hostCandidatesOnly, relay }` (servers without
-> credentials) and `describe()` claims `RELAY` only with a `turn:` URL.
->
-> **2026-09-29 (K11 of zxterm-core, in `zevix/zxterm`; ZBTerm `D-34`).** Corrections to the F6–F9
-> notes above. The Freenet backend is a proxy to the Rust `zxterm-core` sidecar, so `'host has no
-> WebRTC adapter'` is gone: the registry lists `freenet` `available` whenever the module loads, and
-> `share.backends` probes the node through the profile's sidecar. `start()` against no node answers
-> `detail` `'no Freenet node at <scheme://host:port>'` (the address without its path).
-> `describe()` never claims `RELAY` (the sidecar has no TURN client, zxterm-core `X-18`), and
-> `ice.relay` is always `false`; `share.setIceServers`' `null` hands the choice to the sidecar's own
-> list. The channel and history wires of the F7/F8 notes are unchanged on the network; they no
-> longer cross this seam (no `BACKEND_DATA`), but the sidecar's (`Chan` frames). `routeFor()` may
-> return a promise (the sidecar mints the route).
+**The Freenet backend** (`freenet`) is a proxy, in the worker, to the profile's
+`zxterm-core` sidecar (§3), which runs the Freenet contract client, the WebRTC
+peer connections and the Freenet session protocol (zxterm's
+`docs/projects/260928_zxterm-core/protocol.md`, "Freenet session protocol v2").
+What a caller of the `share.*` methods sees is the same as for the other
+backends, except:
 
-> **2026-09-30 (K17 of zxterm-core; `D-40`).** Correction to the F8 note above: the Freenet
-> backend's history is no longer the raw `zbterm/history 00` channel with a Noise-wrapped
-> Hypercore replication, and `engine/backends/freenet/history.js` is deleted. `serveHistory(conn,
-> store)` does nothing on Freenet (the core serves a session's history on its own channel from what
-> the host opened), `attachHistory(conn, store, keys)` returns a `CoreHistoryHandle`
-> (`engine/zxterm/history.js`: the same `fetch({start, end})` -> `done()`/`destroy()`/`close()`
-> handle, answered by the core), and `historyRouteFor(store)` returns `{kind: 'segment-v1', host,
-> session}` once the store knows the host's history signing key. Pear and the loopback are as
-> before.
+- **Listing.** `freenet` is `available` whenever the build carries it, and
+  `share.backends` then awaits its static `probe(ctx)` (at most 2 s,
+  `engine/backends/index.js::probe`), which asks the sidecar to open a WebSocket
+  to the node. With no node answering, the entry is `broken` with `detail`
+  `'no Freenet node at <scheme://host:port> — see README "Freenet"'`, and it is
+  then not the `default`.
+- **Errors.** The backend answers `E_BACKEND_UNAVAILABLE` with
+  `details: { backend: 'freenet', detail }`: `'no Freenet node at
+  <scheme://host:port>'` when `start()` finds no node, `'not started'` when no
+  `start()` is under way or it failed (calls made while `start()` is still
+  running wait for it), `'no transport key'` when a route is asked for before
+  an identity exists, and `'core exited'` when the sidecar went away under a
+  dial. A peer whose DTLS certificate is not the one in the SDP the host signed
+  is rejected with **`E_AUTH`** / `'fingerprint mismatch'` before any connection
+  is surfaced; a peer connection that fails before it is up is
+  `E_HOST_UNREACHABLE` / `'ice-failed'`. A join whose dial is rejected ends at
+  once with `share:join-changed` `{ status: 'failed', code, detail, backend,
+  message }` rather than at the join timeout.
+- **Admission.** The half-open peer connections of a Freenet link expire after
+  15 s, and one viewer key holds at most 2 of the 8 a link allows (`S-22`).
+- **ICE.** `share.setIceServers` sets the ICE list for new peer connections
+  (`[]`: host candidates only; `null`: the sidecar's own list). The sidecar has
+  no TURN client (`X-18`), so `describe()` never claims `RELAY`, and the
+  backend's `share.diagnostics` report carries `ice: { servers,
+  hostCandidatesOnly, relay: false }` (servers without credentials).
+- **Routes.** An invite's Freenet `route` is minted by the sidecar and carries
+  `params.pv = 2`; ZBTerm passes it through untouched. A route without it is
+  refused by the joiner, offline, with `share:join-changed` `{ status:
+  'failed', code: 'E_BACKEND_UNSUPPORTED', reason: 'unreachable' }`. A link
+  stored before this protocol has a route the sidecar refuses, so
+  `share.listLinks` mints, stores and announces a new one for it, and that
+  link's `uri` changes. The first epoch of a Freenet share is minted when the
+  share opens, so its numbers run one higher than a Pear share's.
+- **History.** The sidecar serves a session's history: `serveHistory()` does
+  nothing on Freenet, `attachHistory()` returns a `CoreHistoryHandle`
+  (`engine/zxterm/history.js`), and `historyRouteFor(store)` is
+  `{ kind: 'segment-v1', host, session }` once the store knows the host's
+  history signing key.
+- **Trace.** A Freenet share's `share:debug` trace also carries the sidecar's
+  own events (with a `joinId` in their details) and adds `host:core:error`,
+  `host:push:error`, `host:epoch:timeout`, `host:join-revoked-late`,
+  `host:link:route-refreshed` and `host:link:route-check-failed`.
 
-> **2026-09-30 (K14 of zxterm-core, in `zevix/zxterm`; `D-38`).** A Freenet share's session protocol
-> runs in the sidecar (zxterm `docs/projects/260928_zxterm-core/protocol.md`, "Freenet session
-> protocol v2"), reached through the seam's `share.*` methods; what a caller of `share.*` (the
-> engine methods below) sees is unchanged, with these differences. An invite's Freenet `route`
-> carries `params.pv = 2`, minted by the sidecar and passed through untouched (ZBTerm never reads
-> it); a route without it is refused by the joiner, offline, with `share:join-changed`
-> `{ status: 'failed', code: 'E_BACKEND_UNSUPPORTED', reason: 'unreachable' }` and a message that
-> names the upgrade, and a `pv: 2` route is refused by a pre-C2 build at its route check
-> (`E_CORRUPT`, "The Freenet route does not match its contract code and parameters"). A link stored
-> before this protocol has a route the sidecar refuses, so `share.listLinks` mints, stores and
-> announces a new one for it, and that link's invite changes (`share.listLinks`' `uri`). The first
-> epoch of a Freenet share is minted when the share opens, so its numbers run one higher than a
-> Pear share's. The `share:debug` trace of a Freenet share also carries the sidecar's own events
-> (the names of the trace ZBTerm always had, with a `joinId` in their details) and adds
-> `host:core:error`, `host:push:error`, `host:epoch:timeout`, `host:join-revoked-late`,
-> `host:link:route-refreshed` and `host:link:route-check-failed`. The Pear and loopback backends
-> are unchanged.
+> **History.** The Freenet backend landed in phases `F3`–`F9` (2026-09-24) with its WebRTC half in
+> the host process (`BACKEND_*` frames, `'host has no WebRTC adapter'`, a raw `zbterm/history 00`
+> channel); `K11` (2026-09-29, `D-34`), `K14` (`D-38`) and `K17` (`D-40`, 2026-09-30) moved
+> WebRTC, the session protocol and history into the `zxterm-core` sidecar, as described above.
 
 ### 5.2 Low-rate events (`EVENT_JSON`)
 
@@ -607,22 +538,22 @@ must ignore names it does not know.
 
 <!-- contract:low-rate-events:end -->
 
-> **2026-09-25 (join outcomes, `S-32`–`S-34`).** `share:join-changed` `{ status: 'failed' }` now also
-> carries `reason` (`engine/share-manager.js::JOIN_REASONS`: `denied`, `revoked`, `consumed`, `full`,
-> `ended`, `bad-identity-proof`, `device-revoked`, `identity`, `unreachable`, `no-answer`, `closed`,
-> `host-mismatch`); `joined` is emitted once per join, later host bootstraps arrive as
-> `session:restored`. `session:exit` carries `uptimeMs` and `command` next to `exit`.
-> `share:approval-cancelled` `{ requestId, sessionId }` (new) says the requester of a pending
-> `share:approval-pending` left before it was decided.
+Payload details a host commonly needs:
 
-`identity:resolve-request` is the second host adapter after the PTY host: the
-core has no HTTP client, so it asks, and the host answers with the
-`identity.resolveResult` invoke.
+- `share:join-changed` `{ status: 'failed' }` carries `reason`, one of
+  `engine/share-manager.js::JOIN_REASONS`: `denied`, `revoked`, `consumed`,
+  `full`, `ended`, `bad-identity-proof`, `device-revoked`, `identity`,
+  `unreachable`, `no-answer`, `closed`, `host-mismatch` (`S-32`–`S-34`).
+  `joined` is emitted once per join; later host bootstraps arrive as
+  `session:restored`.
+- `session:exit` carries `uptimeMs` and `command` next to `exit`.
+- `share:approval-cancelled` `{ requestId, sessionId }` says the requester of a
+  pending `share:approval-pending` left before it was decided.
 
-> **2026-09-29 (K9 of zxterm-core, in `zevix/zxterm`).** The paragraph above is superseded: the
-> `identity:resolve-request` event and the `identity.resolveResult` method are gone from the
-> contract. Provider key lookups are made by the Rust `zxterm-core` sidecar (see §3, "The
-> `zxterm-core` sidecar"), which has its own HTTP client, so the host no longer answers them.
+The PTY host (§6) is the only host adapter the core needs. Provider key lookups
+are made by the `zxterm-core` sidecar (§3), which has its own HTTP client; the
+`identity:resolve-request` event and `identity.resolveResult` method that once
+asked the host to make them were removed on 2026-09-29 (K9).
 
 Two more names reach a host from `EngineClient` itself and are **not** core
 events: `worker:ready` `{ sessionIds }` and `worker:exit`
@@ -671,7 +602,7 @@ events: 'data' -> { sessionId, data: Buffer }
 ```
 
 Attach mode, added in Phase 3, is the optional half — for hosts that _already
-own_ a terminal (a Tabby tab, an SSH session someone else launched):
+own_ a terminal (a tab in another terminal app, an SSH session someone else launched):
 
 ```js
 createSession({
@@ -693,7 +624,8 @@ diagnostics(sessionId?) -> { sessions: [{ sessionId, mode, active, cols, rows,
   pendingBytes, flowPaused, bufferLimit, bufferedBytes, bufferedChunks,
   droppedBytes, droppedChunks }] }
 // NEW in Phase 3, routed over the seam as `session.diagnostics`. Distinct from
-// share.diagnostics(). electron/debug-server.js has no route for it yet.
+// share.diagnostics(). electron/debug-server.js has no dedicated route for it
+// (POST /invoke reaches it).
 ```
 
 Three semantics differ from spawn mode:
@@ -780,7 +712,8 @@ total }` as for a joined download (the `session:availability-changed`
   fallback for `Unknown method: debug.currentSelection`. It is listed above
   because it _is_ reachable through `invoke()`, but adapters should not depend
   on it; it is the first candidate for a deprecation pass.
-- **`session.diagnostics` has no debug-server route** yet, unlike
-  `share.diagnostics`.
+- **`session.diagnostics` has no dedicated debug-server route**, unlike
+  `share.diagnostics` (`GET /share/diagnostics`); it is reachable only through
+  the generic `POST /invoke`.
 - **The catalog entry shape carries no `mode`**, deliberately — attach and
   spawn recordings are indistinguishable to playback, and that is contract.

@@ -87,7 +87,12 @@ test('default variant is pear,freenet: both backends and their dependencies stay
       )
     }
   }
-  t.ok(pkg.dependencies['zxterm-core-prebuilds'], 'the sidecar ships in every build (D-22)')
+  t.absent(
+    ignore('/npm/zxterm-core-linux-x64/zxterm-core'),
+    'the staged sidecar ships in every build (D-22)'
+  )
+  t.ok(ignore('/zxterm'), 'the sidecar source submodule does not')
+  t.ok(ignore('/zxterm/target/release/zxterm-core'))
   t.absent(pkg.optionalDependencies['pear-runtime'], 'no build has the updater (D-08)')
   t.absent(pkg.optionalDependencies.corestore)
   t.absent(pkg.upgrade, 'nor an OTA upgrade key')

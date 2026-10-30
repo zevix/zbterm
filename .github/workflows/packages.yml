@@ -1,0 +1,88 @@
+# Builds every npm package a zbterm release consists of, without publishing
+# anything: the zbterm tarball, and the zxterm-core sidecar built from the
+# zxterm/ submodule for every target in scripts/sidecar.js#TARGETS, each on
+# its own native runner and packed as its platform package. Run it by hand
+# (Actions > Packages > Run workflow) to get installable builds; the
+# `zbterm-packages` artifact holds them all. To test one, install the zbterm
+# tarball together with the platform package for your machine:
+#
+#   npm install -g zbterm-<version>.tgz zbterm-zxterm-core-<platform>-<arch>-<version>.tgz
+#
+# publish.yml calls it too and publishes from the `zxterm-core-*` binaries.
+name: Packages
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  # Linux builds on ubuntu-22.04 so the binary needs no newer glibc than 2.35.
+  sidecar:
+    name: Sidecar ${{ matrix.dir }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { triple: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, dir: linux-x64 }
+          - { triple: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, dir: linux-arm64 }
+          # Paused: no macOS builds until sharing works on Linux.
+          # - { triple: x86_64-apple-darwin, runner: macos-26-intel, dir: darwin-x64 }
+          # - { triple: aarch64-apple-darwin, runner: macos-latest, dir: darwin-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Rust toolchain (zxterm/rust-toolchain.toml)
+        working-directory: zxterm
+        run: rustup show active-toolchain
+      - name: Build and stage
+        run: node scripts/sidecar.js build ${{ matrix.triple }}
+      - name: Smoke test
+        run: npm/zxterm-core-${{ matrix.dir }}/zxterm-core --version
+      - name: Pack the platform package
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist "$PWD/npm/zxterm-core-${{ matrix.dir }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zxterm-core-${{ matrix.dir }}
+          path: npm/zxterm-core-${{ matrix.dir }}/zxterm-core
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-zxterm-core-${{ matrix.dir }}
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  zbterm:
+    name: zbterm tarball
+    runs-on: ubuntu-latest
+    steps:
+      # A full dev install: `npm pack` runs `prepack`, which vendors the
+      # renderer assets out of devDependencies.
+      - uses: holepunchto/actions/node-base@v1
+        with:
+          allow-git: all
+      - name: Pack
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-zbterm
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  # Every tarball in one download.
+  bundle:
+    needs: [sidecar, zbterm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact/merge@v4
+        with:
+          name: zbterm-packages
+          pattern: npm-*

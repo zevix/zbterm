@@ -4,22 +4,85 @@ on:
     tags:
       - v*
 permissions:
-  id-token: write
-  contents: write
+  contents: read
 jobs:
   # Publishing is gated on the full Integrate workflow - lint plus the
-  # cross-platform `npm install -g` matrix (Linux, macOS arm64, macOS x64,
-  # Windows) - running against exactly this tag. A tarball that does not
-  # install cleanly on all four cannot reach npm.
+  # cross-platform `npm install -g` matrix - running against exactly this tag.
+  # A tarball that does not install cleanly cannot reach npm.
   integrate:
     uses: ./.github/workflows/integrate.yml
 
+  # The zxterm-core sidecar for every target, and the tarballs (packages.yml).
+  packages:
+    uses: ./.github/workflows/packages.yml
+
+  # The platform packages first, then zbterm, whose optionalDependencies are
+  # written only here (scripts/sidecar.js inject), pinned to this version.
+  # Uses npm trusted publishing (OIDC): configure this repository and
+  # workflow as a trusted publisher of zbterm and of each
+  # @zbterm/zxterm-core-* package on npmjs.com, or set an NPM_TOKEN secret
+  # in the `npm` environment for the first release.
   publish:
-    needs: [integrate]
+    needs: [integrate, packages]
     runs-on: ubuntu-latest
     environment:
       name: npm
-    name: Publish
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # The platforms this release ships. macOS is paused in packages.yml;
+      # add darwin-x64 darwin-arm64 back here when it is unpaused.
+      PLATFORMS: linux-x64 linux-arm64
     steps:
       - uses: holepunchto/actions/node-base@v1
-      - uses: holepunchto/actions/publish@v1
+        with:
+          allow-git: all
+      - name: Check out the zxterm submodule
+        run: git submodule update --init --depth 1 zxterm
+      - name: npm with trusted publishing
+        run: npm install -g npm@11
+      # With an NPM_TOKEN secret npm publishes with it; without one it falls
+      # back to trusted publishing, which only works once a package exists.
+      - name: npm token
+        if: env.NODE_AUTH_TOKEN != ''
+        run: echo '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' >> ~/.npmrc
+      - name: Check the tag
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zxterm-core-*
+          path: artifacts
+      - name: Publish the sidecar packages
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          # Every binary is checked before anything is published, so a
+          # missing target stops the release instead of publishing some of
+          # the packages.
+          for dir in $PLATFORMS; do
+            test -f "artifacts/zxterm-core-$dir/zxterm-core" || {
+              echo "no zxterm-core binary for $dir; not publishing" >&2
+              exit 1
+            }
+          done
+          for dir in $PLATFORMS; do
+            node scripts/sidecar.js stage "$dir" "artifacts/zxterm-core-$dir/zxterm-core"
+            name="$(node -p "require('./npm/zxterm-core-$dir/package.json').name")"
+            # A re-run after a failed zbterm publish skips what is already up.
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published"
+              continue
+            fi
+            (cd "npm/zxterm-core-$dir" && npm publish --provenance --access public)
+          done
+      - name: Publish zbterm
+        run: |
+          node scripts/sidecar.js inject $PLATFORMS
+          npm publish --provenance --access public

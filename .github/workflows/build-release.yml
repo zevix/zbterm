@@ -54,9 +54,19 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:all
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
+      # sfw: false - the Socket firewall only vets package downloads, and
+      # dependencies are installed in an earlier step. Its proxy env
+      # (HTTP_PROXY=127.0.0.1:<port>) is passed into snapcraft's LXD build
+      # container, where 127.0.0.1 is the container itself, so apt fails.
       - uses: holepunchto/actions/make-pear-app@v1
         with:
           channel: ${{ env.CHANNEL }}
+          sfw: false
           linux_appimage: >-
             ${{ format('{0}-{1}-{2}.AppImage',
                 needs.prebuild.outputs.package-name,
@@ -93,10 +103,20 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:all
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
+      # sfw: false - the Socket firewall only vets package downloads, and
+      # dependencies are installed in an earlier step. Its proxy env
+      # (HTTP_PROXY=127.0.0.1:<port>) is passed into snapcraft's LXD build
+      # container, where 127.0.0.1 is the container itself, so apt fails.
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
         with:
           channel: ${{ env.CHANNEL }}
+          sfw: false
           linux_appimage: >-
             ${{ format('{0}-{1}-{2}.AppImage',
                 needs.prebuild.outputs.package-name,
@@ -113,7 +133,9 @@ jobs:
                 needs.prebuild.outputs.version,
                 'arm64') }}
 
+  # Paused: no macOS builds until sharing works on Linux.
   build-macos:
+    if: false
     needs: [prebuild]
     timeout-minutes: 20
     permissions:
@@ -133,6 +155,11 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:mac
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
         with:
@@ -150,7 +177,9 @@ jobs:
           macos_apple_password: ${{ secrets.APPLE_PASSWORD }}
           macos_apple_team_id: ${{ secrets.APPLE_TEAM_ID }}
 
+  # Paused: no macOS builds until sharing works on Linux.
   build-macos-x64:
+    if: false
     needs: [prebuild]
     timeout-minutes: 20
     permissions:
@@ -170,6 +199,11 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:mac
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
         with:
@@ -187,7 +221,11 @@ jobs:
           macos_apple_password: ${{ secrets.APPLE_PASSWORD }}
           macos_apple_team_id: ${{ secrets.APPLE_TEAM_ID }}
 
+  # Disabled until the zxterm-core sidecar has a Windows build (its
+  # named-pipe listener is not implemented): a Windows package would start
+  # without its core.
   build-win32:
+    if: false
     needs: [prebuild]
     timeout-minutes: 20
     permissions:
@@ -209,6 +247,11 @@ jobs:
       - uses: holepunchto/actions/run-npm-script@v1
         with:
           script: postinstall:all
+      # The app ships the zxterm-core sidecar staged under npm/ (forge.config.js).
+      - name: Build the sidecar
+        run: |
+          git submodule update --init --depth 1 zxterm
+          node scripts/sidecar.js build
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
         with:

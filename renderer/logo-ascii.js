@@ -1,32 +1,36 @@
 // Single source of truth for the ZBTerm mark. Edit this, then run `npm run
 // icons` to regenerate renderer/logo.svg and every packager icon from it.
-// Cells: '.' background, '-' scanline grey, 'G' accent green. Two horizontal
-// cells make up one SVG unit; one vertical cell makes up one unit.
+// The mark stacks the two networks ZBTerm shares over: the blue Freenet
+// rabbit's head (ears, eyes, chin) on top of the green Pear (pears.com) pear,
+// with a small blue rabbit tail off the pear's right side.
+// Cells: '.' background, '-' scanline grey, 'G' accent green, 'B' Freenet blue.
+// Two horizontal cells make up one SVG unit; one vertical cell makes up one unit.
 window.STARTUP_LOGO_RAW_LINES = [
-  '.---------------------------GG-----------------------------------.',
-  '----------------------------GG------------------------------------',
+  '.---------------------------------------BBBB---------------------.',
+  '------------------------BBBBBB--------BBBBBB----------------------',
   '..................................................................',
-  '------------------------------GGGGGGG-----------------------------',
-  '-----------------------GGGGGGGGGGGGGG-----------------------------',
+  '------------------BBBBBBBBBBBBBB----BBBBBB------------------------',
+  '----------------BBBB------BBBBBBBBBBBBBBBB------------------------',
   '..................................................................',
-  '------------------------------GGGGGGGGG---------------------------',
-  '---------------------GGGGGGGGGGGGGGGGGG---------------------------',
+  '----------------------BBBBB..BBBBBBBB..BBBBB----------------------',
+  '------------------------BBBBBBBB..BBBBBBBB------------------------',
   '..................................................................',
-  '-----------------------------GGGGGGGGGGGG-------------------------',
-  '-------------------GGGGGGGGGGGGGGGGGGGGGG-------------------------',
+  '----------------------------BBBBBBBBBB----------------------------',
+  '----------------------------GGGGGGGGGG----------------------------',
   '..................................................................',
-  '-----------------------------GGGGGGGGGGGGGGGG---------------------',
-  '--------------GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG---------------------',
+  '------------------------GGGGGGGGGGGGGGGGGG------------------------',
+  '----------------------GGGGGGGGGGGGGGGGGGGGGG----------------------',
   '..................................................................',
-  '-----------------------------GGGGGGGGGGGGGGGG---------------------',
-  '--------------GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG---------------------',
+  '--------------------GGGGGGGGGGGGGGGGGGGGGGGGGG-BBBB---------------',
+  '--------------------GGGGGGGGGGGGGGGGGGGGGGGGGG-BBB----------------',
   '..................................................................',
-  '-----------------------------GGGGGGGGGGGG-------------------------',
-  '.-------------------GGGGGGGGGGGGGGGGGGGGG------------------------.'
+  '--------------------GGGGGGGGGGGGGGGGGGGGGGGGGG--------------------',
+  '.-----------------------GGGGGGGGGGGGGGGGGG-----------------------.'
 ]
 
 window.STARTUP_LOGO_COLORS = {
   black: '#444444',
   grey: '#696969',
-  green: '#9ad227'
+  green: '#9ad227',
+  blue: '#007fff'
 }

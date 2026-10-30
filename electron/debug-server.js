@@ -226,7 +226,8 @@ function createDebugServer(opts) {
         type: body.type,
         maxViewers: body.maxViewers,
         caps: body.caps,
-        autoJoin: body.autoJoin
+        autoJoin: body.autoJoin,
+        backend: body.backend
       })
       return { ...link, key: link.uri }
     }),

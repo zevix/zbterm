@@ -11,11 +11,12 @@
 // `engine/zxterm/core.js::setCoreHost`. It also runs under Node, where a
 // test or a script injects it the same way.
 //
-// The binary is the `zxterm-core-prebuilds` package's
-// `prebuilds/<platform>-<arch>/zxterm-core[.exe]` (X-13): a plain
-// `dependency`, pruned per target by the prebuilds Forge plugins, which
-// rename `darwin-<arch>` to `darwin-universal` on macOS. `ZXTERM_CORE_BIN`
-// overrides it.
+// The binary is `zxterm-core` at the root of this platform's npm package,
+// `@zbterm/zxterm-core-<platform>-<arch>`: an optional dependency of the
+// published zbterm, so npm installs only the one for this machine. A source
+// checkout or a desktop build has no such package; there the binary is the
+// one `scripts/sidecar.js build` staged under `npm/zxterm-core-<platform>-<arch>/`,
+// built from the `zxterm/` submodule. `ZXTERM_CORE_BIN` overrides both.
 'use strict'
 
 const IS_BARE = typeof Bare !== 'undefined'
@@ -23,24 +24,33 @@ const fs = IS_BARE ? require('bare-fs') : require('fs')
 const path = IS_BARE ? require('bare-path') : require('path')
 const proc = IS_BARE ? require('bare-process') : process
 
-const PACKAGE = 'zxterm-core-prebuilds'
+const SCOPE = '@zbterm'
+const APP_ROOT = path.join(__dirname, '..')
 
 function executableName(platform = proc.platform) {
   return platform === 'win32' ? 'zxterm-core.exe' : 'zxterm-core'
 }
 
+// The npm package that carries the binary for one platform.
+function packageName(platform = proc.platform, arch = proc.arch) {
+  return `${SCOPE}/zxterm-core-${platform}-${arch}`
+}
+
+// Where `scripts/sidecar.js` stages that package in this tree.
+function stagedDir(platform = proc.platform, arch = proc.arch) {
+  return path.join(APP_ROOT, 'npm', `zxterm-core-${platform}-${arch}`)
+}
+
 // Where the binary may be, in the order they are tried.
 function candidates(platform = proc.platform, arch = proc.arch) {
-  let pkgDir
-  try {
-    pkgDir = path.dirname(require.resolve(`${PACKAGE}/package.json`))
-  } catch {
-    return []
-  }
   const exe = executableName(platform)
-  return [`${platform}-${arch}`, `${platform}-universal`].map((dir) =>
-    path.join(pkgDir, 'prebuilds', dir, exe)
-  )
+  const found = []
+  try {
+    const pkg = require.resolve(`${packageName(platform, arch)}/package.json`)
+    found.push(path.join(path.dirname(pkg), exe))
+  } catch {}
+  found.push(path.join(stagedDir(platform, arch), exe))
+  return found
 }
 
 // The binary to run, or a named error saying where it looked.
@@ -53,9 +63,7 @@ function bin() {
   }
   throw new Error(
     `zxterm-core sidecar binary not found for ${proc.platform}-${proc.arch}` +
-      (tried.length
-        ? ` (looked in ${tried.join(', ')})`
-        : ` (the ${PACKAGE} package is not installed)`)
+      ` (looked in ${tried.join(', ')})`
   )
 }
 
@@ -74,4 +82,4 @@ function spawn(file, args) {
   return require('child_process').spawn(file, args, { ...opts, windowsHide: true })
 }
 
-module.exports = { spawn, bin, candidates, executableName, PACKAGE }
+module.exports = { spawn, bin, candidates, executableName, packageName, stagedDir }

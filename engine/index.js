@@ -49,6 +49,11 @@ const HISTORY_DOWNLOAD_CHUNK = 8192
 // another open may try again.
 const CORE_CATCHUP_MS = 20000
 const CORE_CATCHUP_RETRY_MS = 30000
+// A joined session opened for playback the moment it is joined: how long the
+// open waits for the first history packets the host has already announced
+// (a Freenet viewer's arrive through the core shortly after the join).
+const REMOTE_HISTORY_WAIT_MS = 5000
+const REMOTE_HISTORY_POLL_MS = 50
 // A copyHistoryFrom copy re-seals packets in batches of COPY_BATCH_PACKETS (or
 // COPY_BATCH_BYTES of payload, whichever comes first) and
 // holds the source's store lock for at most COPY_SLICE_MS at a time (less when
@@ -1266,7 +1271,7 @@ class SessionEngine extends EventEmitter {
         if (existing.store.remote && remote && remote.active) {
           if (remote.timelineQueue) await remote.timelineQueue.catch(() => {})
           await this._refreshRemoteTimelineFromDisk(remote)
-          existing.store.playbackLength = await this._remoteAvailableLength(remote)
+          existing.store.playbackLength = await this._waitForRemoteHistory(remote)
         } else if (existing.store.remote) {
           await existing.store.extendTimeline().catch(() => {})
         }
@@ -1314,7 +1319,7 @@ class SessionEngine extends EventEmitter {
         snapshot = remote.snapshot
         if (remote.timelineQueue) await remote.timelineQueue.catch(() => {})
         await this._refreshRemoteTimelineFromDisk(remote)
-        store.playbackLength = await this._remoteAvailableLength(remote)
+        store.playbackLength = await this._waitForRemoteHistory(remote)
       } else {
         const entry = await this.catalog.get(sessionId)
         // Opening a store that does not exist would create an empty one.
@@ -1344,7 +1349,7 @@ class SessionEngine extends EventEmitter {
       const remote = this.remoteSessions.get(sessionId)
       const length =
         store.remote && remote && remote.active
-          ? await this._remoteAvailableLength(remote)
+          ? await this._waitForRemoteHistory(remote)
           : await playbackLength(store)
       store.playbackLength = length
       assertPlayableLength(store, length)
@@ -1818,6 +1823,21 @@ class SessionEngine extends EventEmitter {
     return await remote.store.availableLength().catch(() => {
       return Math.min(remote.store.log.length || 0, timelineLength(remote.store.timeline))
     })
+  }
+
+  // The joined session's available history, waiting up to
+  // REMOTE_HISTORY_WAIT_MS for its first packets when the host has announced
+  // history (its timeline) that has not reached this device yet.
+  async _waitForRemoteHistory(remote) {
+    const deadline = Date.now() + REMOTE_HISTORY_WAIT_MS
+    for (;;) {
+      const length = await this._remoteAvailableLength(remote)
+      const announced = timelineLength(remote && remote.store && remote.store.timeline)
+      if (length > 0 || announced === 0 || !remote.active || Date.now() >= deadline) {
+        return length
+      }
+      await new Promise((resolve) => setTimeout(resolve, REMOTE_HISTORY_POLL_MS))
+    }
   }
 
   async _refreshRemoteTimelineFromDisk(remote) {

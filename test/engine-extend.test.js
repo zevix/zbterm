@@ -500,7 +500,9 @@ test('copyHistoryFrom returns before the copy and keeps history, resize, live ou
     )
     const rest = summarize(packets.slice(sourcePackets.length))
     t.is(rest[0], 'RESIZE:80x24', 'then the first resize')
-    t.alike(rest.slice(1), ['LIVE-1\r\n', 'LIVE-2\r\n'], 'then the live output')
+    // How the recorder splits output into packets is not part of the contract:
+    // LIVE-2 can arrive before LIVE-1 is written and share its packet.
+    t.is(rest.slice(1).join(''), 'LIVE-1\r\nLIVE-2\r\n', 'then the live output, in order')
     for (let i = 1; i < packets.length; i++) {
       if (packets[i].tsMs < packets[i - 1].tsMs) {
         t.fail(`timestamps go backwards at seq ${packets[i].seq}`)

@@ -285,7 +285,7 @@ function lagCycleEvents(entries, sinceMs) {
 
 test('pipe backpressure: a viewer recovers from an ls -R-shaped flood over the real worker seam', async (t) => {
   if (!freenetAvailable()) {
-    t.skip('freenet binary not on PATH')
+    t.comment('SKIP:', 'freenet binary not on PATH')
     return
   }
   t.timeout(FLOOD_MS + SETTLE_MS * 2 + SAMPLES * (SAMPLE_TIMEOUT_MS + SAMPLE_GAP_MS) + 120000)

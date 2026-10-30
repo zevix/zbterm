@@ -456,7 +456,8 @@ test('share wizard offers a backend picker when the core reports several, broken
     "with the core's reason as its text"
   )
   t.ok(html.includes('.share-backend-broken'), 'index.html styles the broken row')
-  t.ok(js.includes('group.disabled = !!active'), 'disabled once a backend is active')
+  t.absent(js.includes('group.disabled'), 'never locked: backends run side by side')
+  t.absent(js.includes('Network (in use)'), 'and never labelled as taken')
   t.ok(js.includes("input.type = 'radio'"), 'it is a radio group')
   t.ok(
     js.includes('body.replaceChildren(...(picker ? [picker, form.root] : [form.root]))'),
@@ -595,4 +596,28 @@ test('the startup logo text ends on the last row without scrolling', async (t) =
     /pears\.com\\r\\n'/.test(body),
     'no line feed after the last line: it sits on the bottom row and would scroll'
   )
+})
+
+test('the WebGL renderer is optional: it loads after open(), inside its try', (t) => {
+  const js = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8')
+  const open = js.indexOf('state.term.open(els.terminal)')
+  const load = js.indexOf('state.term.loadAddon(webgl)')
+  t.ok(open > 0 && load > open, 'the addon is loaded into an open terminal')
+  const tryAt = js.lastIndexOf('try {', load)
+  t.ok(tryAt > open, 'inside the try that falls back to the DOM renderer')
+  t.ok(js.includes('webgl.onContextLoss('), 'a lost context also falls back')
+})
+
+test('debug renderer commands do not wait on a frame that never comes', (t) => {
+  const js = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8')
+  const start = js.indexOf('window.__zbtermDebugCommand = async')
+  const end = js.indexOf("if (command === 'modal-state') return debugModalState()", start)
+  const handler = js.slice(start, end)
+  t.ok(start > 0 && end > start, 'the debug command handler is found')
+  t.absent(
+    handler.includes('window.requestAnimationFrame(resolve)'),
+    'no bare animation-frame wait: a covered window gets no frames'
+  )
+  t.ok(handler.includes('await debugSettle()'), 'commands settle on a frame or a timeout')
+  t.ok(/function debugSettle\(\)[\s\S]{0,200}setTimeout\(resolve, 100\)/.test(js))
 })

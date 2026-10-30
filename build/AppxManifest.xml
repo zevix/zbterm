@@ -9,7 +9,7 @@
   <Identity Name="ZBTerm" Version="1.0.44.0" Publisher="CN=z33v.net" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>ZBTerm</DisplayName>
-    <PublisherDisplayName>PassCall Advanced Technologies Ltd.</PublisherDisplayName>
+    <PublisherDisplayName>Zeev Kotzer</PublisherDisplayName>
     <Description>Secure local terminal recording and peer-to-peer sharing</Description>
     <Logo>build\icon.png</Logo>
     <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>

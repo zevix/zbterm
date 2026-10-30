@@ -5,9 +5,8 @@
 > code is the reference for everything else. Index: [AGENTS.md](../AGENTS.md).
 
 There is no Pear OTA/staging release path any more (`D-08`, `D-25`): ZBTerm has
-three independent release channels, none of them Pear stage/provision/multisig
-(see `docs/RELEASE-NPM.md`'s table for the two that remain plus the retired
-third).
+two independent release channels, npm and installers, none of them Pear
+stage/provision/multisig (see `docs/RELEASING.md`'s table).
 
 - **`integrate.yml`**: lint, **plus** a full cross-platform `npm install -g`
   matrix (Linux under Xvfb — the only one that also boots the Bare engine
@@ -22,7 +21,7 @@ third).
   nothing here touches npm.
 - **`publish.yml`**: npm-publishes on any `v*` tag (what `npm version` creates)
   after `integrate.yml` passes for that tag. Don't tag unless releasing — see
-  `docs/RELEASE-NPM.md` for the actual npm release checklist
+  `docs/RELEASING.md` for the actual npm release checklist
   (`npm run pack:check` / `smoke:install` / `release:npm`).
 - Rebrand trap: CI lowercases `productName` with `tr` only, but the Snap/
   Flatpak makers also replace non-`[a-z0-9-]` characters (`agent_docs/
