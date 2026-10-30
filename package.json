@@ -1,10 +1,10 @@
 {
   "name": "zbterm",
   "productName": "ZBTerm",
-  "version": "1.2.10",
-  "description": "Peer-to-peer terminal recording and live session sharing, built on Hypercore and Electron.",
+  "version": "1.2.11",
+  "description": "Zeev's Bloated Terminal (Electron based) with history and session sharing over Pear/Hypercore and Freenet",
   "license": "Apache-2.0",
-  "author": "David Achitov",
+  "author": "Zeev Kotzer",
   "keywords": [
     "terminal",
     "terminal-recording",
