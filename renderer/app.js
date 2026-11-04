@@ -37,6 +37,8 @@
   const SCRUBBER_STEPS = 1000
   const TOAST_MS = 6000
   const RESUME_HINT_TOAST = 'Press ^R to resume the session'
+  // Touchpad travel (in pixels) that counts as one Alt+wheel frame step.
+  const FRAME_STEP_WHEEL_PX = 50
   // A join the share backend gave up on, in words (freenet-backend F9).
   const JOIN_ICE_FAILED_TOAST = 'Could not connect directly to the host (ICE failed)'
   const JOIN_IDENTITY_TOAST = "The host's identity did not match the invite"
@@ -296,8 +298,9 @@
     toasts: new Map(),
     // Whether the terminal is styled as an offline session (no cursor).
     offlineView: false,
-    // Alt+wheel frame steps, run one after another.
-    frameStepQueue: Promise.resolve()
+    // Alt+wheel frame steps: the net count not yet stepped, whether a step is
+    // being rendered, and a touchpad's travel towards the next frame.
+    frameStep: { pending: 0, running: false, travel: 0 }
   }
 
   const els = {
@@ -3626,7 +3629,12 @@
 
   // Alt+wheel steps through history one recorded frame per wheel click: up
   // (or left) is back in time, and the first click back from live enters
-  // playback. Clicks are queued so a fast spin steps every frame in order.
+  // playback. A wheel notch is one frame however large its delta; a
+  // touchpad's stream of small deltas adds up to a frame every
+  // FRAME_STEP_WHEEL_PX. Clicks never queue up: while one step is being
+  // rendered, further clicks only add to a net count, and the next step
+  // jumps by that whole count at once, so a fast spin costs one rebuild per
+  // render, not one per click, and the screen stops when the wheel does.
   function handleFrameStepWheel(event) {
     if (!state.selectedId || !els.playback || els.playback.hidden) return
     const dx = normalizedWheelDelta(event.deltaX, event.deltaMode)
@@ -3635,8 +3643,30 @@
     if (!raw) return
     event.preventDefault()
     event.stopPropagation()
-    const delta = raw < 0 ? -1 : 1
-    state.frameStepQueue = state.frameStepQueue.then(() => step(delta)).catch(showError)
+    const wheel = state.frameStep
+    // A reversal starts a fresh count instead of first paying back the
+    // other direction.
+    if (Math.sign(wheel.travel) !== Math.sign(raw)) wheel.travel = 0
+    wheel.travel += raw
+    if (Math.abs(raw) < FRAME_STEP_WHEEL_PX && Math.abs(wheel.travel) < FRAME_STEP_WHEEL_PX) return
+    wheel.travel = 0
+    wheel.pending += raw < 0 ? -1 : 1
+    if (!wheel.running) runFrameSteps().catch(showError)
+  }
+
+  async function runFrameSteps() {
+    const wheel = state.frameStep
+    wheel.running = true
+    try {
+      while (wheel.pending) {
+        const delta = wheel.pending
+        wheel.pending = 0
+        await step(delta)
+      }
+    } finally {
+      wheel.pending = 0
+      wheel.running = false
+    }
   }
 
   function scheduleScrubberSeek(options = {}) {
