@@ -6,7 +6,7 @@
   xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
   IgnorableNamespaces="rescap desktop6"
 >
-  <Identity Name="ZBTerm" Version="1.0.44.0" Publisher="CN=z33v.net" ProcessorArchitecture="x64" />
+  <Identity Name="ZBTerm" Version="1.2.11.0" Publisher="CN=z33v.net" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>ZBTerm</DisplayName>
     <PublisherDisplayName>Zeev Kotzer</PublisherDisplayName>
