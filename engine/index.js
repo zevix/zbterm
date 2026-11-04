@@ -72,6 +72,9 @@ const OLD_SCHEME_IDENTITY_LOG =
   '[zbterm] identity: this profile had an identity from the old identity-key scheme; ' +
   'it now has a fresh identity and its self claim was cleared (no migration, D-32)'
 const MAX_VIEW_COLS = 1000
+// How long an extended session's program gets to answer the SIGWINCH nudge
+// (see _settleResumedCursor) before the cursor is moved to a new line.
+const RESUME_REDRAW_MS = 300
 const MAX_VIEW_ROWS = 1000
 const ARCHIVE_PROFILES = {
   normal: {
@@ -714,6 +717,7 @@ class SessionEngine extends EventEmitter {
         runtime.launch = launchOptions(entry)
         runtime.restoring = true
         runtime.restoreAborted = false
+        runtime.resumed = true
         const restored = this._restoreArchive(sessionId, runtime, base, store.log.length)
         runtime.appendQueue = restored
         runtime.mirrorQueue = restored
@@ -795,6 +799,13 @@ class SessionEngine extends EventEmitter {
     } catch (err) {
       this.emit('engine:error', EngineError.from(err).toJSON())
     }
+    if (runtime.resumed) {
+      try {
+        await this._settleResumedCursor(sessionId, runtime, archive)
+      } catch (err) {
+        this.emit('engine:error', EngineError.from(err).toJSON())
+      }
+    }
     runtime.archiveMirror.dispose()
     runtime.archiveMirror = archive
     runtime.restoring = false
@@ -802,6 +813,39 @@ class SessionEngine extends EventEmitter {
     this.emit('session:restored', { sessionId })
     // Viewers that joined mid-restore were bootstrapped without history.
     this.share.broadcastBootstrap(sessionId).catch(() => {})
+  }
+
+  // An extended session comes back on the screen it was left at, with the
+  // cursor wherever the old program left it. Before the new program's output
+  // lands (it is still held behind the restore), the cursor is put at the end
+  // of the last line that has text, and the program is sent a SIGWINCH. A
+  // full-screen program (vim, htop...) redraws itself; anything else - a shell
+  // prompt - gets a new line, so it does not start on top of the old text.
+  // Every move is recorded, so playback and viewers see what the host sees.
+  async _settleResumedCursor(sessionId, runtime, archive) {
+    const live = () => !runtime.restoreAborted && this.sessions.get(sessionId) === runtime
+    if (!live() || runtime.mode === 'attach') return
+    const move = lastTextCursorMove(archive.term)
+    if (move) await this._recordResumeOutput(runtime, archive, move)
+    // A same-size resize sends no SIGWINCH, so the size is nudged and put
+    // back; the program reads the final size when it handles the signal.
+    const { cols, rows } = runtime
+    try {
+      runtime.pty.resize(cols, rows > 2 ? rows - 1 : rows + 1)
+      runtime.pty.resize(cols, rows)
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, RESUME_REDRAW_MS))
+    if (!live() || runtime.fullScreenOutput) return
+    await this._recordResumeOutput(runtime, archive, '\r\n')
+  }
+
+  // Recorded ahead of the held live output: the store and both mirrors take
+  // it now, while appendQueue/mirrorQueue still wait on the restore.
+  async _recordResumeOutput(runtime, archive, text) {
+    const data = Buffer.from(text, 'utf8')
+    await runtime.store.appendData(data, { hd: runtime.hd, tsMs: runtime.liveSince })
+    await archive.write(text)
+    await runtime.mirror.write(text)
   }
 
   closeSession(sessionId) {
@@ -1606,6 +1650,11 @@ class SessionEngine extends EventEmitter {
   _recordLiveData(sessionId, data) {
     const runtime = this.sessions.get(sessionId)
     if (!runtime) return
+    // While an extend restores, note whether the new program drew a full
+    // screen (_settleResumedCursor then leaves the cursor where it put it).
+    if (runtime.resumed && runtime.restoring && !runtime.fullScreenOutput) {
+      runtime.fullScreenOutput = isFullScreenOutput(data)
+    }
     runtime.pendingBytes += data.byteLength
     runtime.mirrorBacklog += data.byteLength
     runtime.appendBacklog += data.byteLength
@@ -2813,6 +2862,34 @@ function byteLength(chunks) {
   let total = 0
   for (const chunk of chunks) total += chunk.byteLength
   return total
+}
+
+// Output that only a full-screen program writes: switching to the alternate
+// screen, absolute cursor positioning (CUP/HVP with a row, VPA), or erasing
+// the whole display. A shell prompt, even one that redraws on SIGWINCH,
+// moves with relative motions and carriage returns instead.
+const FULL_SCREEN_OUTPUT = /\x1b\[(?:\?(?:1049|1047|47)h|\d+(?:;\d*)?[Hf]|\d*d|[23]J)/
+
+function isFullScreenOutput(data) {
+  return FULL_SCREEN_OUTPUT.test(Buffer.isBuffer(data) ? data.toString('latin1') : String(data))
+}
+
+// The CUP sequence that puts the cursor just after the last non-blank cell
+// of the last screen row with text, or '' for a blank screen.
+function lastTextCursorMove(term) {
+  const buffer = term.buffer.active
+  for (let y = term.rows - 1; y >= 0; y--) {
+    const line = buffer.getLine(buffer.baseY + y)
+    if (!line) continue
+    for (let x = term.cols - 1; x >= 0; x--) {
+      const cell = line.getCell(x)
+      const chars = cell ? cell.getChars() : ''
+      if (!chars || !chars.trim()) continue
+      const col = Math.min(term.cols, x + Math.max(1, cell.getWidth()) + 1)
+      return `\x1b[${y + 1};${col}H`
+    }
+  }
+  return ''
 }
 
 function hasTerminalBoundary(data) {

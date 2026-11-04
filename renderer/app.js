@@ -36,6 +36,7 @@
 
   const SCRUBBER_STEPS = 1000
   const TOAST_MS = 6000
+  const RESUME_HINT_TOAST = 'Press ^R to resume the session'
   // A join the share backend gave up on, in words (freenet-backend F9).
   const JOIN_ICE_FAILED_TOAST = 'Could not connect directly to the host (ICE failed)'
   const JOIN_IDENTITY_TOAST = "The host's identity did not match the invite"
@@ -290,7 +291,11 @@
     sharingNotice: null,
     popupResolvers: new Map(),
     joinedRefreshTimer: 0,
-    blockedFlashTimers: new WeakMap()
+    blockedFlashTimers: new WeakMap(),
+    // Toasts shown with a key, so a repeated one restarts instead of stacking.
+    toasts: new Map(),
+    // Whether the terminal is styled as an offline session (no cursor).
+    offlineView: false
   }
 
   const els = {
@@ -1177,6 +1182,12 @@
             zoomLiveFontSize(zoomDelta).catch(showError)
             return
           }
+          if (!event.shiftKey && String(event.key).toLowerCase() === 'r' && isOfflineResumable()) {
+            event.preventDefault()
+            event.stopPropagation()
+            extendSession().catch(showError)
+            return
+          }
           if (event.key === 'PageUp' || event.key === 'PageDown') {
             event.preventDefault()
             event.stopPropagation()
@@ -1185,6 +1196,14 @@
           }
         }
         if (event.key === 'Tab') {
+          // Inside a dialog Tab moves between its fields, and stays in it.
+          // Everywhere else it is swallowed so focus never leaves the terminal
+          // (xterm still sends the Tab to the shell).
+          const dialog = openDialogPanel(event.target)
+          if (dialog) {
+            trapDialogTab(event, dialog)
+            return
+          }
           event.preventDefault()
           return
         }
@@ -2751,8 +2770,17 @@
     return `'${path.replace(/'/g, `'\\''`)}'`
   }
 
+  // On Linux, Chromium already pastes the PRIMARY selection on a middle click:
+  // xterm moves its textarea under the pointer, and the paste reaches onData
+  // like typed input (so the same input gate applies). Pasting the clipboard
+  // here as well sent the text twice. Elsewhere there is no native middle-click
+  // paste, so the clipboard is pasted here.
+  const NATIVE_MIDDLE_CLICK_PASTE =
+    /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent)
+
   async function handleTerminalAuxClick(event) {
     if (event.button !== 1) return
+    if (NATIVE_MIDDLE_CLICK_PASTE) return
     event.preventDefault()
     await pasteToTerminal()
   }
@@ -3070,6 +3098,7 @@
     const current = state.sessions.find((s) => s.sessionId === state.selectedId)
     if (!canExtendSession(current)) return
     const sessionId = state.selectedId
+    dismissToast('resume-hint')
     state.restoring = true
     updateTransportControls()
     try {
@@ -4164,6 +4193,33 @@
     setButtonLabel(els.shareSession, 'fa-share-nodes', 'Share')
     els.shareSession.title = 'Share session'
     renderScrubberIndicators()
+    syncOfflineSessionView(hasSession && isPlayback && !!current && !current.active)
+  }
+
+  // An offline session (one whose shell is not running) is drawn without a
+  // cursor and under a dotted screen, so it does not read as a live terminal.
+  function syncOfflineSessionView(offline) {
+    if (els.terminalWrap) els.terminalWrap.classList.toggle('offline-session', offline)
+    if (!state.term || state.offlineView === offline) return
+    state.offlineView = offline
+    // A bar drawn in a fully transparent colour: the recording can still show
+    // or move the cursor, but it is never painted, and no cell is recoloured
+    // the way a block cursor recolours the character under it.
+    state.term.options.cursorStyle = offline ? 'bar' : 'block'
+    state.term.options.cursorBlink = !offline
+    state.term.options.theme = terminalTheme()
+    refreshTerminal()
+  }
+
+  function isOfflineResumable() {
+    if (state.mode !== 'playback' || !state.selectedId) return false
+    const current = state.sessions.find((session) => session.sessionId === state.selectedId)
+    return canExtendSession(current)
+  }
+
+  function showResumeHint() {
+    if (!isOfflineResumable()) return
+    showToast(RESUME_HINT_TOAST, { key: 'resume-hint', status: false })
   }
 
   function setButtonLabel(button, icon, label) {
@@ -4247,6 +4303,40 @@
     )
   }
 
+  // The panel of the dialog that holds `target`, if any. Every dialog is a
+  // `.modal-overlay` or `.session-editor-overlay` around a single panel.
+  function openDialogPanel(target) {
+    if (!target || !target.closest) return null
+    const overlay = target.closest('.modal-overlay, .session-editor-overlay')
+    if (!overlay) return null
+    return overlay.firstElementChild || overlay
+  }
+
+  // Lets the browser move focus between the dialog's fields, but wraps from
+  // the last field to the first (and back with Shift+Tab) instead of leaving
+  // the dialog for the controls behind it.
+  function trapDialogTab(event, panel) {
+    const focusable = Array.from(
+      panel.querySelectorAll(
+        'input, select, textarea, button, a[href], [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((el) => !el.disabled && !el.hidden && el.getClientRects().length && el.tabIndex >= 0)
+    if (!focusable.length) {
+      event.preventDefault()
+      return
+    }
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    const inside = panel.contains(document.activeElement)
+    if (event.shiftKey && (!inside || document.activeElement === first)) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && (!inside || document.activeElement === last)) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
   function isEditableTarget(target) {
     if (!target || !target.closest) return false
     return !!target.closest('input, textarea, select, [contenteditable="true"]')
@@ -4254,6 +4344,7 @@
 
   function flashPlaybackInputBlocked() {
     flashInputBlockedButtons([els.inputMode, els.goLive])
+    showResumeHint()
   }
 
   function flashInputBlockedButtons(buttons) {
@@ -7160,7 +7251,8 @@
       background: styles.getPropertyValue('--terminal-bg').trim(),
       foreground: styles.getPropertyValue('--terminal-fg').trim(),
       cursor: styles.getPropertyValue('--terminal-cursor').trim(),
-      selectionBackground: styles.getPropertyValue('--terminal-selection').trim()
+      selectionBackground: styles.getPropertyValue('--terminal-selection').trim(),
+      ...(state.offlineView ? { cursor: 'rgba(0, 0, 0, 0)', cursorAccent: 'rgba(0, 0, 0, 0)' } : {})
     }
   }
 
@@ -7174,7 +7266,7 @@
   function resetVisibleTerminal() {
     if (!state.term) return
     state.term.reset()
-    state.term.options.cursorBlink = true
+    state.term.options.cursorBlink = !state.offlineView
     state.term.write(VISIBLE_TERMINAL_RESET, refreshTerminal)
   }
 
@@ -7232,16 +7324,40 @@
   }
 
   // A short, self-dismissing notice for something the host refused to do.
-  function showToast(message) {
+  // A toast with a `key` is shown once at a time: showing it again while it is
+  // up only restarts its timer, so repeated keystrokes do not stack copies.
+  function showToast(message, options = {}) {
     const text = String(message || '').trim()
     if (!text) return
+    const key = options.key || null
+    const existing = key ? state.toasts.get(key) : null
+    if (existing) {
+      clearTimeout(existing.timer)
+      existing.timer = setTimeout(() => dismiss(existing), TOAST_MS)
+      return
+    }
     const toast = document.createElement('div')
     toast.className = 'toast'
     toast.setAttribute('role', 'status')
     toast.textContent = text
     document.body.append(toast)
-    setTimeout(() => toast.remove(), TOAST_MS)
-    setStatus(text)
+    const entry = { el: toast, timer: null }
+    entry.timer = setTimeout(() => dismiss(entry), TOAST_MS)
+    if (key) state.toasts.set(key, entry)
+    if (options.status !== false) setStatus(text)
+
+    function dismiss(item) {
+      item.el.remove()
+      if (key && state.toasts.get(key) === item) state.toasts.delete(key)
+    }
+  }
+
+  function dismissToast(key) {
+    const entry = state.toasts.get(key)
+    if (!entry) return
+    clearTimeout(entry.timer)
+    entry.el.remove()
+    state.toasts.delete(key)
   }
 
   function showError(err) {

@@ -47,7 +47,9 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Host can look back through history while viewers keep watching the live output
 - High-res mode for more frequent screen updates, togglable at any time
 - Encryption of data at rest and in transit
-- Ended sessions can be extended at any time by the host
+- Ended sessions can be resumed (extended) at any time by the host: Ctrl+R in an
+  offline session, or the Extend button. The new shell starts on a fresh line
+  under the old screen; a full-screen program redraws in place
 - Key rotation on user join and exit
 - Debugging and instrumentation REST server for e2e tests and live debugging
 - Sharing over Freenet (experimental; needs your own Freenet node), alongside
