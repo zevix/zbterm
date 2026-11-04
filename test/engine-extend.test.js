@@ -126,8 +126,13 @@ test('extend goes live before history is restored and writes accumulated output 
       t.ok(old >= 0 && summary.includes('RESIZE:104x33'), 'history is still there')
       t.alike(
         summary.slice(old + 1, next),
-        ['RESIZE:90x30', 'RESIZE:90x30'],
-        'spawn-geometry fix-up then the mid-restore resize, recorded after history'
+        ['RESIZE:90x30', '\x1b[1;12H', '\r\n', 'RESIZE:90x30'],
+        'spawn-geometry fix-up, the resumed cursor (end of the last line, then a new line), then the mid-restore resize, recorded after history'
+      )
+      t.alike(
+        host.resizes.slice(-2).map(({ cols, rows }) => `${cols}x${rows}`),
+        ['90x29', '90x30'],
+        'the resumed program is nudged with a SIGWINCH and left at its size'
       )
       t.is(next, summary.length - 1, 'accumulated output is appended after the restore')
     } finally {
@@ -154,6 +159,50 @@ async function waitFor(fn) {
 function temp() {
   return fs.promises.mkdtemp(path.join(os.tmpdir(), 'zbterm-engine-extend-test-'))
 }
+
+test('extend leaves the cursor to a resumed full-screen program', async (t) => {
+  const dir = await temp()
+  const host = new FakeHost()
+  const engine = new SessionEngine({ userData: dir, ptyHost: host })
+  await engine.ready()
+  try {
+    const created = await engine.invoke('session.create', { cols: 80, rows: 24 })
+    const { sessionId } = created
+    host.output(sessionId, 'OLD-SCREEN\r\n$ vim\r\n')
+    await engine.invoke('session.close', { sessionId })
+    await waitFor(async () => {
+      const list = await engine.invoke('session.list')
+      return list.some((item) => item.sessionId === sessionId && !item.active)
+    })
+    const restored = new Promise((resolve) => {
+      engine.on('session:restored', (event) => {
+        if (event.sessionId === sessionId) resolve()
+      })
+    })
+    await engine.invoke('session.extend', { sessionId })
+    host.output(sessionId, '\x1b[?1049h\x1b[1;1HVIM')
+    await restored
+    await engine.invoke('session.close', { sessionId })
+    await waitFor(async () => {
+      const list = await engine.invoke('session.list')
+      return list.some((item) => item.sessionId === sessionId && !item.active)
+    })
+    const store = await SessionStore.open(engine.paths.corestore, sessionId, engine.localDevice)
+    try {
+      const data = (await store.readAll())
+        .filter((packet) => packet.kindName === 'DATA')
+        .map((packet) => packet.payload.toString())
+      const moved = data.indexOf('\x1b[2;6H')
+      t.ok(moved > 0, 'the cursor is put at the end of the last line with text')
+      t.absent(data.slice(moved).includes('\r\n'), 'no new line under a full-screen program')
+    } finally {
+      await store.close()
+    }
+  } finally {
+    await engine.close().catch(() => {})
+    await fs.promises.rm(dir, { recursive: true, force: true })
+  }
+})
 
 test('a session keeps its home directory and command across edits and extends', async (t) => {
   const dir = await temp()

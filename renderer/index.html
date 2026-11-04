@@ -48,6 +48,7 @@
         --terminal-fg: #e7edf1;
         --terminal-cursor: #f3c969;
         --terminal-selection: #355a64;
+        --offline-dot: rgba(0, 0, 0, 0.55);
       }
 
       :root[data-theme='light'] {
@@ -83,6 +84,7 @@
         --terminal-fg: #172027;
         --terminal-cursor: #a55e00;
         --terminal-selection: #bdd7e4;
+        --offline-dot: rgba(255, 255, 255, 0.6);
       }
 
       html {
@@ -979,6 +981,18 @@
          still shows without drawing a frame. */
       .terminal-wrap.terminal-letterboxed {
         background: var(--letterbox-bg);
+      }
+
+      /* An offline session: a fine screen of semi-transparent dots over the
+         terminal - black in dark mode, white in light mode. */
+      .terminal-wrap.offline-session::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        pointer-events: none;
+        background-image: radial-gradient(var(--offline-dot) 0.8px, transparent 1.2px);
+        background-size: 4px 4px;
       }
 
       .terminal-wrap.drop-target::after {

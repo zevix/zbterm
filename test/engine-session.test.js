@@ -88,7 +88,9 @@ test('engine extends a recorded local session with a new live shell', async (t) 
 
     const opened = await engine.invoke('session.open', { sessionId: created.sessionId })
     t.is(opened.active, true)
-    t.is(opened.length, playback.length)
+    // The extend records where it put the resumed cursor (and, under a shell,
+    // the new line it starts on) after the old history.
+    t.ok(opened.length > playback.length, 'the history is kept and grows')
     t.is(opened.frame.cols, 104)
     t.is(opened.frame.rows, 33)
   } finally {
