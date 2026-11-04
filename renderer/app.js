@@ -295,7 +295,9 @@
     // Toasts shown with a key, so a repeated one restarts instead of stacking.
     toasts: new Map(),
     // Whether the terminal is styled as an offline session (no cursor).
-    offlineView: false
+    offlineView: false,
+    // Alt+wheel frame steps, run one after another.
+    frameStepQueue: Promise.resolve()
   }
 
   const els = {
@@ -851,6 +853,8 @@
       if (el) resizeObserver.observe(el)
     }
     window.addEventListener('resize', fitAndResize)
+    window.addEventListener('resize', syncDotPitch)
+    syncDotPitch()
     if (window.visualViewport) window.visualViewport.addEventListener('resize', fitAndResize)
   }
 
@@ -3604,6 +3608,10 @@
 
   function handleGlobalScrubberWheel(event) {
     if (event.defaultPrevented) return
+    if (event.altKey && !event.ctrlKey && !event.metaKey) {
+      handleFrameStepWheel(event)
+      return
+    }
     if (!canWheelSeek()) return
     if (els.scrubber.contains(event.target)) return
     const dx = normalizedWheelDelta(event.deltaX, event.deltaMode)
@@ -3614,6 +3622,21 @@
     event.stopPropagation()
     if (wheelSeekRefusedInLive()) return
     applyScrubberWheelSteps(scrubberWheelSteps(event))
+  }
+
+  // Alt+wheel steps through history one recorded frame per wheel click: up
+  // (or left) is back in time, and the first click back from live enters
+  // playback. Clicks are queued so a fast spin steps every frame in order.
+  function handleFrameStepWheel(event) {
+    if (!state.selectedId || !els.playback || els.playback.hidden) return
+    const dx = normalizedWheelDelta(event.deltaX, event.deltaMode)
+    const dy = normalizedWheelDelta(event.deltaY, event.deltaMode)
+    const raw = Math.abs(dx) > Math.abs(dy) ? dx : dy
+    if (!raw) return
+    event.preventDefault()
+    event.stopPropagation()
+    const delta = raw < 0 ? -1 : 1
+    state.frameStepQueue = state.frameStepQueue.then(() => step(delta)).catch(showError)
   }
 
   function scheduleScrubberSeek(options = {}) {
@@ -4194,6 +4217,20 @@
     els.shareSession.title = 'Share session'
     renderScrubberIndicators()
     syncOfflineSessionView(hasSession && isPlayback && !!current && !current.active)
+    // A live session scrolled back in time gets the same screen, fainter.
+    if (els.terminalWrap) {
+      els.terminalWrap.classList.toggle(
+        'history-view',
+        hasSession && isPlayback && !!current && !!current.active
+      )
+    }
+  }
+
+  // The dot screen is sized in device pixels (see .offline-session in
+  // index.html), so it is re-sized whenever the zoom or display changes.
+  function syncDotPitch() {
+    const ratio = window.devicePixelRatio || 1
+    document.documentElement.style.setProperty('--dot-pitch', `${8 / ratio}px`)
   }
 
   // An offline session (one whose shell is not running) is drawn without a
