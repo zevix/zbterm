@@ -1,7 +1,7 @@
 {
   "name": "zbterm",
   "productName": "ZBTerm",
-  "version": "1.2.11",
+  "version": "1.2.12",
   "description": "Zeev's Bloated Terminal (Electron based) with history and session sharing over Pear/Hypercore and Freenet",
   "license": "Apache-2.0",
   "author": "Zeev Kotzer",

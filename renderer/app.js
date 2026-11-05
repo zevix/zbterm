@@ -37,6 +37,8 @@
   const SCRUBBER_STEPS = 1000
   const TOAST_MS = 6000
   const RESUME_HINT_TOAST = 'Press ^R to resume the session'
+  // Touchpad travel (in pixels) that counts as one Alt+wheel frame step.
+  const FRAME_STEP_WHEEL_PX = 50
   // A join the share backend gave up on, in words (freenet-backend F9).
   const JOIN_ICE_FAILED_TOAST = 'Could not connect directly to the host (ICE failed)'
   const JOIN_IDENTITY_TOAST = "The host's identity did not match the invite"
@@ -295,7 +297,10 @@
     // Toasts shown with a key, so a repeated one restarts instead of stacking.
     toasts: new Map(),
     // Whether the terminal is styled as an offline session (no cursor).
-    offlineView: false
+    offlineView: false,
+    // Alt+wheel frame steps: the net count not yet stepped, whether a step is
+    // being rendered, and a touchpad's travel towards the next frame.
+    frameStep: { pending: 0, running: false, travel: 0 }
   }
 
   const els = {
@@ -851,6 +856,8 @@
       if (el) resizeObserver.observe(el)
     }
     window.addEventListener('resize', fitAndResize)
+    window.addEventListener('resize', syncDotPitch)
+    syncDotPitch()
     if (window.visualViewport) window.visualViewport.addEventListener('resize', fitAndResize)
   }
 
@@ -3604,6 +3611,10 @@
 
   function handleGlobalScrubberWheel(event) {
     if (event.defaultPrevented) return
+    if (event.altKey && !event.ctrlKey && !event.metaKey) {
+      handleFrameStepWheel(event)
+      return
+    }
     if (!canWheelSeek()) return
     if (els.scrubber.contains(event.target)) return
     const dx = normalizedWheelDelta(event.deltaX, event.deltaMode)
@@ -3614,6 +3625,48 @@
     event.stopPropagation()
     if (wheelSeekRefusedInLive()) return
     applyScrubberWheelSteps(scrubberWheelSteps(event))
+  }
+
+  // Alt+wheel steps through history one recorded frame per wheel click: up
+  // (or left) is back in time, and the first click back from live enters
+  // playback. A wheel notch is one frame however large its delta; a
+  // touchpad's stream of small deltas adds up to a frame every
+  // FRAME_STEP_WHEEL_PX. Clicks never queue up: while one step is being
+  // rendered, further clicks only add to a net count, and the next step
+  // jumps by that whole count at once, so a fast spin costs one rebuild per
+  // render, not one per click, and the screen stops when the wheel does.
+  function handleFrameStepWheel(event) {
+    if (!state.selectedId || !els.playback || els.playback.hidden) return
+    const dx = normalizedWheelDelta(event.deltaX, event.deltaMode)
+    const dy = normalizedWheelDelta(event.deltaY, event.deltaMode)
+    const raw = Math.abs(dx) > Math.abs(dy) ? dx : dy
+    if (!raw) return
+    event.preventDefault()
+    event.stopPropagation()
+    const wheel = state.frameStep
+    // A reversal starts a fresh count instead of first paying back the
+    // other direction.
+    if (Math.sign(wheel.travel) !== Math.sign(raw)) wheel.travel = 0
+    wheel.travel += raw
+    if (Math.abs(raw) < FRAME_STEP_WHEEL_PX && Math.abs(wheel.travel) < FRAME_STEP_WHEEL_PX) return
+    wheel.travel = 0
+    wheel.pending += raw < 0 ? -1 : 1
+    if (!wheel.running) runFrameSteps().catch(showError)
+  }
+
+  async function runFrameSteps() {
+    const wheel = state.frameStep
+    wheel.running = true
+    try {
+      while (wheel.pending) {
+        const delta = wheel.pending
+        wheel.pending = 0
+        await step(delta)
+      }
+    } finally {
+      wheel.pending = 0
+      wheel.running = false
+    }
   }
 
   function scheduleScrubberSeek(options = {}) {
@@ -4194,6 +4247,20 @@
     els.shareSession.title = 'Share session'
     renderScrubberIndicators()
     syncOfflineSessionView(hasSession && isPlayback && !!current && !current.active)
+    // A live session scrolled back in time gets the same screen, fainter.
+    if (els.terminalWrap) {
+      els.terminalWrap.classList.toggle(
+        'history-view',
+        hasSession && isPlayback && !!current && !!current.active
+      )
+    }
+  }
+
+  // The dot screen is sized in device pixels (see .offline-session in
+  // index.html), so it is re-sized whenever the zoom or display changes.
+  function syncDotPitch() {
+    const ratio = window.devicePixelRatio || 1
+    document.documentElement.style.setProperty('--dot-pitch', `${8 / ratio}px`)
   }
 
   // An offline session (one whose shell is not running) is drawn without a

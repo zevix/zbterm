@@ -49,6 +49,7 @@
         --terminal-cursor: #f3c969;
         --terminal-selection: #355a64;
         --offline-dot: rgba(0, 0, 0, 0.55);
+        --history-dot: rgba(0, 0, 0, 0.25);
       }
 
       :root[data-theme='light'] {
@@ -85,6 +86,7 @@
         --terminal-cursor: #a55e00;
         --terminal-selection: #bdd7e4;
         --offline-dot: rgba(255, 255, 255, 0.6);
+        --history-dot: rgba(255, 255, 255, 0.25);
       }
 
       html {
@@ -198,7 +200,7 @@
         min-width: 0;
       }
 
-      .brand h1 > span:last-child {
+      .brand h1 > .brand-name {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -218,9 +220,15 @@
         object-fit: contain;
       }
 
+      /* Right after the name, on its baseline. */
       .version {
+        align-self: flex-end;
+        margin: 0 0 3px -5px;
         color: var(--muted);
         font-size: 12px;
+        font-weight: 400;
+        white-space: nowrap;
+        flex-shrink: 0;
       }
 
       .brand-actions {
@@ -983,16 +991,26 @@
         background: var(--letterbox-bg);
       }
 
-      /* An offline session: a fine screen of semi-transparent dots over the
-         terminal - black in dark mode, white in light mode. */
-      .terminal-wrap.offline-session::before {
+      /* An offline session, or a live one scrolled back in time: a screen of
+         semi-transparent round dots over the terminal - black in dark mode,
+         white in light mode, fainter while scrolled back. A dot is 4 device
+         pixels across on an 8-device-pixel grid (app.js sets --dot-pitch from
+         devicePixelRatio): an odd or smaller size rasterises as a cross. */
+      .terminal-wrap.offline-session::before,
+      .terminal-wrap.history-view::before {
         content: '';
         position: absolute;
         inset: 0;
         z-index: 1;
         pointer-events: none;
-        background-image: radial-gradient(var(--offline-dot) 0.8px, transparent 1.2px);
-        background-size: 4px 4px;
+        background-color: var(--offline-dot);
+        -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Ccircle cx='4' cy='4' r='2'/%3E%3C/svg%3E");
+        -webkit-mask-size: var(--dot-pitch, 8px) var(--dot-pitch, 8px);
+        -webkit-mask-repeat: repeat;
+      }
+
+      .terminal-wrap.history-view::before {
+        background-color: var(--history-dot);
       }
 
       .terminal-wrap.drop-target::after {
@@ -2022,7 +2040,8 @@
             <span class="brand-mark" aria-hidden="true"
               ><img src="../build/icon/icon-64x64.png" alt=""
             /></span>
-            <span>ZBTerm</span>
+            <span class="brand-name">ZBTerm</span>
+            <span id="version" class="version"></span>
           </h1>
           <span class="brand-actions">
             <button
@@ -2040,7 +2059,6 @@
             <button id="themeToggle" class="icon-btn theme-toggle" title="Toggle theme">
               <i class="fa-solid fa-moon" aria-hidden="true"></i>
             </button>
-            <span id="version" class="version"></span>
           </span>
         </div>
         <div class="tools">
