@@ -27,7 +27,18 @@ runs:
       shell: bash
       # MAC_CODESIGN_IDENTITY must stay unset: forge.config.js then also
       # notarizes, which cannot work for a self-signed identity.
-      run: npm run package
+      # renderer/vendor (xterm, Font Awesome) is gitignored; vendor:assets
+      # creates it. Without it the app opens with "Timed out loading
+      # vendor/xterm/xterm.js" and blank icons.
+      run: |
+        set -euo pipefail
+        npm run vendor:assets
+        npm run package
+        app=$(find out -maxdepth 2 -name '*.app' -print -quit)
+        for f in xterm/xterm.js xterm/xterm.css xterm/addon-fit.js xterm/addon-webgl.js fontawesome/css/all.min.css; do
+          test -s "$app/Contents/Resources/app/renderer/vendor/$f" \
+            || { echo "::error::packaged app lacks renderer/vendor/$f"; exit 1; }
+        done
 
     - name: Create self-signed certificate and keychain
       shell: bash
