@@ -86,11 +86,25 @@ runs:
         set -euo pipefail
         app=$(find out -maxdepth 2 -name '*.app' -print -quit)
         test -n "$app"
-        # Hardened runtime + entitlements, no timestamp server (self-signed).
-        codesign --force --deep --options runtime --timestamp=none \
-          --entitlements build/entitlements.mac.plist \
+        # No hardened runtime: it enforces library validation, which demands
+        # the same Apple Team ID on every loaded framework, and a self-signed
+        # identity has none, so dyld refuses Electron Framework at launch.
+        # The hardened runtime only matters for notarization.
+        codesign --force --deep --timestamp=none \
           --keychain "$SELFSIGN_KC" --sign "$SELFSIGN_SHA" "$app"
         codesign --verify --deep --strict --verbose=2 "$app"
+        # Launch probe: a dyld refusal kills the process within a second;
+        # alive after 15 s means the frameworks loaded.
+        exe="$app/Contents/MacOS/$(defaults read "$PWD/$app/Contents/Info" CFBundleExecutable)"
+        "$exe" > "$RUNNER_TEMP/launch.log" 2>&1 & pid=$!
+        sleep 15
+        if kill -0 "$pid" 2>/dev/null; then
+          kill "$pid"; echo "launch probe: alive after 15 s"
+        else
+          wait "$pid"; rc=$?
+          cat "$RUNNER_TEMP/launch.log"
+          echo "::error::app exited within 15 s (status $rc)"; exit 1
+        fi
         mkdir -p out/selfsigned
         hdiutil create -volname "$(basename "$app" .app)" -srcfolder "$app" \
           -ov -format UDZO "out/selfsigned/${{ inputs.dmg }}"
