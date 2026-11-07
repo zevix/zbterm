@@ -133,11 +133,11 @@ jobs:
                 needs.prebuild.outputs.version,
                 'arm64') }}
 
-  # Paused: no macOS builds until sharing works on Linux.
+  # Signs and notarizes with Apple secrets when present; otherwise falls back
+  # to a self-signed build (.github/actions/selfsigned-mac).
   build-macos:
-    if: false
     needs: [prebuild]
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: read
@@ -160,8 +160,24 @@ jobs:
         run: |
           git submodule update --init --depth 1 zxterm
           node scripts/sidecar.js build
+      - name: Detect Apple signing secrets
+        id: signing
+        env:
+          APPLE_CERT: ${{ secrets.CERTIFICATE_P12 }}
+        run: echo "apple=$([ -n "$APPLE_CERT" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/selfsigned-mac
+        if: steps.signing.outputs.apple != 'true'
+        with:
+          dmg: >-
+            ${{ format('{0}-{1}-{2}.dmg',
+                needs.prebuild.outputs.package-name,
+                needs.prebuild.outputs.version,
+                'arm64') }}
+          p12: ${{ secrets.SELFSIGNED_P12 }}
+          p12-password: ${{ secrets.SELFSIGNED_P12_PASSWORD }}
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
+        if: steps.signing.outputs.apple == 'true'
         with:
           channel: ${{ env.CHANNEL }}
           macos_dmg: >-
@@ -177,11 +193,11 @@ jobs:
           macos_apple_password: ${{ secrets.APPLE_PASSWORD }}
           macos_apple_team_id: ${{ secrets.APPLE_TEAM_ID }}
 
-  # Paused: no macOS builds until sharing works on Linux.
+  # Signs and notarizes with Apple secrets when present; otherwise falls back
+  # to a self-signed build (.github/actions/selfsigned-mac).
   build-macos-x64:
-    if: false
     needs: [prebuild]
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: read
@@ -204,8 +220,24 @@ jobs:
         run: |
           git submodule update --init --depth 1 zxterm
           node scripts/sidecar.js build
+      - name: Detect Apple signing secrets
+        id: signing
+        env:
+          APPLE_CERT: ${{ secrets.CERTIFICATE_P12 }}
+        run: echo "apple=$([ -n "$APPLE_CERT" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/selfsigned-mac
+        if: steps.signing.outputs.apple != 'true'
+        with:
+          dmg: >-
+            ${{ format('{0}-{1}-{2}.dmg',
+                needs.prebuild.outputs.package-name,
+                needs.prebuild.outputs.version,
+                'x64') }}
+          p12: ${{ secrets.SELFSIGNED_P12 }}
+          p12-password: ${{ secrets.SELFSIGNED_P12_PASSWORD }}
       - uses: holepunchto/actions/make-pear-app@v1
         id: build
+        if: steps.signing.outputs.apple == 'true'
         with:
           channel: ${{ env.CHANNEL }}
           macos_dmg: >-

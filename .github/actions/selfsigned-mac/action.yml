@@ -1,0 +1,101 @@
+name: Self-signed macOS build
+description: >-
+  Fallback for runs with no Apple signing secrets: package the app, sign it
+  with a throwaway self-signed code-signing certificate (no Apple account, no
+  notarization) and produce a .dmg. Gatekeeper will warn on first launch.
+
+inputs:
+  dmg:
+    description: Output .dmg file name
+    required: true
+  p12:
+    description: >-
+      Base64 .p12 of a stable self-signed identity (secret SELFSIGNED_P12).
+      Empty: a throwaway certificate is generated, so every build has a new
+      identity and macOS forgets permissions granted to the previous one.
+    required: false
+    default: ''
+  p12-password:
+    description: Password of the .p12 (secret SELFSIGNED_P12_PASSWORD)
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Package
+      shell: bash
+      # MAC_CODESIGN_IDENTITY must stay unset: forge.config.js then also
+      # notarizes, which cannot work for a self-signed identity.
+      run: npm run package
+
+    - name: Create self-signed certificate and keychain
+      shell: bash
+      env:
+        P12_B64: ${{ inputs.p12 }}
+        P12_PW: ${{ inputs.p12-password }}
+      run: |
+        set -euo pipefail
+        d="$RUNNER_TEMP/selfsign"; mkdir -p "$d"
+        if [ -n "$P12_B64" ]; then
+          echo "Using the stable identity from SELFSIGNED_P12"
+          echo "$P12_B64" | base64 --decode > "$d/id.p12"
+          pw="$P12_PW"
+          openssl pkcs12 -in "$d/id.p12" -passin "pass:$pw" -nokeys -clcerts \
+            | openssl x509 -out "$d/cert.pem" \
+            || openssl pkcs12 -legacy -in "$d/id.p12" -passin "pass:$pw" -nokeys -clcerts \
+            | openssl x509 -out "$d/cert.pem"
+        else
+        echo "::warning::No SELFSIGNED_P12 secret: signing with a throwaway identity"
+        cat > "$d/openssl.cnf" <<'CNF'
+        [req]
+        distinguished_name = dn
+        x509_extensions = ext
+        prompt = no
+        [dn]
+        CN = Ubitron Self-Signed Code Signing
+        [ext]
+        basicConstraints = critical,CA:false
+        keyUsage = critical,digitalSignature
+        extendedKeyUsage = critical,codeSigning
+        CNF
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+          -config "$d/openssl.cnf" -keyout "$d/key.pem" -out "$d/cert.pem"
+        pw=$(openssl rand -hex 16)
+        # 3DES/SHA1 so the macOS keychain can import the p12.
+        openssl pkcs12 -export -inkey "$d/key.pem" -in "$d/cert.pem" \
+          -name "Ubitron Self-Signed Code Signing" -out "$d/id.p12" -passout "pass:$pw" \
+          -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
+          || openssl pkcs12 -export -legacy -inkey "$d/key.pem" -in "$d/cert.pem" \
+          -name "Ubitron Self-Signed Code Signing" -out "$d/id.p12" -passout "pass:$pw"
+        fi
+        kc="$d/ubitron-build.keychain-db"
+        security create-keychain -p "$pw" "$kc"
+        security set-keychain-settings -lut 21600 "$kc"
+        security unlock-keychain -p "$pw" "$kc"
+        security import "$d/id.p12" -k "$kc" -P "$pw" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" >/dev/null
+        security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+        sha=$(openssl x509 -in "$d/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)
+        echo "SELFSIGN_KC=$kc" >> "$GITHUB_ENV"
+        echo "SELFSIGN_SHA=$sha" >> "$GITHUB_ENV"
+
+    - name: Sign, build dmg
+      shell: bash
+      run: |
+        set -euo pipefail
+        app=$(find out -maxdepth 2 -name '*.app' -print -quit)
+        test -n "$app"
+        # Hardened runtime + entitlements, no timestamp server (self-signed).
+        codesign --force --deep --options runtime --timestamp=none \
+          --entitlements build/entitlements.mac.plist \
+          --keychain "$SELFSIGN_KC" --sign "$SELFSIGN_SHA" "$app"
+        codesign --verify --deep --strict --verbose=2 "$app"
+        mkdir -p out/selfsigned
+        hdiutil create -volname "$(basename "$app" .app)" -srcfolder "$app" \
+          -ov -format UDZO "out/selfsigned/${{ inputs.dmg }}"
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.dmg }}
+        path: out/selfsigned/${{ inputs.dmg }}
