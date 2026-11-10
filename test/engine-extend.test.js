@@ -3,10 +3,12 @@ const os = require('os')
 const path = require('path')
 const { EventEmitter } = require('events')
 const test = require('brittle')
+const { Terminal } = require('@xterm/headless')
 
 require('./helpers/zxterm-core')
 
 const SessionEngine = require('../engine')
+const { RESUME_MODE_RESET } = SessionEngine._test
 const { SessionStore } = require('../engine/session-store')
 const { VERSION, PacketKind } = require('../engine/schema')
 
@@ -126,8 +128,8 @@ test('extend goes live before history is restored and writes accumulated output 
       t.ok(old >= 0 && summary.includes('RESIZE:104x33'), 'history is still there')
       t.alike(
         summary.slice(old + 1, next),
-        ['RESIZE:90x30', '\x1b[1;12H', '\r\n', 'RESIZE:90x30'],
-        'spawn-geometry fix-up, the resumed cursor (end of the last line, then a new line), then the mid-restore resize, recorded after history'
+        ['RESIZE:90x30', RESUME_MODE_RESET, '\x1b[1;12H', '\r\n', 'RESIZE:90x30'],
+        'spawn-geometry fix-up, the old modes switched off, the resumed cursor (end of the last line, then a new line), then the mid-restore resize, recorded after history'
       )
       t.alike(
         host.resizes.slice(-2).map(({ cols, rows }) => `${cols}x${rows}`),
@@ -197,6 +199,66 @@ test('extend leaves the cursor to a resumed full-screen program', async (t) => {
       t.absent(data.slice(moved).includes('\r\n'), 'no new line under a full-screen program')
     } finally {
       await store.close()
+    }
+  } finally {
+    await engine.close().catch(() => {})
+    await fs.promises.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('extend switches off the terminal modes the old program left on', async (t) => {
+  const dir = await temp()
+  const host = new FakeHost()
+  const engine = new SessionEngine({ userData: dir, ptyHost: host })
+  await engine.ready()
+  try {
+    const created = await engine.invoke('session.create', { cols: 80, rows: 24 })
+    const { sessionId } = created
+    // A shell that started a full-screen program which turned on everything a
+    // TUI does (Claude Code, vim with mouse=a), and the session ended under it.
+    host.output(sessionId, 'SHELL-TEXT\r\n$ claude\r\n')
+    host.output(
+      sessionId,
+      '\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[?2004h\x1b[?1004h\x1b[?1h\x1b=\x1b[?25l\x1b[1;1HTUI-SCREEN'
+    )
+    await engine.invoke('session.close', { sessionId })
+    await waitFor(async () => {
+      const list = await engine.invoke('session.list')
+      return list.some((item) => item.sessionId === sessionId && !item.active)
+    })
+    const restored = new Promise((resolve) => {
+      engine.on('session:restored', (event) => {
+        if (event.sessionId === sessionId) resolve()
+      })
+    })
+    await engine.invoke('session.extend', { sessionId })
+    await restored
+    host.output(sessionId, 'NEW-PROMPT$ ')
+    const opened = await waitFor(async () => {
+      const result = await engine.invoke('session.open', { sessionId })
+      return result.frame && result.frame.data.includes('NEW-PROMPT') ? result : null
+    })
+
+    // What a viewer's xterm.js ends up in after painting the frame.
+    const viewer = new Terminal({ cols: 80, rows: 24, allowProposedApi: true })
+    try {
+      await new Promise((resolve) => viewer.write(opened.frame.data, resolve))
+      t.alike(
+        viewer.modes,
+        { ...new Terminal({ allowProposedApi: true }).modes },
+        'every mode is back at its default'
+      )
+      t.is(viewer.buffer.active.type, 'normal', 'the frame is on the main screen')
+      t.is(viewer._core.coreMouseService.activeEncoding, 'DEFAULT', 'no SGR mouse encoding')
+      t.ok(viewer._core.coreService.isCursorHidden === false, 'the cursor is visible')
+      const text = []
+      for (let y = 0; y < viewer.buffer.active.length; y++) {
+        text.push(viewer.buffer.active.getLine(y).translateToString(true))
+      }
+      t.ok(text.join('\n').includes('SHELL-TEXT'), 'the main screen text is kept')
+      t.absent(text.join('\n').includes('TUI-SCREEN'), "the dead program's screen is left")
+    } finally {
+      viewer.dispose()
     }
   } finally {
     await engine.close().catch(() => {})

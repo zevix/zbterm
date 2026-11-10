@@ -75,6 +75,25 @@ const MAX_VIEW_COLS = 1000
 // How long an extended session's program gets to answer the SIGWINCH nudge
 // (see _settleResumedCursor) before the cursor is moved to a new line.
 const RESUME_REDRAW_MS = 300
+// What the program an extended session last ran may have left switched on in
+// the terminal: the alternate screen, mouse reporting (every mode and
+// encoding), focus events, bracketed paste, application cursor keys and
+// keypad, the kitty keyboard protocol, modifyOtherKeys, synchronized output,
+// a scroll region, attributes, a hidden cursor. The archive screen keeps all
+// of it (SerializeAddon restores modes), but that program is gone - an extend
+// spawns a new one - so left on, a viewer's xterm.js would e.g. send mouse
+// reports to a shell that never asked for them. Switched off, screen text
+// kept; a new program that wants a mode (a session command that re-attaches
+// a multiplexer, say) sets it again itself.
+const RESUME_MODE_RESET =
+  '\x1b[?1049l' +
+  '\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l' +
+  '\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l' +
+  '\x1b[?1004l\x1b[?2004l' +
+  '\x1b[?1l\x1b>' +
+  '\x1b[<99u\x1b[>4;0m' +
+  '\x1b[?2026l' +
+  '\x1b[r\x1b[0m\x1b(B\x1b[?25h\x1b[?7h'
 const MAX_VIEW_ROWS = 1000
 const ARCHIVE_PROFILES = {
   normal: {
@@ -817,7 +836,8 @@ class SessionEngine extends EventEmitter {
 
   // An extended session comes back on the screen it was left at, with the
   // cursor wherever the old program left it. Before the new program's output
-  // lands (it is still held behind the restore), the cursor is put at the end
+  // lands (it is still held behind the restore), the old program's terminal
+  // modes are switched off (RESUME_MODE_RESET), the cursor is put at the end
   // of the last line that has text, and the program is sent a SIGWINCH. A
   // full-screen program (vim, htop...) redraws itself; anything else - a shell
   // prompt - gets a new line, so it does not start on top of the old text.
@@ -825,6 +845,9 @@ class SessionEngine extends EventEmitter {
   async _settleResumedCursor(sessionId, runtime, archive) {
     const live = () => !runtime.restoreAborted && this.sessions.get(sessionId) === runtime
     if (!live() || runtime.mode === 'attach') return
+    // Modes first: leaving the alternate screen changes which screen the
+    // cursor move is measured on.
+    await this._recordResumeOutput(runtime, archive, RESUME_MODE_RESET)
     const move = lastTextCursorMove(archive.term)
     if (move) await this._recordResumeOutput(runtime, archive, move)
     // A same-size resize sends no SIGWINCH, so the size is nudged and put
@@ -3025,5 +3048,6 @@ module.exports._test = {
   isGeometry,
   hasTerminalBoundary,
   ARCHIVE_PROFILES,
+  RESUME_MODE_RESET,
   currentUsername
 }
