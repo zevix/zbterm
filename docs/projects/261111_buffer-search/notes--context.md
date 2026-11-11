@@ -1,0 +1,55 @@
+# Search in live session buffers — notes and context
+
+Companion to `goal_requirements.md`: the user's words, the history and the detail behind each
+row, so the goal page stays one screen. Not a spec; nothing here is approved or built from.
+
+## The user's words
+
+**2026-11-11, the request** (verbatim, typos kept):
+
+> lets do search in the memory buffers of the live sessions only instead.
+>
+> 1) searh in current session with  ATRL+SHIFT+F that will move the focus to a new search box that will be on the bottom left (move the status a bit to the right of the search)
+>
+> 2) search in buffers of all live sessions - when typing in the "Search sessions" box after the session name match, add a "Session buffer matches" subtitle, and below it start adding session with a match in the session buffers. Create multiple search threads and to the ordered by numbner of matches. When showing sessions with matches replace the subtutle from "live..." to "N matches" in cyan
+
+Read by the orchestrator (2026-11-11): "ATRL" means Ctrl. "Instead" means instead of searching recorded history on disk, which is encrypted; only live sessions' in-memory buffers are searched.
+
+**2026-11-11, after reviewing the first plan** (verbatim):
+
+> I want one change - have a single search box on the bottom left - move our current search box to the bottom, and when collapsed keep it the same width as the top bar, go!
+
+In the same reply, relayed by the orchestrator: the recommendations were accepted, Q-1 no new dependency (concurrent, time-sliced per-session engine calls, no true threads) and Q-2 a session matching both name and buffer shows in both sections.
+
+Read by the planner (2026-11-11): "our current search box" is "Search sessions" (`#search`); it becomes the only box and also does the in-session search, so the planned `#bufferSearch` is dropped. "The same width as the top bar" when collapsed is read as the collapsed top bar's left group (`.topbar-brand`), since the whole top bar is the window's width (`design.md` Q-5). The details the user left open were decided by the planner as `design.md` Q-3 to Q-7, for the user to overrule at approval.
+
+## Context
+
+- **Replaces an earlier idea.** Before this request the plan was a full-text search of recorded history on disk. Recorded history and snapshots are encrypted (measured in `../261110_ui-chrome/status--done.md` *Gotchas*: a `grep -rlF` for a recorded marker finds nothing), so such a search would have to decrypt and replay every session. "Instead" drops that: this project searches memory only, and the on-disk search is out of scope.
+- **Predecessors.** `../261110_ui-chrome/` (done 2026-11-11) set the hotkey pattern (Ctrl+Shift+B in the capture `keydown` and in `attachCustomKeyEventHandler`), the kit harness `acceptance/lib.sh` and the `ui-state` debug command. This kit reuses `lib.sh`.
+- **Siblings (2026-11-11).** `../261110_session-templates/` (Ctrl+Shift+T, `NEW_SESSION_TRIGGERS`) and `../261110_timeline-fixes/` (the time label, `#timeLabelTip`) are done and merged into `buffer-search` at 3682f01, with `../261110_ui-chrome/` (collapsed top bar, Ctrl+Shift+B). Code locations in `design.md` and `phases.md` are re-checked at 3682f01; `baseline.md`'s line numbers are at ec04775.
+- **No done kit references `#search`** (2026-11-11, `grep -rln search ../261110_*/acceptance/`). Moving the footer out of `.main` can still move rects those kits assert; P3 and P6 re-run them (`design.md` scenario 21).
+- Planned on branch `buffer-search` (worktree `.claude/worktrees/buffer-search`) from ec04775.
+
+## Requirement notes
+
+- **R1** The box is today's `#search`, moved from the side pane's `.tools` to the first cell of `.bottom`; `#status` is the second cell. Placeholder "Search (Ctrl+Shift+F)". The box is always there; the hotkey focuses it and selects its text. Clicking it works too. Typing does three things: filters the list by name (immediate, as today), searches the selected session (R2), and, while the list is shown, the live sessions (R5).
+- **R2** Plain text, case-insensitive. The count reads `3/17` (current/total), `0/0` when nothing matches, inside the box's right end. Enter goes to the next older match (upwards), Shift+Enter to the next newer one; the first match after typing is the newest one, nearest the bottom. Before this project Enter in `#search` did nothing, so nothing is lost (`design.md` Q-3). Lines that wrap are joined. Matches are highlighted in the rows on screen; the current one has its own colour. While live output arrives, the search re-runs (debounced) and keeps the current match where it was. Switching sessions keeps the query and searches the new session.
+- **R3** Esc empties the box, which also clears the list filter and the buffer section, removes every highlight and focuses the terminal; on an empty box it only focuses the terminal (Q-4). The native `type=search` Esc clear is replaced by this one.
+- **R4** A playback frame holds no scrollback (`engine/player.js` builds its frames with `scrollback: 0`), so after a seek the box searches the screen only; while playing, the terminal also builds scrollback from the played output (`renderer/app.js` `player:data` → `enqueuePlaybackWrite`), and that is searched too: "the frame on screen" means what the terminal holds. It re-runs after each new frame (seek, step, play), debounced 150 ms. Soft: the user asked for live sessions; playback only needs to behave sensibly.
+- **R5** The heading appears as soon as the query is not empty and the list is shown, with "searching…" under it until the first result, and "No matches in live sessions" when every search finished empty. A session whose name matched may appear in both sections (Q-2, answered). Live means `active` in the session list, both own and joined. The "All/Active" toggle stays in the pane and still filters the name rows (Q-6).
+- **R6** Ties keep the session list's order (most recently started first). The cyan is a new colour token `--match-cyan` with a light and a dark value. The row keeps its icon, name, marks and hover actions; only the subtitle line changes.
+- **R7** One engine call per live session, issued together; the calls interleave in the Bare worker and each answers when its session is done (Q-1, answered: no threads, no new dependency). Typing is debounced (200 ms); every query has a sequence number, and both the renderer and the engine drop work for an older one.
+- **R8** A joined session's buffer is `remoteSessions.get(id).mirror` in the viewer's engine: the host's screen plus up to 5000 lines of scrollback from the bootstrap, then live output. After a resync the host sends only 500 lines (`engine/share-manager.js::RESYNC_SCROLLBACK`), so a joined copy can hold less than the host's.
+- **R9** Expanded: the box's left and right edges are the side pane's (±1 px), and follow a drag of the resizer. Collapsed: its width is `.topbar-brand`'s (±1 px), at the window's left edge. The list is hidden while collapsed, so no cross-session search runs then; expanding with text in the box starts one. The narrow layout (under 780 px) is not this rule: the box is the bar's first row at full width (`design.md` scenario 13).
+- **U1** xterm.js sends nothing for Ctrl+Shift+letter (`Keyboard.ts`: the a–z branch requires `!ev.shiftKey`), so U1 guards against a regression. It is checked with real keys and `od -c`, as `../261110_ui-chrome` U1.
+- **U2** The search reads only `runtime.mirror` / `remote.mirror`. Ended sessions have no runtime. The check also confirms no store is opened (no `session.open`/`player.open` in `GET /events` while the search runs).
+- **U3** "Responsive": a typed key's echo returns within 150 ms while the search runs over five sessions with 5000 lines each (baseline: one full scan costs ~6 ms in Bare).
+
+## Soft changes
+
+None.
+
+## Superseded text
+
+- 2026-11-11, first plan (before the user's single-box change): a second box `#bufferSearch` "Search buffer (Ctrl+Shift+F)" in the bottom bar for the selected session, while "Search sessions" stayed at the top of the side pane and drove the buffer-match section. Replaced by one box, `#search`, at the bottom left (R1, R9).
