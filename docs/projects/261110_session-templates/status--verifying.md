@@ -5,10 +5,17 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-in-progress, 2026-11-11: P1 (engine `record: false`), P2 (dialog and templates) and P3 (warnings, takeover, unrecorded marks) built on branch `session-templates`. The full kit is green on this host (11/11). The next phase is P4 (close: kit at HEAD, tests, README/ARCHITECTURE, `D-nn`, rename to `status--verifying.md`).
+verifying, 2026-11-11: P1–P4 built on branch `session-templates`. At P4's HEAD on host zr the kit is green (11/11), the sibling ui-chrome kit is green against the same package (8/8), every test file matches the P0 baseline (no new failure), lint exits 0 with the baseline's 95 warnings, and the packaged app boots. README, `docs/ARCHITECTURE.md` §8.4 and `docs/CORE-CONTRACT.md` describe the unrecorded mode and the templates. Next: the verifier, then read back the soft changes below; the `D-nn` row is Open (no `docs/decisions.md` on this machine).
 
 ## Done
 
+- 2026-11-11 P4 builder: close.
+  - Repackaged and ran both kits at HEAD (below).
+  - Every test file run alone against the P0 baseline (below).
+  - `README.md`: two *Implemented* bullets (unrecorded sessions; new-session templates, Ctrl+Shift+T, the Shift + "+ New" migration); *Storage* names `newSessionTemplate.<trigger>` in `preferences.json` instead of "the default session".
+  - `docs/ARCHITECTURE.md`: new §8.4 *Unrecorded Sessions* (header-only store, the `_recorded` guard, the store's refusal, backpressure, Extend, refusals, renderer marks).
+  - `docs/CORE-CONTRACT.md` (additive, dated 2026-11-11): `session.create`'s `record?`; `E_NOT_RECORDED` on `copyHistoryFrom` of an unrecorded source, `player.open` and `share.createLink`; `session.update`'s `E_INVALID` for a changed `record`; §2 names `E_NOT_RECORDED` and `E_INVALID`. `test/core-contract.test.js` passes (3/3).
+  - No soft change in P4; no assertion touched.
 - 2026-11-11 P3 builder: warnings, takeover and the unrecorded marks (`renderer/app.js`, `renderer/index.html`).
   - R2: on an unrecorded session (`isUnrecordedSession`, `entry.record === false`) Share, Play, Step back and the scrubber are disabled with the title "Not recorded"; `shareSession` and `enterPlaybackMode` refuse it. When it ends, `openPlayback` calls `showUnrecordedEnded` instead of `player.open`: the last screen stays under the offline dots, status "ended, not recorded". A Copy of an unrecorded source greys "Copy history".
   - U2: deleting a template always asks (Shift too), naming the trigger and the restore name. A name equal to a hidden copy's (`hiddenCopiesNamed`) asks "… is the deleted template for new sessions when you …; this profile will replace it." in the New/Copy/Edit/template dialogs at OK (`templateChecks`, via `showSessionEditor`'s new `beforeSubmit`), in the `createSession` funnel for dialog-less paths (Shift-Copy, skip-dialog) and before Rename. On OK a profile with no trigger of its own becomes that trigger's template (`claimHiddenCopies`). The trigger being restored is exempt (`restoring`).
@@ -36,6 +43,14 @@ in-progress, 2026-11-11: P1 (engine `record: false`), P2 (dialog and templates) 
 - 2026-11-10 planner: project files, review (Sonnet, fresh context, 15 rows, answered), P0 baseline (`../261110_ui-chrome/baseline.md`).
 
 ## Measured
+
+P4, 2026-11-11, logs under `~/.claude/projects/-zp-zdata-zeev-github-zbterm/runs/261110_session-templates/p4_*`.
+- Package: `ZBTERM_FORGE_OUT_DIR=/tmp/claude-1000/zbst/out npm run package`, exit 0, 3.9 s (`p4_package.log`).
+- Kit: `ZBUI_OUT=/tmp/claude-1000/zbst/out ZBUI_TMP=/tmp/zbst4 acceptance/run_all.sh`, exit 0, 2 min 8 s: PASS R1–R7, U1–U4 (11/11, 0 cannot-run; `p4_run_all.log`).
+- Sibling kit: `ZBUI_OUT=/tmp/claude-1000/zbst/out ZBUI_TMP=/tmp/zbst5 ../261110_ui-chrome/acceptance/run_all.sh`, exit 0, 1 min 56 s: PASS R1–R6, U1, U2 (8/8; `p4_uichrome_run_all.log`).
+- Packaged boot (engine changed): every one of the 19 kit scripts started the packaged app from `/tmp/claude-1000/zbst/out` under `uisolate` and reached `start_app`'s ready state; all passed.
+- Tests: 64 files (`find test -name '*.test.js'`), one process each, `HOME=/tmp/claude-1000/zbst/h TMPDIR=/tmp/zbst-t ZXTERM_CORE_BIN=…/zxterm-core`, sum 319 s (baseline 642 s); summary `p4_summary.txt`, logs `p4_files/`. Top-level counts (`grep -c '^ok '` / `'^not ok '`) equal the baseline's in every file present at P0, except `renderer-static` 34/0 (P0 33/0; tests added by the projects). New files: `engine-unrecorded` 5/0, `wall-clock` 3/0. Failures, all pre-existing and identical to P0: `doctor` not ok 8, `native-linkage` not ok 3, `zxterm-seam` crash (`no such seam method: test.echo`). `freenet-backend` passed first time (23/0). Skips, same as P0: `backends/freenet-client` 1 (zxterm submodule not checked out), `zxterm-seam-codec` 6 (golden fixtures missing); none counted toward green.
+- Lint: `npm run lint`, exit 0, 95 `require-await` warnings (`p4_lint.log`), same as baseline.
 
 P3, 2026-11-11, logs under `~/.claude/projects/-zp-zdata-zeev-github-zbterm/runs/261110_session-templates/p3_*.log`. Package: `ZBTERM_FORGE_OUT_DIR=/tmp/claude-1000/zbst/out npm run package`, exit 0 (`p3_package2.log`; the packaged app booted in every kit script). Kit: `ZBUI_OUT=/tmp/claude-1000/zbst/out ZBUI_TMP=/tmp/zbst3 acceptance/run_all.sh` on host zr, 2 min 9 s, exit 0 (`p3_run_all.log`):
 
@@ -99,7 +114,7 @@ P1, 2026-11-11, logs under `~/.claude/projects/-zp-zdata-zeev-github-zbterm/runs
 
 ## Ids allocated
 
-None. One `D-nn` is pending (design *Decisions*), to be taken at landing time from `docs/decisions.md`.
+None. The `D-nn` (design *Decisions*: an unrecorded session keeps a header-only `SessionStore`) is not written: `docs/decisions.md` does not exist in this worktree or in the main checkout (`ls` → No such file; it is gitignored, `.gitignore:10`). See *Open*.
 
 ## User owes
 
@@ -107,9 +122,12 @@ None.
 
 ## Open
 
-- `docs/CORE-CONTRACT.md` still lists `session.create` without `record` and `session.update` without its refusal. §2 does not name `E_NOT_RECORDED`/`E_INVALID`. These are additive and nothing there is false. For P4 to document with the ARCHITECTURE update.
+- `D-nn` row: `docs/decisions.md` is absent on this machine, so no id was taken. The maintainer appends it at landing (next free id in their ledger): "Unrecorded sessions keep a `SessionStore` holding a header only (info + first resize); the store refuses data packets. A storeless session would fork every path (catalog, list, Extend, delete)." `docs/ARCHITECTURE.md` §8.4 points at it as "the pending `D-nn`".
+- `docs/CORE-CONTRACT.md` *Versioning*: `record?` and the two codes are a minor change of `zbterm-core`; `engine/package.json`'s version was not bumped (a release decision).
 
 ## Soft changes to read back
+
+None added in P4. Sixteen in all, dated in `notes--context.md` *Soft changes*, with Approval lines in `goal_requirements.md`:
 
 Seven, dated 2026-11-11 (P3), in `notes--context.md` *Soft changes*:
 - warning wording "for new sessions when you …";
