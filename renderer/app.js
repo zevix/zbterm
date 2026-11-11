@@ -76,6 +76,13 @@
   const IN_SESSION_RESCAN_PLAYBACK_MS = 150
   const IN_SESSION_SEARCH_SLICE = 2000
   const IN_SESSION_SEARCH_LIMIT = 50000
+  // Cross-session search (261111_buffer-search R5-R9): the typing debounce,
+  // the re-search of a session that became live as its output arrives, the
+  // debug log's ring, and the layout under which the list is hidden.
+  const SESSION_BUFFER_SEARCH_DELAY_MS = 200
+  const SESSION_BUFFER_RESEARCH_MS = 400
+  const BUFFER_SEARCH_LOG_MAX = 500
+  const NARROW_LAYOUT_QUERY = '(max-width: 780px)'
   const SEEK_MAX_RENDER_MS = 500
   const SEEK_MOVEMENT_THRESHOLD = 10
   const LIVE_WRITE_MAX_BATCH_BYTES = 512 * 1024
@@ -239,6 +246,14 @@
     // The in-session search (261111_buffer-search R2-R4): see runInSessionSearch.
     bufferSearch: null,
     bufferSearchSeq: 0,
+    // The cross-session search: see scheduleSessionBufferSearch. One random
+    // key per renderer, so two windows never cancel each other's scans.
+    bufferMatches: null,
+    bufferSearchPending: null,
+    bufferSearchCross: false,
+    bufferSearchLog: [],
+    bufferSearchKey: `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    sessionBufferSearchTimer: null,
     inSessionSearchToken: 0,
     inSessionSearchTimer: null,
     inSessionRescanTimer: null,
@@ -481,6 +496,8 @@
   restoreSidebarWidth()
   applySidePane(window.localStorage.getItem(SIDE_COLLAPSED_STORAGE_KEY) === '1')
   watchBottomBarVars()
+  // The narrow layout hides the list: the cross-session search stops there.
+  window.matchMedia(NARROW_LAYOUT_QUERY).addEventListener('change', syncSessionBufferSearchShown)
   init().catch(showError)
 
   async function init() {
@@ -1193,6 +1210,7 @@
       } else {
         clearInSessionSearch()
       }
+      scheduleSessionBufferSearch()
       await refreshSessions()
     })
     // The box's keys (R2, R3), left alone while an IME composes: Enter and
@@ -1413,6 +1431,12 @@
     })
 
     api.on('session:list-changed', (list) => {
+      noteSessionListForBufferSearch(list)
+      // The event carries the whole list: a filtered one is asked for again.
+      if (state.query || state.activeOnly) {
+        refreshSessions().catch(showError)
+        return
+      }
       const realIds = new Set(list.map((session) => session.sessionId))
       state.pendingJoins = state.pendingJoins.filter((join) => !realIds.has(join.sessionId))
       state.sessions = withPinnedFirst([...state.pendingJoins, ...list])
@@ -1423,6 +1447,7 @@
       const bytes = new Uint8Array(data)
       recordLiveActivity(sessionId, source, bytes.byteLength)
       scheduleJoinedAvailabilityRefresh(sessionId)
+      noteSessionOutputForBufferSearch(sessionId)
       if (state.mode !== 'live' || sessionId !== state.selectedId) {
         ackSessionData(sessionId, bytes.byteLength)
         return
@@ -2567,61 +2592,70 @@
       empty.textContent =
         state.query || state.activeOnly ? 'No matching sessions' : 'No sessions yet'
       els.sessions.append(empty)
-      return
     }
-    for (const session of state.sessions) {
-      const row = document.createElement('div')
-      row.className = 'session-row'
-      row.dataset.sessionId = session.sessionId
-      if (session.pending) row.classList.add('pending')
-      if (session.sessionId === state.selectedId) row.classList.add('selected')
-      row.addEventListener('click', () => selectSession(session).catch(showError))
-      row.addEventListener('contextmenu', (event) => {
-        event.preventDefault()
-        openSessionMenu(session, event)
-      })
-      const status = session.pending ? 'pending' : session.active ? 'live' : 'recorded'
-      const liveIcon = sessionLiveIcon(session, { keyboardShared: true })
-      const shared = session.isSharing ? ` · ${session.viewerCount || 0} watching` : ''
-      const joined = session.isJoined || session.owner === 'joined' ? ' · joined' : ''
-      const meta = session.pending
-        ? 'joining shared session'
-        : `${status}${joined}${shared} · ${formatTime(session.startedAt)} · ${formatBytes(session.sizeBytes || 0)}`
-      row.innerHTML = `
-      <i class="fa-solid ${liveIcon.icon} session-icon ${liveIcon.state}" aria-hidden="true"></i>
-      <span class="session-main">
-        <span class="session-title"><span class="session-name"></span></span>
-        <span class="session-sub">${meta}</span>
-      </span>
-      <span class="session-actions"></span>
-    `
-      row.querySelector('.session-name').textContent = session.name
-      // Status marks sit at the row's right end, where the hover actions
-      // appear; they hide while the actions show.
-      const marks = document.createElement('span')
-      marks.className = 'session-marks'
-      if (isPinnedSession(session)) {
-        marks.append(sessionMark('fa-thumbtack session-pin-mark', 'Pinned'))
-      }
-      const templateFor = templateTriggersOf(session.sessionId)
-      if (templateFor.length) {
-        const verbs = templateFor.map((trigger) => trigger.verb).join(', ')
-        marks.append(sessionMark('fa-check session-default-mark', `Template when you ${verbs}`))
-      }
-      if (marks.childElementCount) {
-        row.classList.add('has-marks')
-        row.append(marks)
-      }
-      const badges = sessionIdentityBadges(session)
-      if (badges.length) {
-        const identity = document.createElement('span')
-        identity.className = 'session-identity'
-        for (const badge of badges) identity.append(badge)
-        row.querySelector('.session-main').append(identity)
-      }
-      renderSessionActions(session, row.querySelector('.session-actions'))
-      els.sessions.append(row)
+    for (const session of state.sessions) els.sessions.append(buildSessionRow(session))
+    renderSessionBufferSection()
+  }
+
+  // One row of the session list: icon, name, subtitle, marks, identity
+  // badges and hover actions. options.matchCount makes it a buffer-match row.
+  function buildSessionRow(session, options = {}) {
+    const row = document.createElement('div')
+    row.className = 'session-row'
+    row.dataset.sessionId = session.sessionId
+    if (session.pending) row.classList.add('pending')
+    if (session.sessionId === state.selectedId) row.classList.add('selected')
+    row.addEventListener('click', () => selectSession(session).catch(showError))
+    row.addEventListener('contextmenu', (event) => {
+      event.preventDefault()
+      openSessionMenu(session, event)
+    })
+    const status = session.pending ? 'pending' : session.active ? 'live' : 'recorded'
+    const liveIcon = sessionLiveIcon(session, { keyboardShared: true })
+    const shared = session.isSharing ? ` · ${session.viewerCount || 0} watching` : ''
+    const joined = session.isJoined || session.owner === 'joined' ? ' · joined' : ''
+    const meta = session.pending
+      ? 'joining shared session'
+      : `${status}${joined}${shared} · ${formatTime(session.startedAt)} · ${formatBytes(session.sizeBytes || 0)}`
+    const matchCount = Number.isFinite(options.matchCount) ? options.matchCount : null
+    row.innerHTML = `
+    <i class="fa-solid ${liveIcon.icon} session-icon ${liveIcon.state}" aria-hidden="true"></i>
+    <span class="session-main">
+      <span class="session-title"><span class="session-name"></span></span>
+      <span class="session-sub${matchCount === null ? '' : ' match-count'}"></span>
+    </span>
+    <span class="session-actions"></span>
+  `
+    row.querySelector('.session-name').textContent = session.name
+    // A buffer-match row (261111_buffer-search R6) says how many times the
+    // box's text is in the session's buffer instead of "live · …".
+    row.querySelector('.session-sub').textContent =
+      matchCount === null ? meta : `${matchCount} ${matchCount === 1 ? 'match' : 'matches'}`
+    // Status marks sit at the row's right end, where the hover actions
+    // appear; they hide while the actions show.
+    const marks = document.createElement('span')
+    marks.className = 'session-marks'
+    if (isPinnedSession(session)) {
+      marks.append(sessionMark('fa-thumbtack session-pin-mark', 'Pinned'))
     }
+    const templateFor = templateTriggersOf(session.sessionId)
+    if (templateFor.length) {
+      const verbs = templateFor.map((trigger) => trigger.verb).join(', ')
+      marks.append(sessionMark('fa-check session-default-mark', `Template when you ${verbs}`))
+    }
+    if (marks.childElementCount) {
+      row.classList.add('has-marks')
+      row.append(marks)
+    }
+    const badges = sessionIdentityBadges(session)
+    if (badges.length) {
+      const identity = document.createElement('span')
+      identity.className = 'session-identity'
+      for (const badge of badges) identity.append(badge)
+      row.querySelector('.session-main').append(identity)
+    }
+    renderSessionActions(session, row.querySelector('.session-actions'))
+    return row
   }
 
   function sessionMark(classes, label) {
@@ -8445,10 +8479,14 @@
     const hadText = !!(els.search && els.search.value)
     if (els.search) els.search.value = ''
     clearInSessionSearch()
+    const hadSection = !!state.bufferMatches
+    cancelSessionBufferSearch()
     state.bufferSearchSeq = (Number.isFinite(state.bufferSearchSeq) ? state.bufferSearchSeq : 0) + 1
     if (hadText || state.query) {
       state.query = ''
       refreshSessions().catch(showError)
+    } else if (hadSection) {
+      renderSessions()
     }
     if (state.term) state.term.focus()
     else if (els.search) els.search.blur()
@@ -8468,10 +8506,270 @@
     el.textContent = `${bs.index >= 0 ? bs.index + 1 : 0}/${bs.count}`
   }
 
+  // ---- Cross-session search (261111_buffer-search R5-R9) -------------------
+  // While the box holds text and the session list is shown (pane expanded,
+  // not the narrow layout), every live session's buffer is searched by the
+  // engine (session.searchBuffer: the core's mirror, own or joined; never the
+  // history on disk). One request per session, all sent together; each row is
+  // added, in match-count order, when its session answers. State:
+  //   state.bufferMatches = { query, seq, listed, searched (ids sent),
+  //     sessions (id → list entry), order (id → list position), pending
+  //     (id → requests in flight), rows: [{ id, count, order }], watch, timers }
+  // A new text gets a new seq (strictly increasing, one searchKey per
+  // renderer), so the engine drops older scans and their answers are ignored.
+  // Sessions that become live while the text is in the box are searched then,
+  // and again as their output arrives (a new session prints after it starts).
+
+  function crossSessionShown() {
+    if (isSidePaneCollapsed()) return false
+    return !window.matchMedia(NARROW_LAYOUT_QUERY).matches
+  }
+
+  function isBufferSearchable(session) {
+    return !!(session && session.active && !session.pending)
+  }
+
+  function logBufferSearch(entry) {
+    if (!Array.isArray(state.bufferSearchLog)) state.bufferSearchLog = []
+    state.bufferSearchLog.push(entry)
+    if (state.bufferSearchLog.length > BUFFER_SEARCH_LOG_MAX) state.bufferSearchLog.shift()
+  }
+
+  function cancelSessionBufferSearch() {
+    if (state.sessionBufferSearchTimer) clearTimeout(state.sessionBufferSearchTimer)
+    state.sessionBufferSearchTimer = null
+    const bm = state.bufferMatches
+    if (bm) for (const timer of bm.timers.values()) clearTimeout(timer)
+    state.bufferMatches = null
+    state.bufferSearchPending = null
+    state.bufferSearchCross = false
+  }
+
+  // On every change of the box's text, and when the list is shown again:
+  // drops the old results at once (the heading reads "searching…") and
+  // searches after `delay`.
+  function scheduleSessionBufferSearch(delay = SESSION_BUFFER_SEARCH_DELAY_MS) {
+    cancelSessionBufferSearch()
+    const query = inSessionQuery()
+    if (!query || !crossSessionShown()) return
+    state.bufferSearchSeq = (Number.isFinite(state.bufferSearchSeq) ? state.bufferSearchSeq : 0) + 1
+    const bm = {
+      query,
+      seq: state.bufferSearchSeq,
+      listed: false,
+      searched: new Set(),
+      sessions: new Map(),
+      order: new Map(),
+      pending: new Map(),
+      rows: [],
+      watch: new Set(),
+      timers: new Map()
+    }
+    state.bufferMatches = bm
+    state.bufferSearchPending = bm.pending
+    state.bufferSearchCross = true
+    state.sessionBufferSearchTimer = setTimeout(() => {
+      state.sessionBufferSearchTimer = null
+      runSessionBufferSearch(bm).catch((err) => {
+        console.warn('session buffer search failed', err)
+        if (state.bufferMatches === bm) {
+          bm.listed = true
+          renderSessions()
+        }
+      })
+    }, delay)
+  }
+
+  async function runSessionBufferSearch(bm) {
+    const list = await api.invoke('session.list', { activeOnly: true })
+    if (state.bufferMatches !== bm) return
+    bm.listed = true
+    const live = list.filter(isBufferSearchable)
+    live.forEach((session, index) => {
+      bm.sessions.set(session.sessionId, session)
+      bm.order.set(session.sessionId, index)
+    })
+    for (const session of live) sendSessionBufferSearch(bm, session.sessionId)
+    renderSessions()
+  }
+
+  function sendSessionBufferSearch(bm, sessionId) {
+    bm.searched.add(sessionId)
+    bm.pending.set(sessionId, (bm.pending.get(sessionId) || 0) + 1)
+    const entry = {
+      sessionId,
+      seq: bm.seq,
+      count: null,
+      cancelled: null,
+      gone: null,
+      sentAt: Date.now(),
+      answeredAt: null
+    }
+    logBufferSearch(entry)
+    api
+      .invoke('session.searchBuffer', {
+        sessionId,
+        query: bm.query,
+        searchKey: state.bufferSearchKey,
+        seq: bm.seq
+      })
+      .then(
+        (answer) => {
+          entry.answeredAt = Date.now()
+          entry.count = answer ? answer.count : 0
+          entry.cancelled = !!(answer && answer.cancelled)
+          entry.gone = !!(answer && answer.gone)
+          takeSessionBufferAnswer(bm, sessionId, answer)
+        },
+        (err) => {
+          entry.answeredAt = Date.now()
+          entry.error = err && err.message ? err.message : String(err)
+          takeSessionBufferAnswer(bm, sessionId, null)
+        }
+      )
+  }
+
+  function takeSessionBufferAnswer(bm, sessionId, answer) {
+    if (state.bufferMatches !== bm) return
+    const inFlight = (bm.pending.get(sessionId) || 1) - 1
+    if (inFlight > 0) bm.pending.set(sessionId, inFlight)
+    else bm.pending.delete(sessionId)
+    // A newer request for this session is still out: its answer decides.
+    if (inFlight > 0) return
+    bm.rows = bm.rows.filter((row) => row.id !== sessionId)
+    const count = answer && !answer.cancelled && !answer.gone ? Number(answer.count) || 0 : 0
+    if (count > 0 && isBufferSearchable(bm.sessions.get(sessionId))) {
+      const order = bm.order.has(sessionId) ? bm.order.get(sessionId) : -1
+      // Most matches first; ties keep the session list's order.
+      let at = bm.rows.findIndex(
+        (row) => row.count < count || (row.count === count && row.order > order)
+      )
+      if (at < 0) at = bm.rows.length
+      bm.rows.splice(at, 0, { id: sessionId, count, order })
+    }
+    renderSessions()
+  }
+
+  // session:list-changed (the full list): sessions that became live are
+  // searched and watched, rows of sessions that ended are dropped.
+  function noteSessionListForBufferSearch(list) {
+    const bm = state.bufferMatches
+    if (!bm || !bm.listed) return
+    const live = list.filter(isBufferSearchable)
+    const liveIds = new Set(live.map((session) => session.sessionId))
+    bm.rows = bm.rows.filter((row) => liveIds.has(row.id))
+    live.forEach((session, index) => {
+      bm.sessions.set(session.sessionId, session)
+      if (bm.searched.has(session.sessionId)) return
+      bm.order.set(session.sessionId, index)
+      bm.watch.add(session.sessionId)
+      sendSessionBufferSearch(bm, session.sessionId)
+    })
+    for (const id of bm.watch) {
+      if (liveIds.has(id)) continue
+      bm.watch.delete(id)
+      clearTimeout(bm.timers.get(id))
+      bm.timers.delete(id)
+    }
+  }
+
+  // Output of a session that became live during this search: searched again
+  // once the burst settles.
+  function noteSessionOutputForBufferSearch(sessionId) {
+    const bm = state.bufferMatches
+    if (!bm || !bm.watch.has(sessionId) || bm.timers.has(sessionId)) return
+    bm.timers.set(
+      sessionId,
+      setTimeout(() => {
+        bm.timers.delete(sessionId)
+        if (state.bufferMatches === bm && bm.watch.has(sessionId)) {
+          sendSessionBufferSearch(bm, sessionId)
+        }
+      }, SESSION_BUFFER_RESEARCH_MS)
+    )
+  }
+
+  // The list was hidden or shown (pane collapsed or expanded, narrow layout
+  // entered or left): stop, or search the box's text again.
+  function syncSessionBufferSearchShown() {
+    const shown = crossSessionShown()
+    if (!shown && state.bufferMatches) {
+      cancelSessionBufferSearch()
+      state.bufferSearchSeq =
+        (Number.isFinite(state.bufferSearchSeq) ? state.bufferSearchSeq : 0) + 1
+      renderSessions()
+    } else if (shown && !state.bufferMatches && inSessionQuery()) {
+      scheduleSessionBufferSearch(0)
+      renderSessions()
+    }
+  }
+
+  // After the name rows (or "No matching sessions"): the heading, then
+  // "searching…", the buffer-match rows, or "No matches in live sessions".
+  function renderSessionBufferSection() {
+    const bm = state.bufferMatches
+    if (!bm || !crossSessionShown()) return
+    const title = document.createElement('div')
+    title.className = 'session-section-title'
+    title.textContent = 'Session buffer matches'
+    els.sessions.append(title)
+    for (const row of bm.rows) {
+      const session = bm.sessions.get(row.id)
+      if (session) els.sessions.append(buildSessionRow(session, { matchCount: row.count }))
+    }
+    if (bm.rows.length) return
+    const note = document.createElement('div')
+    note.className = 'empty session-section-note'
+    note.textContent = !bm.listed || bm.pending.size ? 'searching…' : 'No matches in live sessions'
+    els.sessions.append(note)
+  }
+
   // A colour token as #rrggbb (xterm's decorations take nothing else).
   function searchColorToken(name, fallback) {
     const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim()
     return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
+  }
+
+  // The highlighted pieces in rows [top, bottom): one per row a match covers,
+  // with the matches that touch on a row merged into one run (a 1-character
+  // query can match every cell on screen: one run per row, not one
+  // decoration per cell, keeps typing responsive, U3). The current match is
+  // always its own piece. `shift` moves every match by the rows output
+  // trimmed since the scan.
+  function searchHighlightRuns(bs, top, bottom, cols, shift = 0) {
+    const pieces = []
+    for (let i = 0; i < bs.matches.length; i++) {
+      const match = bs.matches[i]
+      const row = match.row + shift
+      // Newest first: every later match starts above this one.
+      if (row + Math.ceil((match.col + match.len) / cols) <= top) break
+      if (row >= bottom) continue
+      let left = match.len
+      let x = match.col
+      for (let r = row; left > 0 && r < bottom; r++) {
+        const width = Math.min(left, cols - x)
+        if (r >= top && width > 0) pieces.push({ row: r, x, width, current: i === bs.index })
+        left -= width
+        x = 0
+      }
+    }
+    pieces.sort((p, q) => p.row - q.row || p.x - q.x)
+    const runs = []
+    for (const piece of pieces) {
+      const last = runs[runs.length - 1]
+      if (
+        last &&
+        !last.current &&
+        !piece.current &&
+        last.row === piece.row &&
+        last.x + last.width === piece.x
+      ) {
+        last.width += piece.width
+      } else {
+        runs.push({ ...piece })
+      }
+    }
+    return runs
   }
 
   // Highlights the matches in the rows on screen; the current one in its own
@@ -8483,47 +8781,81 @@
     if (!bs) return
     for (const item of bs.decorations) disposeQuietly(item)
     bs.decorations = []
-    if (!term || term.buffer.active.type !== 'normal' || !bs.matches.length) return
+    if (!term || !bs.matches.length) return
+    if (term.buffer.active.type !== 'normal') {
+      drawSearchOverlay(bs, term)
+      return
+    }
     const buffer = term.buffer.active
     const top = buffer.viewportY
-    const bottom = top + term.rows
-    const cols = term.cols
     const plain = searchColorToken('--search-match', '#5c4a12')
     const current = searchColorToken('--search-current', '#f3c969')
     const currentFg = searchColorToken('--search-current-fg', '#111316')
     const held = bs.index >= 0 && bs.marker && !bs.marker.isDisposed
     const shift = held ? bs.marker.line - bs.matches[bs.index].row : 0
-    bs.matches.forEach((match, i) => {
-      const row = match.row + shift
-      const rowsSpanned = Math.ceil((match.col + match.len) / cols)
-      if (row + rowsSpanned <= top || row >= bottom) return
-      const color = i === bs.index ? current : plain
-      let left = match.len
-      let x = match.col
-      for (let r = row; left > 0 && r < bottom; r++) {
-        const width = Math.min(left, cols - x)
-        if (r >= top && width > 0) {
-          const marker = markerAtRow(r)
-          if (marker) {
-            const decoration = term.registerDecoration({
-              marker,
-              x,
-              width,
-              backgroundColor: color,
-              ...(i === bs.index ? { foregroundColor: currentFg } : {})
-            })
-            if (decoration) {
-              decoration.onDispose(() => disposeQuietly(marker))
-              bs.decorations.push(decoration)
-            } else {
-              disposeQuietly(marker)
-            }
-          }
-        }
-        left -= width
-        x = 0
+    for (const run of searchHighlightRuns(bs, top, top + term.rows, term.cols, shift)) {
+      const marker = markerAtRow(run.row)
+      if (!marker) continue
+      const decoration = term.registerDecoration({
+        marker,
+        x: run.x,
+        width: run.width,
+        backgroundColor: run.current ? current : plain,
+        ...(run.current ? { foregroundColor: currentFg } : {})
+      })
+      if (decoration) {
+        decoration.onDispose(() => disposeQuietly(marker))
+        bs.decorations.push(decoration)
+      } else {
+        disposeQuietly(marker)
       }
-    })
+    }
+  }
+
+  // xterm draws no decorations on the alternate screen (vim, less):
+  // registerDecoration answers undefined there. Its matches are drawn as boxes
+  // in a layer over the terminal's screen element instead, placed on xterm's
+  // cell grid: the layer is as large as the grid xterm sized the screen to
+  // (cols x rows cells, its inline width and height) and each box sits in
+  // percent of it. Each box goes into bs.decorations with a dispose(), like a
+  // decoration.
+  function searchOverlayLayer(term) {
+    const screen = term.element ? term.element.querySelector('.xterm-screen') : null
+    if (!screen) return null
+    let layer = screen.querySelector(':scope > .search-overlay')
+    if (!layer) {
+      layer = document.createElement('div')
+      layer.className = 'search-overlay'
+      layer.setAttribute('aria-hidden', 'true')
+      screen.append(layer)
+    }
+    layer.style.width = screen.style.width || '100%'
+    layer.style.height = screen.style.height || '100%'
+    return layer
+  }
+
+  function drawSearchOverlay(bs, term) {
+    const layer = searchOverlayLayer(term)
+    if (!layer) return
+    const top = term.buffer.active.viewportY
+    const cols = term.cols
+    const rows = term.rows
+    for (const run of searchHighlightRuns(bs, top, top + rows, cols)) {
+      const mark = document.createElement('div')
+      mark.className = run.current ? 'search-mark current' : 'search-mark'
+      mark.style.left = `${(run.x / cols) * 100}%`
+      mark.style.width = `${(run.width / cols) * 100}%`
+      mark.style.top = `${((run.row - top) / rows) * 100}%`
+      mark.style.height = `${100 / rows}%`
+      layer.append(mark)
+      bs.decorations.push({
+        isDisposed: false,
+        dispose() {
+          this.isDisposed = true
+          mark.remove()
+        }
+      })
+    }
   }
 
   function scheduleSearchDecorations() {
@@ -8541,6 +8873,7 @@
     term.onWriteParsed(noteInSessionBufferChanged)
     term.buffer.onBufferChange(noteInSessionBufferChanged)
     term.onScroll(scheduleSearchDecorations)
+    term.onResize(scheduleSearchDecorations)
   }
 
   // The bottom bar's height (the resizer ends above it) and, collapsed, the
@@ -8614,6 +8947,8 @@
     }
     els.app.classList.toggle('side-collapsed', collapsed)
     syncBottomBarVars()
+    // The list is hidden while collapsed: no cross-session search then (R9).
+    syncSessionBufferSearchShown()
     if (els.brandMark) {
       const label = `${collapsed ? 'Show' : 'Hide'} side pane (Ctrl+Shift+B)`
       els.brandMark.title = label
@@ -9711,7 +10046,7 @@
       topbarBrandRect:
         topbarBrand && topbarBrand.getClientRects().length ? debugRect(topbarBrand) : null,
       sideCollapsed: !!(app && app.classList.contains('side-collapsed')),
-      narrow: window.matchMedia('(max-width: 780px)').matches,
+      narrow: window.matchMedia(NARROW_LAYOUT_QUERY).matches,
       window: { innerWidth: window.innerWidth, innerHeight: window.innerHeight },
       activeElement: document.activeElement ? debugNodeKey(document.activeElement) : null,
       activeInModal: !!(

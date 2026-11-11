@@ -678,3 +678,26 @@ test('buffer-search: the matcher loads before app.js; the count sits in the box;
   t.ok(js.includes("event.key === 'Escape' && !event.shiftKey"), 'Esc in the box')
   t.ok(js.includes('event.preventDefault()\n        clearSearch()'), 'no native type=search clear')
 })
+
+test('buffer-search: the buffer-match section, its cyan in both themes, alternate-screen highlights', async (t) => {
+  const rendererDir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')
+  const html = await fs.promises.readFile(path.join(rendererDir, 'index.html'), 'utf8')
+  t.is(html.split('--match-cyan: #').length - 1, 2, '--match-cyan in both themes')
+  t.ok(html.includes('.session-sub.match-count {\n        color: var(--match-cyan);'), 'cyan count')
+  t.ok(html.includes('.session-section-title {'), 'the heading is styled')
+  t.ok(js.includes("title.textContent = 'Session buffer matches'"), 'the heading text')
+  t.ok(js.includes("api\n      .invoke('session.searchBuffer', {"), 'one engine call per session')
+  t.ok(js.includes('searchKey: state.bufferSearchKey'), 'one searchKey per renderer')
+  // The name rows come first; the section follows even "No matching sessions".
+  const render = js.slice(js.indexOf('  function renderSessions() {'))
+  const body = render.slice(0, render.indexOf('\n  }\n'))
+  t.absent(body.includes('return'), 'renderSessions has no early return before the section')
+  t.ok(body.trim().endsWith('renderSessionBufferSection()'), 'the section is rendered last')
+  t.ok(js.includes('syncSessionBufferSearchShown()'), 'collapse and narrow stop the search')
+  t.ok(
+    js.includes("querySelector('.xterm-screen')"),
+    'alternate-screen matches drawn over the screen'
+  )
+  t.ok(html.includes('.search-mark.current {'), 'the overlay boxes are styled')
+})

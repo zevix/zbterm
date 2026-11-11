@@ -103,27 +103,44 @@
     return { text, rowStarts, next: row }
   }
 
-  // The (row, col) of a string offset in a logical line read from `start`,
-  // and the cell after the code unit at that offset.
-  function cellAt(buffer, start, rowStarts, offset, cell) {
+  // Where each string offset of a logical line read from `start` sits: the
+  // row, the column, and the column after that cell. One pass over the line's
+  // cells, so placing its matches costs one read of the line, not one per
+  // match. An offset past a row's cells (before the next row's start) is that
+  // row's last cell.
+  function lineCellMap(buffer, start, rowStarts, length, cell) {
     const total = buffer.length
-    let r = rowStarts.length - 1
-    while (r > 0 && rowStarts[r] > offset) r--
-    const row = start + r
-    const line = buffer.getLine(row)
-    let at = rowStarts[r]
-    const cols = line.length
-    for (let col = 0; col < cols; col++) {
-      line.getCell(col, cell)
-      const width = cell.getWidth()
-      if (width === 0) continue
-      const chars = cell.getChars()
-      if (chars === '' && skipsLastCell(buffer, row, col, cols, total)) continue
-      const size = chars === '' ? 1 : chars.length
-      if (offset < at + size) return { row, col, end: col + width }
-      at += size
+    const rows = new Int32Array(length)
+    const cols = new Int32Array(length)
+    const ends = new Int32Array(length)
+    for (let r = 0; r < rowStarts.length; r++) {
+      const row = start + r
+      const line = buffer.getLine(row)
+      if (!line) break
+      const width = line.length
+      const until = r + 1 < rowStarts.length ? Math.min(rowStarts[r + 1], length) : length
+      for (let i = rowStarts[r]; i < until; i++) {
+        rows[i] = row
+        cols[i] = width - 1
+        ends[i] = width
+      }
+      let at = rowStarts[r]
+      for (let col = 0; col < width && at < length; col++) {
+        line.getCell(col, cell)
+        const cellWidth = cell.getWidth()
+        if (cellWidth === 0) continue
+        const chars = cell.getChars()
+        if (chars === '' && skipsLastCell(buffer, row, col, width, total)) continue
+        const size = chars === '' ? 1 : chars.length
+        for (let k = 0; k < size && at + k < length; k++) {
+          rows[at + k] = row
+          cols[at + k] = col
+          ends[at + k] = col + cellWidth
+        }
+        at += size
+      }
     }
-    return { row, col: cols - 1, end: cols }
+    return { rows, cols, ends }
   }
 
   function scanBuffer(buffer, query, opts = {}) {
@@ -138,7 +155,11 @@
     const cell = buffer.getNullCell()
     let count = 0
     let lines = 0
-    let matches = []
+    // Lines with matches, oldest first: { start, rowStarts, length, offsets }.
+    // Only the newest `limit` matches are placed, at the end; older lines are
+    // dropped as soon as the newer ones hold `limit` matches.
+    const found = []
+    let held = 0
 
     if (row > 0) {
       while (row < to) {
@@ -154,26 +175,34 @@
       lines++
       if (logical.text.length < needle.length) continue
       const hay = foldText(logical.text)
+      const offsets = []
       let at = hay.indexOf(needle)
       while (at !== -1) {
         count++
-        if (limit > 0) {
-          const first = cellAt(buffer, start, logical.rowStarts, at, cell)
-          const last = cellAt(buffer, start, logical.rowStarts, at + needle.length - 1, cell)
-          const cols = buffer.getLine(first.row).length
-          matches.push({
-            row: first.row,
-            col: first.col,
-            len: (last.row - first.row) * cols + last.end - first.col
-          })
-          // Keep the newest `limit`, trimming in batches.
-          if (matches.length >= limit * 2) matches = matches.slice(matches.length - limit)
-        }
+        if (limit > 0) offsets.push(at)
         at = hay.indexOf(needle, at + needle.length)
       }
+      if (!offsets.length) continue
+      found.push({ start, rowStarts: logical.rowStarts, length: hay.length, offsets })
+      held += offsets.length
+      while (held - found[0].offsets.length >= limit) held -= found.shift().offsets.length
     }
-    if (matches.length > limit) matches = matches.slice(matches.length - limit)
-    matches.reverse()
+    // Newest first: the last line's last match first.
+    const matches = []
+    for (let i = found.length - 1; i >= 0 && matches.length < limit; i--) {
+      const line = found[i]
+      const map = lineCellMap(buffer, line.start, line.rowStarts, line.length, cell)
+      for (let j = line.offsets.length - 1; j >= 0 && matches.length < limit; j--) {
+        const first = line.offsets[j]
+        const last = first + needle.length - 1
+        const cols = buffer.getLine(map.rows[first]).length
+        matches.push({
+          row: map.rows[first],
+          col: map.cols[first],
+          len: (map.rows[last] - map.rows[first]) * cols + map.ends[last] - map.cols[first]
+        })
+      }
+    }
     return { count, matches, next: row, lines }
   }
 

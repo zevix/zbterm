@@ -51,6 +51,7 @@
         --search-match: #5c4a12;
         --search-current: #f3c969;
         --search-current-fg: #111316;
+        --match-cyan: #4dd9e6;
         --offline-dot: rgba(0, 0, 0, 0.55);
         --history-dot: rgba(0, 0, 0, 0.25);
         --new-green: #3cc56f;
@@ -95,6 +96,7 @@
         --search-match: #f6e3a1;
         --search-current: #e08a00;
         --search-current-fg: #ffffff;
+        --match-cyan: #00687a;
         --offline-dot: rgba(255, 255, 255, 0.6);
         --history-dot: rgba(255, 255, 255, 0.25);
         --new-green: #1f9a4e;
@@ -1092,6 +1094,43 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      /* In-session matches on the alternate screen (vim, less), where xterm
+         draws no decorations: boxes over the screen on its cell grid. */
+      .search-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        pointer-events: none;
+        z-index: 7;
+      }
+
+      .search-mark {
+        position: absolute;
+        background: var(--search-match);
+        opacity: 0.6;
+        border-radius: 2px;
+      }
+
+      .search-mark.current {
+        background: var(--search-current);
+        opacity: 0.55;
+        outline: 1px solid var(--search-current);
+      }
+
+      /* A buffer-match row's subtitle: "N matches" (261111_buffer-search R6). */
+      .session-sub.match-count {
+        color: var(--match-cyan);
+      }
+
+      .session-section-title {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+        padding: 10px 2px 6px;
+        margin-top: 4px;
+        border-top: 1px solid var(--border);
       }
 
       .empty {

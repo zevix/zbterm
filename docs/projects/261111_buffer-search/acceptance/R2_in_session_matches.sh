@@ -93,3 +93,36 @@ for i in 1 2 3 4 5 6; do
   jq -e '.inSession.current != null and (.inSession.current.text | ascii_downcase | contains("needle"))' <<<"$s"
   sleep 0.5
 done
+# Kit correction 2026-11-11 (builder P5): R2 (hard) says every match is highlighted, but
+# xterm draws no decorations on the alternate screen (vim, less) and this script never
+# looked there, so a pager's matches went unhighlighted unseen. Strengthened (nothing
+# above changed): in `less`, every match on screen is highlighted, the current one over
+# its own cells on the terminal's grid.
+wait_until 40 term_has R2FLOOD || true
+sinput "$sid" 'p=QAL; printf "alt %s 1\nalt %s 2\n  three %s\n" "${p}TZ" "${p}TZ" "${p}TZ" > "$HOME/r2alt.txt"; clear; less "$HOME/r2alt.txt"'
+alt_on() { sstate | jq -e '.inSession.buffer == "alternate"' >/dev/null; }
+wait_until 15 alt_on || true
+sleep 0.5
+clear_box
+xdo type --delay 30 QALTZ
+wait_until 10 total_is 3 || true
+sleep 0.5
+s="$(sstate)"
+jq '.inSession' <<<"$s"
+jq -e '.inSession.buffer == "alternate" and .inSession.total == 3' <<<"$s"
+jq -e '.inSession.decorations == 3' <<<"$s"
+jq -e '.inSession.current.text | contains("three QALTZ")' <<<"$s"
+mark="$(cmd '{"command":"style-of","selector":"#terminal .search-mark.current"}')"
+screen="$(cmd '{"command":"style-of","selector":"#terminal .xterm-screen"}')"
+cols="$(api GET /renderer/layout | jq '.renderer.terminal.cols')"
+jq -c '.rect' <<<"$mark"
+jq -c '.rect' <<<"$screen"
+jq -e -n --argjson m "$mark" --argjson c "$screen" --argjson s "$s" --argjson cols "$cols" '
+  ($s.inSession) as $i
+  | ($c.rect.width / $cols) as $cw | ($c.rect.height / $i.rows) as $ch
+  | $m.found == true
+  and (($m.rect.left - ($c.rect.left + $i.current.col * $cw)) | fabs) <= 2
+  and (($m.rect.top - ($c.rect.top + ($i.current.row - $i.viewportY) * $ch)) | fabs) <= 2
+  and (($m.rect.width - $i.current.len * $cw) | fabs) <= 2
+  and (($m.rect.height - $ch) | fabs) <= 2'
+key q
