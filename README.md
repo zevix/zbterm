@@ -45,6 +45,14 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Time slider with activity indicators for going back in time; its bubble shows
   the wall-clock time beside the elapsed time (`14:32:05` today, `Thu 14:32:05`
   within the week, the full date otherwise)
+- Compressed time: idle stretches longer than the threshold (2 s by default)
+  count for the threshold only, on the slider, in the time labels and in
+  playback, which keeps moving through them. Hover the time label for the
+  uncompressed time. Alt+wheel steps frame by frame and, like the plain wheel,
+  returns to live past the last frame of a running session
+- Selecting text in history keeps the selection; starting a drag while playing
+  pauses playback, and the play button blinks a caret until it resumes. A
+  right-click keeps the selection, so the menu's Copy copies it
 - Collapsible side pane: click the ZBTerm logo (a hamburger on hover) or press
   Ctrl+Shift+B. While it is collapsed, the top bar holds the logo, New, Join
   and Settings, and Identity and Dark theme move into the settings menu. The

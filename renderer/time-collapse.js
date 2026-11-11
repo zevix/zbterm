@@ -60,12 +60,16 @@
 
   // Moves the map's end to `endTs` in place, without rebuilding it, when no
   // point is left out (a running session's end is "now", which moves on every
-  // frame). False when the caller has to rebuild.
-  function retargetTimeCollapseMap(map, endTs, thresholdMs) {
+  // frame). False when the caller has to rebuild. `pending` says output came
+  // in since the map was built: then the in-place end is right only while it
+  // is within the threshold of the map's last point, since past it the cap
+  // would drop time the new output keeps (2026-11-11, R5).
+  function retargetTimeCollapseMap(map, endTs, thresholdMs, pending = false) {
     if (map.endTs === endTs) return true
     if (!map.complete || endTs <= map.maxPointTs || endTs <= map.breakpoints[0].realTs) {
       return false
     }
+    if (pending && endTs - map.breakpoints[map.interior - 1].realTs > thresholdMs) return false
     setTimeCollapseEnd(map, endTs, thresholdMs)
     return true
   }
@@ -137,13 +141,22 @@
     points.push(tsMs)
   }
 
+  // How long until a clock showing `elapsedMs` (in whole seconds) shows the
+  // next second; the live time labels tick on it, not on a free-running
+  // 1 s timer that could show a second up to 1 s late (2026-11-11, R5).
+  function msToNextSecond(elapsedMs) {
+    const into = elapsedMs > 0 ? elapsedMs % 1000 : 0
+    return 1000 - into
+  }
+
   const api = {
     buildTimeCollapseMap,
     retargetTimeCollapseMap,
     realToCompressed,
     compressedToReal,
     compressedClockTs,
-    addLivePoint
+    addLivePoint,
+    msToNextSecond
   }
   if (typeof module === 'object' && module && module.exports) module.exports = api
   if (typeof window === 'object' && window) window.zbtermTimeCollapse = api

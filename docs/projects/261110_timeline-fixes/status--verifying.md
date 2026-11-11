@@ -5,10 +5,15 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-in-progress, 2026-11-11: P1, P3 (selection) and P2 (time) done. The full kit is 9/9 PASS and the ui-chrome kit is 8/8 PASS at the P2 package. Next is P4 (close). Two soft changes wait to be read back to the user (*Soft changes to read back*).
+verifying, 2026-11-11: P1, P2, P3 and P4 (close) done; ready for the verifier. At the P4 package the kit is 9/9 PASS and the ui-chrome kit 8/8 PASS. R5's running check now shows 17 s for 17 s real in four runs of four (three single runs plus the kit run), where before P4 it showed 16 s in three runs of three. Three soft changes wait to be read back to the user (*Soft changes to read back*).
 
 ## Done
 
+- 2026-11-11 builder P4 (`renderer/app.js`, `renderer/time-collapse.js`, `test/time-collapse.test.js`, `README.md`, `docs/ARCHITECTURE.md`):
+  - R5 margin: a running session's labels showed up to 1 s late (free-running 1 s timer) and, between map rebuilds, an in-place end past the threshold dropped time. `startSessionClock` now ticks just after the shown total's next second (`msToNextSecond`); `retargetTimeCollapseMap(..., pending)` asks for a rebuild in that case. Two new tests failed first. Soft change, recorded.
+  - README *Implemented* gained compressed time, Alt+wheel and selection bullets; ARCHITECTURE §11 a paragraph on collapsed time (player re-anchor, renderer map).
+  - Packaged boot: the kits ran the P4 package under `uisolate`; the sidecar booted and recorded sessions in every script.
+  - No kit corrections. No `D-nn` (the project takes none).
 - 2026-11-11 builder P2 (`renderer/app.js`, `renderer/index.html`, new `renderer/time-collapse.js`, `engine/player.js`; tests `test/time-collapse.test.js`, a new case in `test/player.test.js`, a new case in `test/renderer-static.test.js`):
   - R7: the running clock has one writer, `anchorClock`, and one reader, `runningClockTs`. With collapse on it advances on the compressed timeline (`compressedClockTs`), so a gap passes in the threshold with the time moving. It is held just below the next packet until that packet lands, so it never steps back. `startPlaybackClock`, `freezePlaybackClock`, `tickPlaybackClock`, `changePlaybackSpeed`, `toggleTimeCollapse` and `updatePlaybackClockFromPacket` use only these two. `engine/player.js` now re-anchors its playhead after jumping a collapsed gap; before, the packets after a gap stalled for (gap - threshold). This is a soft change.
   - R5: the map, the compressed timeline and its clock functions now live in `renderer/time-collapse.js` (`window.zbtermTimeCollapse`). The map takes in live output times (`state.liveTimeline`, fed from `session:data`, reset by `setTimeline`). It is rebuilt at most once a second; in between only its end moves to "now", in place. `toggleTimeCollapse` keeps the clock's exact ts. This is a soft change (the planner's decision).
@@ -37,7 +42,7 @@ in-progress, 2026-11-11: P1, P3 (selection) and P2 (time) done. The full kit is 
 
 ## Next
 
-- P4: close.
+- Verifier: run `acceptance/run_all.sh` on a fresh package; read the soft changes back to the user.
 
 ## Measured
 
@@ -48,6 +53,8 @@ See `baseline.md` and `../261110_ui-chrome/baseline.md`. P1 logs are under `~/.c
 - `p1_renderer-static.log` and `p1_lint.log`.
 - P2: `p2_R4.log` … `p2_U2.log` are single runs, all exit 0. `p2_player-before.log` is the new player case failing before the engine fix; `p2_player.log` is 17/17 pass. `p2_time-collapse.log` is 7/7 pass. `p2_renderer-static.log` is 35/35 pass, 0 skipped. `p2_lint.log` is exit 0 with 95 warnings. `p2_kit/` with `p2_run_all.txt` is the full kit: 9/9 PASS in 526 s wall. `p2_uichrome_kit/` with `p2_ui-chrome-kit.txt` is the sibling kit: 8/8 PASS.
 - P3: `p3_R1.log`, `p3_R2.log`, `p3_R3.log`, `p3_U1.log` are single runs. `p3_kit/` and `p3_run_all.txt` are the full kit: R1, R2, R3, U1 PASS; R4, R5, R6, R7, U2 FAIL, each on its P1 line; 8m23s wall. `p3_ui-chrome-kit.txt` is 8/8 PASS. `p3_renderer-static.log` is 34/34 pass, 0 skipped. `p3_lint.log` is exit 0, 95 warnings.
+
+- P4: `p4_package.log`, `p4_package2.log` (after the fix), exit 0. `p4_R5_run{1,2,3}.log` before the fix: exit 0, last running check 16 s for 17 s each time. `p4_time-collapse-before.log`: the two new cases fail. `p4_R5_fix_run{1,2,3}.log` after: exit 0, every running check exact. `p4_time-collapse.log` 9/9 pass. `p4_kit/` with `p4_run_all.txt`: 9/9 PASS, 8m44s wall. `p4_uichrome_kit/` with `p4_ui-chrome-kit.txt`: 8/8 PASS, 1m57s. `p4_lint.log`: exit 0, 95 warnings (same as P2). `p4_tests/` (54 files, one per run, `summary.txt`): 51 files exit 0; 411/413 tests pass, 0 skipped, 0 todo; `zxterm-seam` aborts. The three failing files are host issues outside this project's diff: `doctor` (no `DISPLAY` in a non-GUI shell; no staged `npm/` binary in the worktree), `native-linkage` (its libnode fixture case), `zxterm-seam` (`no such seam method: test.echo` from the staged sidecar).
 
 ## Gotchas
 
@@ -71,9 +78,11 @@ None.
 - Resume after a pause mid-gap, with collapse on: the engine resumes from its last packet, not from where the clock was paused, so it plays the gap's full threshold again. The compressed clock then waits just below the next packet for the time it had already played (no step back). R7 passes (it checks the first 0.3 s after resume). The same mismatch exists with collapse off, where the clock steps back on the next packet. It is older than this project.
 - A running session in *playback* still uses the timeline from `player.open`; only live mode takes in new output for the collapse map.
 - Xterm's forced-selection mousedown calls `stopPropagation`, so the old bubble-phase terminal mousedown never ran in paused playback with mouse tracking. The capture listener fixes this.
+- Host-only test failures, not from this project: `test/doctor.test.js` (2 asserts), `test/native-linkage.test.js` (1 case), `test/zxterm-seam.test.js` (abort at `test.echo`); logs in `runs/261110_timeline-fixes/p4_tests/`.
 
 ## Soft changes to read back
 
-Both are in `notes--context.md` *Soft changes*, dated 2026-11-11:
+All three are in `notes--context.md` *Soft changes*, dated 2026-11-11:
 - R5: the collapse map takes in a running session's live output, rebuilt at most once a second.
 - R7: `engine/player.js` re-anchors its playhead after a collapsed gap (the goal's *Out of scope* exception; the evidence was found in P2, not P1).
+- R5 (P4): a running session's time labels tick on the shown second, and the map rebuilds when its in-place end would drop time; the check is unchanged.

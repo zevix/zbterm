@@ -210,6 +210,7 @@
     liveTimeline: { points: [], version: 0 },
     // The time-label tip's text as last written (R4).
     timeLabelTipText: '',
+    timeLabelTotalMs: 0,
     timeLabelHover: false,
     liveActivityMaps: new Map(),
     liveFrame: null,
@@ -4041,13 +4042,27 @@
     })
   }
 
+  // A running session's time labels. Each tick lands just after the shown
+  // total turns over to its next second, so the label is never a second
+  // behind; a free-running 1 s timer showed up to 1 s late (2026-11-11, R5).
+  // A total that did not move (idle past the collapse threshold) waits 1 s.
   function startSessionClock() {
-    if (state.sessionClockTimer) window.clearInterval(state.sessionClockTimer)
-    state.sessionClockTimer = window.setInterval(() => {
-      if (!state.currentSession || !state.currentSession.active) return
-      if (state.mode === 'live') updateLiveClock()
-      else updateActivePlaybackBounds()
-    }, 1000)
+    if (state.sessionClockTimer) window.clearTimeout(state.sessionClockTimer)
+    let lastTotalMs = null
+    const tick = () => {
+      let delayMs = 1000
+      if (state.currentSession && state.currentSession.active) {
+        if (state.mode === 'live') updateLiveClock()
+        else updateActivePlaybackBounds()
+        const totalMs = state.timeLabelTotalMs
+        if (totalMs !== lastTotalMs) {
+          delayMs = clamp(timeCollapse.msToNextSecond(totalMs) + 5, 50, 1000)
+        }
+        lastTotalMs = totalMs
+      }
+      state.sessionClockTimer = window.setTimeout(tick, delayMs)
+    }
+    state.sessionClockTimer = window.setTimeout(tick, 1000)
   }
 
   async function resumePlayback() {
@@ -6260,6 +6275,7 @@
         tipText = `Uncompressed: ${formatDuration(realElapsed)} / ${formatDuration(realTotal)}`
       }
     }
+    state.timeLabelTotalMs = totalElapsed
     // Written only when they change: this runs on every clock frame (R4).
     setTextIfChanged(els.currentTime, formatDuration(currentElapsed))
     setTextIfChanged(els.totalTime, formatDuration(totalElapsed))
@@ -7714,7 +7730,8 @@
   // The collapse map for start..end (R5). It is rebuilt when the timeline,
   // the start or the threshold changes, and takes in a running session's live
   // output at most once every TIME_COLLAPSE_REBUILD_MS; in between, only its
-  // end moves (to "now"), in place.
+  // end moves (to "now"), in place, unless that end is past the threshold
+  // after the map's last point with output waiting, which rebuilds at once.
   function getTimeCollapseMap(startTs, endTs) {
     if (!state.timeCollapse.enabled) return null
     const thresholdMs = state.timeCollapse.thresholdMs
@@ -7727,7 +7744,12 @@
       cache.thresholdMs === thresholdMs &&
       (cache.liveVersion === live.version ||
         performance.now() - cache.builtAt < TIME_COLLAPSE_REBUILD_MS) &&
-      timeCollapse.retargetTimeCollapseMap(cache.map, endTs, thresholdMs)
+      timeCollapse.retargetTimeCollapseMap(
+        cache.map,
+        endTs,
+        thresholdMs,
+        cache.liveVersion !== live.version
+      )
     ) {
       return cache.map
     }

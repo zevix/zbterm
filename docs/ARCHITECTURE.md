@@ -1643,6 +1643,17 @@ first playback pass builds snapshots and indexes as it proceeds, so future
 seeks can begin from nearby snapshots rather than replaying the entire
 session.
 
+With time collapse on, a gap between two packets longer than the threshold
+counts for the threshold only. The player (`engine/player.js`) jumps such a
+gap after the threshold and re-anchors its playhead on the packet it jumped
+to, so the packets after it keep their own spacing. The renderer maps real
+to compressed time with `renderer/time-collapse.js`, a piecewise-linear map
+over the packet times; for a running session it also takes in live output
+times, rebuilt at most once a second or as soon as the in-place end would
+reach past the threshold. The compressed playback clock advances on that map
+and is held just below the next packet until it lands, so it never steps
+back.
+
 ## 12. Worker Crash Recovery
 
 The worker may crash, become unresponsive, or exceed an invocation timeout.

@@ -7,7 +7,8 @@ const {
   realToCompressed,
   compressedToReal,
   compressedClockTs,
-  addLivePoint
+  addLivePoint,
+  msToNextSecond
 } = require('../renderer/time-collapse.js')
 
 const TH = 2000
@@ -47,6 +48,28 @@ test('an end that would leave a point out asks for a rebuild', (t) => {
   t.absent(retargetTimeCollapseMap(map, 6000, TH), 'the 5 s point was left out')
   const full = buildTimeCollapseMap([0, 1000, 5000], 0, 6000, TH)
   t.is(full.compressedSpan, 1000 + 2000 + 1000)
+})
+
+// 2026-11-11 (P4): a running session's map is moved in place between
+// rebuilds while new output is waiting. If the end then lies more than the
+// threshold past the map's last point, the cap drops real time the waiting
+// output would have kept (R5's running check, 16 s shown for 17 s).
+test('an end past the threshold with output waiting asks for a rebuild', (t) => {
+  const map = buildTimeCollapseMap([0, 1000], 0, 1500, TH)
+  t.ok(retargetTimeCollapseMap(map, 2900, TH, true), 'inside the threshold: in place')
+  t.is(map.compressedSpan, 2900)
+  t.absent(retargetTimeCollapseMap(map, 3500, TH, true), 'past it: rebuild')
+  t.ok(retargetTimeCollapseMap(map, 3500, TH), 'nothing waiting: in place')
+  t.is(map.compressedSpan, 3000)
+  const full = buildTimeCollapseMap([0, 1000, 2000], 0, 3500, TH)
+  t.is(full.compressedSpan, 3500)
+})
+
+test('the live clock ticks when the shown second changes', (t) => {
+  t.is(msToNextSecond(0), 1000)
+  t.is(msToNextSecond(16940), 60)
+  t.is(msToNextSecond(17000), 1000)
+  t.is(msToNextSecond(-5), 1000, 'never in the past')
 })
 
 test('the compressed clock moves through a gap at full speed', (t) => {
