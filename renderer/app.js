@@ -69,6 +69,13 @@
   const SIGNAL_MAX_SAMPLES = 512
   const SIGNAL_COMPACT_SAMPLES = 256
   const SEEK_IDLE_MS = 200
+  // The in-session search (261111_buffer-search): typing delay, the re-scan
+  // delays after writes, the slice and the most match positions kept.
+  const IN_SESSION_SEARCH_DELAY_MS = 120
+  const IN_SESSION_RESCAN_LIVE_MS = 300
+  const IN_SESSION_RESCAN_PLAYBACK_MS = 150
+  const IN_SESSION_SEARCH_SLICE = 2000
+  const IN_SESSION_SEARCH_LIMIT = 50000
   const SEEK_MAX_RENDER_MS = 500
   const SEEK_MOVEMENT_THRESHOLD = 10
   const LIVE_WRITE_MAX_BATCH_BYTES = 512 * 1024
@@ -229,6 +236,15 @@
     mode: 'live',
     activeOnly: false,
     query: '',
+    // The in-session search (261111_buffer-search R2-R4): see runInSessionSearch.
+    bufferSearch: null,
+    bufferSearchSeq: 0,
+    inSessionSearchToken: 0,
+    inSessionSearchTimer: null,
+    inSessionRescanTimer: null,
+    inSessionSearchDirty: false,
+    inSessionSearchWired: null,
+    searchDecorationFrame: 0,
     term: null,
     fit: null,
     webgl: null,
@@ -392,6 +408,7 @@
     sessions: document.getElementById('sessions'),
     sessionSelect: document.getElementById('sessionSelect'),
     search: document.getElementById('search'),
+    searchCount: document.getElementById('searchCount'),
     activeOnly: document.getElementById('activeOnly'),
     newSession: document.getElementById('newSession'),
     joinLink: document.getElementById('joinLink'),
@@ -831,6 +848,8 @@
       lineHeight: 1.08,
       scrollback: 5000,
       scrollOnUserInput: true,
+      // registerDecoration (the in-session search's highlights) is proposed API.
+      allowProposedApi: true,
       theme: terminalTheme()
     })
     state.startupError = null
@@ -869,6 +888,7 @@
     // xterm's own mousedown handlers, which sit on elements inside it.
     els.terminal.addEventListener('mousedown', handleTerminalMouseDown, true)
     state.term.onSelectionChange(updateSelectionPausedMark)
+    wireInSessionSearch()
     syncTerminalLayout()
     fitTerminalToContainer()
     state.term.onData((data) => {
@@ -1168,7 +1188,25 @@
   function wireEvents() {
     els.search.addEventListener('input', async () => {
       state.query = els.search.value
+      if (inSessionQuery()) {
+        scheduleInSessionSearch(IN_SESSION_SEARCH_DELAY_MS, { reveal: true })
+      } else {
+        clearInSessionSearch()
+      }
       await refreshSessions()
+    })
+    // The box's keys (R2, R3), left alone while an IME composes: Enter and
+    // Shift+Enter step through the matches, Esc clears (instead of
+    // type=search's own clear, so it happens in one place).
+    els.search.addEventListener('keydown', (event) => {
+      if (event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        stepMatch(event.shiftKey ? -1 : 1).catch(showError)
+      } else if (event.key === 'Escape' && !event.shiftKey) {
+        event.preventDefault()
+        clearSearch()
+      }
     })
     els.activeOnly.addEventListener('click', async () => {
       state.activeOnly = !state.activeOnly
@@ -8175,6 +8213,334 @@
     if (!els.search) return
     els.search.focus()
     els.search.select()
+  }
+
+  // ---- In-session search (261111_buffer-search R2-R4) ----------------------
+  // The box's text searched in the selected session's terminal buffer
+  // (`buffer.active`: the normal buffer with its scrollback, or the alternate
+  // screen), with the shared matcher renderer/buffer-search.js. State:
+  //   state.bufferSearch = { query, count, matches (newest first), index
+  //     (0-based, -1 for none), marker (the current match's row), decorations }
+  // Enter steps to the older match (index + 1), Shift+Enter to the newer; the
+  // first match after a new query is the newest. The scan re-runs after writes
+  // (300 ms live, 150 ms playback), on a session switch (the reset and the
+  // frame's write) and before a step when the buffer changed meanwhile.
+
+  // The box's text as a query: '' for an empty or all-whitespace text.
+  function inSessionQuery() {
+    const value = els.search ? els.search.value : ''
+    return value.trim() ? value : ''
+  }
+
+  function scheduleInSessionSearch(delay = IN_SESSION_SEARCH_DELAY_MS, options = {}) {
+    if (state.inSessionSearchTimer) clearTimeout(state.inSessionSearchTimer)
+    state.inSessionSearchTimer = setTimeout(() => {
+      state.inSessionSearchTimer = null
+      runInSessionSearch(options).catch((err) => console.warn('in-session search failed', err))
+    }, delay)
+  }
+
+  // After the terminal parsed a write: mark the matches stale and re-scan once
+  // the burst has had its delay (a timer that is not pushed back by every
+  // write, so a flood still gets re-scanned).
+  function noteInSessionBufferChanged() {
+    state.inSessionSearchDirty = true
+    if (!inSessionQuery() || state.inSessionRescanTimer) return
+    const delay =
+      state.mode === 'playback' ? IN_SESSION_RESCAN_PLAYBACK_MS : IN_SESSION_RESCAN_LIVE_MS
+    state.inSessionRescanTimer = setTimeout(() => {
+      state.inSessionRescanTimer = null
+      if (!inSessionQuery() || !state.inSessionSearchDirty) return
+      runInSessionSearch().catch((err) => console.warn('in-session search failed', err))
+    }, delay)
+  }
+
+  // A marker on buffer row `row` (normal buffer only), or null.
+  function markerAtRow(row) {
+    const term = state.term
+    if (!term || term.buffer.active.type !== 'normal') return null
+    const buffer = term.buffer.active
+    try {
+      return term.registerMarker(row - (buffer.baseY + buffer.cursorY)) || null
+    } catch {
+      return null
+    }
+  }
+
+  function disposeQuietly(item) {
+    try {
+      if (item && !item.isDisposed) item.dispose()
+    } catch {}
+  }
+
+  // The matches of `query` in the terminal's active buffer. Large buffers are
+  // read in slices between timers; a marker on each slice's next row follows
+  // rows that output trims meanwhile. Returns null when a newer scan or a
+  // reset made this one void.
+  async function scanTerminalBuffer(query, token, options = {}) {
+    const scan = window.zbtermScanBuffer
+    const term = state.term
+    if (!scan || !term) return null
+    const buffer = term.buffer.active
+    const type = buffer.type
+    if (options.sync || buffer.length <= IN_SESSION_SEARCH_SLICE) {
+      return scan(buffer, query, { limit: IN_SESSION_SEARCH_LIMIT })
+    }
+    let count = 0
+    let matches = []
+    let from = 0
+    while (from < term.buffer.active.length) {
+      const part = scan(term.buffer.active, query, {
+        from,
+        to: from + IN_SESSION_SEARCH_SLICE,
+        limit: IN_SESSION_SEARCH_LIMIT
+      })
+      count += part.count
+      matches = part.matches.concat(matches)
+      if (matches.length > IN_SESSION_SEARCH_LIMIT) matches.length = IN_SESSION_SEARCH_LIMIT
+      from = part.next
+      if (from >= term.buffer.active.length) break
+      const marker = markerAtRow(from)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const moved = marker ? marker.line : from
+      const lost = marker ? marker.isDisposed : false
+      disposeQuietly(marker)
+      if (token !== state.inSessionSearchToken || state.term !== term) return null
+      if (term.buffer.active.type !== type || lost) {
+        // A reset or a buffer switch: start over, in one go.
+        return scan(term.buffer.active, query, { limit: IN_SESSION_SEARCH_LIMIT })
+      }
+      const shift = moved - from
+      if (shift) {
+        // Rows trimmed off the top while this scan yielded.
+        matches = matches
+          .map((match) => ({ ...match, row: match.row + shift }))
+          .filter((match) => match.row >= 0)
+        from = moved
+      }
+    }
+    return { count, matches }
+  }
+
+  // Scans the selected session's buffer for the box's text. options.reveal
+  // scrolls the current match into view (a user's action: typing, a step).
+  async function runInSessionSearch(options = {}) {
+    const token = ++state.inSessionSearchToken
+    const query = inSessionQuery()
+    if (!query || !state.term || !state.selectedId) {
+      clearInSessionSearch()
+      return
+    }
+    const previous = state.bufferSearch
+    const keep =
+      previous && previous.query === query && previous.index >= 0 ? currentMatchPlace() : null
+    state.inSessionSearchDirty = false
+    const result = await scanTerminalBuffer(query, token, options)
+    if (!result || token !== state.inSessionSearchToken) return
+    if (inSessionQuery() !== query) return
+    const old = state.bufferSearch
+    const bs = {
+      query,
+      count: result.count,
+      matches: result.matches,
+      index: -1,
+      marker: null,
+      decorations: old ? old.decorations : []
+    }
+    if (old) disposeQuietly(old.marker)
+    state.bufferSearch = bs
+    if (keep) {
+      bs.index = bs.matches.findIndex((match) => match.row === keep.row && match.col === keep.col)
+    }
+    if (bs.index < 0 && bs.matches.length) bs.index = 0
+    setCurrentMatch(bs.index, { reveal: !!options.reveal })
+  }
+
+  // Where the current match is now: its marker's row (it follows trimming),
+  // or null when the match was trimmed away.
+  function currentMatchPlace() {
+    const bs = state.bufferSearch
+    if (!bs || bs.index < 0 || !bs.matches[bs.index]) return null
+    const match = bs.matches[bs.index]
+    if (bs.marker) {
+      if (bs.marker.isDisposed || bs.marker.line < 0) return null
+      return { row: bs.marker.line, col: match.col }
+    }
+    return { row: match.row, col: match.col }
+  }
+
+  function setCurrentMatch(index, options = {}) {
+    const bs = state.bufferSearch
+    if (!bs) return
+    disposeQuietly(bs.marker)
+    bs.marker = null
+    bs.index = index >= 0 && index < bs.matches.length ? index : -1
+    const match = bs.index >= 0 ? bs.matches[bs.index] : null
+    if (match) {
+      bs.marker = markerAtRow(match.row)
+      if (options.reveal) revealBufferRow(match.row)
+    }
+    updateSearchCount()
+    drawSearchDecorations()
+  }
+
+  // Scrolls the terminal so buffer row `row` is on screen (centred when it
+  // was not).
+  function revealBufferRow(row) {
+    const term = state.term
+    if (!term) return
+    const buffer = term.buffer.active
+    if (row >= buffer.viewportY && row < buffer.viewportY + term.rows) return
+    term.scrollToLine(Math.max(0, Math.min(buffer.baseY, row - Math.floor(term.rows / 2))))
+  }
+
+  // Enter (direction 1, older) and Shift+Enter (-1, newer). The matches are
+  // re-read first when the buffer changed since the last scan, keeping the
+  // current match; past either end it wraps round.
+  async function stepMatch(direction) {
+    if (!inSessionQuery()) return
+    const query = inSessionQuery()
+    const bs = state.bufferSearch
+    if (!bs || bs.query !== query || state.inSessionSearchDirty || state.inSessionSearchTimer) {
+      if (state.inSessionSearchTimer) {
+        clearTimeout(state.inSessionSearchTimer)
+        state.inSessionSearchTimer = null
+      }
+      const hadCurrent = !!(bs && bs.query === query && currentMatchPlace())
+      await runInSessionSearch({ sync: true })
+      // A fresh query (or a current match trimmed away): the first step
+      // shows the newest match.
+      if (!hadCurrent) {
+        const fresh = state.bufferSearch
+        if (fresh && fresh.matches.length) setCurrentMatch(0, { reveal: true })
+        return
+      }
+    }
+    const now = state.bufferSearch
+    if (!now || !now.matches.length) return
+    const total = now.matches.length
+    const next = now.index < 0 ? 0 : (now.index + direction + total) % total
+    setCurrentMatch(next, { reveal: true })
+  }
+
+  function clearInSessionSearch() {
+    state.inSessionSearchToken++
+    if (state.inSessionSearchTimer) clearTimeout(state.inSessionSearchTimer)
+    if (state.inSessionRescanTimer) clearTimeout(state.inSessionRescanTimer)
+    state.inSessionSearchTimer = null
+    state.inSessionRescanTimer = null
+    const bs = state.bufferSearch
+    state.bufferSearch = null
+    if (bs) {
+      disposeQuietly(bs.marker)
+      for (const item of bs.decorations || []) disposeQuietly(item)
+    }
+    updateSearchCount()
+  }
+
+  // Esc in the box (R3): empties it, which drops the list filter, the
+  // highlights and the cross-session results, and gives the terminal the
+  // focus. On an empty box only the focus moves.
+  function clearSearch() {
+    const hadText = !!(els.search && els.search.value)
+    if (els.search) els.search.value = ''
+    clearInSessionSearch()
+    state.bufferSearchSeq = (Number.isFinite(state.bufferSearchSeq) ? state.bufferSearchSeq : 0) + 1
+    if (hadText || state.query) {
+      state.query = ''
+      refreshSessions().catch(showError)
+    }
+    if (state.term) state.term.focus()
+    else if (els.search) els.search.blur()
+  }
+
+  function updateSearchCount() {
+    const el = els.searchCount
+    if (!el) return
+    const bs = state.bufferSearch
+    const query = inSessionQuery()
+    if (!query || !bs) {
+      el.textContent = ''
+      el.hidden = true
+      return
+    }
+    el.hidden = false
+    el.textContent = `${bs.index >= 0 ? bs.index + 1 : 0}/${bs.count}`
+  }
+
+  // A colour token as #rrggbb (xterm's decorations take nothing else).
+  function searchColorToken(name, fallback) {
+    const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+    return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
+  }
+
+  // Highlights the matches in the rows on screen; the current one in its own
+  // colour. A match running past the row's end gets a second piece on the
+  // next row. Redone after each scan and step, and on scroll.
+  function drawSearchDecorations() {
+    const bs = state.bufferSearch
+    const term = state.term
+    if (!bs) return
+    for (const item of bs.decorations) disposeQuietly(item)
+    bs.decorations = []
+    if (!term || term.buffer.active.type !== 'normal' || !bs.matches.length) return
+    const buffer = term.buffer.active
+    const top = buffer.viewportY
+    const bottom = top + term.rows
+    const cols = term.cols
+    const plain = searchColorToken('--search-match', '#5c4a12')
+    const current = searchColorToken('--search-current', '#f3c969')
+    const currentFg = searchColorToken('--search-current-fg', '#111316')
+    const held = bs.index >= 0 && bs.marker && !bs.marker.isDisposed
+    const shift = held ? bs.marker.line - bs.matches[bs.index].row : 0
+    bs.matches.forEach((match, i) => {
+      const row = match.row + shift
+      const rowsSpanned = Math.ceil((match.col + match.len) / cols)
+      if (row + rowsSpanned <= top || row >= bottom) return
+      const color = i === bs.index ? current : plain
+      let left = match.len
+      let x = match.col
+      for (let r = row; left > 0 && r < bottom; r++) {
+        const width = Math.min(left, cols - x)
+        if (r >= top && width > 0) {
+          const marker = markerAtRow(r)
+          if (marker) {
+            const decoration = term.registerDecoration({
+              marker,
+              x,
+              width,
+              backgroundColor: color,
+              ...(i === bs.index ? { foregroundColor: currentFg } : {})
+            })
+            if (decoration) {
+              decoration.onDispose(() => disposeQuietly(marker))
+              bs.decorations.push(decoration)
+            } else {
+              disposeQuietly(marker)
+            }
+          }
+        }
+        left -= width
+        x = 0
+      }
+    })
+  }
+
+  function scheduleSearchDecorations() {
+    if (!state.bufferSearch || state.searchDecorationFrame) return
+    state.searchDecorationFrame = window.requestAnimationFrame(() => {
+      state.searchDecorationFrame = 0
+      drawSearchDecorations()
+    })
+  }
+
+  function wireInSessionSearch() {
+    const term = state.term
+    if (!term || state.inSessionSearchWired === term) return
+    state.inSessionSearchWired = term
+    term.onWriteParsed(noteInSessionBufferChanged)
+    term.buffer.onBufferChange(noteInSessionBufferChanged)
+    term.onScroll(scheduleSearchDecorations)
   }
 
   // The bottom bar's height (the resizer ends above it) and, collapsed, the

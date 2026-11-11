@@ -48,6 +48,9 @@
         --terminal-fg: #e7edf1;
         --terminal-cursor: #f3c969;
         --terminal-selection: #355a64;
+        --search-match: #5c4a12;
+        --search-current: #f3c969;
+        --search-current-fg: #111316;
         --offline-dot: rgba(0, 0, 0, 0.55);
         --history-dot: rgba(0, 0, 0, 0.25);
         --new-green: #3cc56f;
@@ -89,6 +92,9 @@
         --terminal-fg: #172027;
         --terminal-cursor: #a55e00;
         --terminal-selection: #bdd7e4;
+        --search-match: #f6e3a1;
+        --search-current: #e08a00;
+        --search-current-fg: #ffffff;
         --offline-dot: rgba(255, 255, 255, 0.6);
         --history-dot: rgba(255, 255, 255, 0.25);
         --new-green: #1f9a4e;
@@ -1260,6 +1266,29 @@
         outline: none;
       }
 
+      /* The in-session count (3/17) inside the box's right end. */
+      .search-cell input {
+        padding-right: 64px;
+      }
+
+      .search-count {
+        position: absolute;
+        top: 50%;
+        right: 10px;
+        transform: translateY(-50%);
+        max-width: 56px;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+
+      .search-count[hidden] {
+        display: none;
+      }
+
       .search-cell input:focus-visible,
       .search-cell input:focus {
         box-shadow: inset 0 0 0 1px var(--accent-blue-border);
@@ -2221,7 +2250,7 @@
           background: var(--input-bg);
           border: 1px solid var(--control-border);
           border-radius: 6px;
-          padding: 7px 9px;
+          padding: 7px 64px 7px 9px;
         }
 
         .bottom > .status,
@@ -2401,6 +2430,7 @@
       <footer class="bottom">
         <div class="search-cell">
           <input id="search" type="search" placeholder="Search (Ctrl+Shift+F)" />
+          <span id="searchCount" class="search-count" aria-live="polite" hidden></span>
         </div>
         <div id="status" class="status">ready - initial</div>
         <div id="playback" class="playback" hidden>
@@ -2457,6 +2487,7 @@
     <script src="logo-ascii.js"></script>
     <script src="wall-clock.js"></script>
     <script src="time-collapse.js"></script>
+    <script src="buffer-search.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

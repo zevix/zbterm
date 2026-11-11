@@ -62,7 +62,7 @@ xdo type --delay 30 needle
 wait_until 10 total_is 429 || true
 jq -e '.inSession.total == 429' <<<"$(sstate)"
 # A match across a soft wrap: QWRAPZ split over the row end.
-cols="$(api GET /renderer/layout | jq '.terminal.cols')"
+cols="$(api GET /renderer/layout | jq '.renderer.terminal.cols')"
 sinput "$sid" "clear; printf '%*s' $((cols - 3)) '' | tr ' ' x; printf '%s%s\n' QW RAPZ"
 wait_until 10 term_has APZ
 clear_box

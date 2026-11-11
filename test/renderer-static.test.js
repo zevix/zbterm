@@ -657,3 +657,24 @@ test('ui-chrome: version is the last settings item, the bubble has a wall clock,
   t.ok(html.includes("[data-identity='set']::after"), 'the identity dot')
   t.ok(js.includes('updateIdentityDot()'), 'applyIdentity updates the dot')
 })
+
+test('buffer-search: the matcher loads before app.js; the count sits in the box; Esc and Enter are the box keys', async (t) => {
+  const rendererDir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')
+  const html = await fs.promises.readFile(path.join(rendererDir, 'index.html'), 'utf8')
+  t.ok(html.includes('<script src="buffer-search.js"></script>'), 'index.html loads the matcher')
+  t.ok(html.indexOf('buffer-search.js') < html.indexOf('<script src="app.js">'), 'before app.js')
+  const cell = html.slice(html.indexOf('<div class="search-cell">'))
+  t.ok(
+    cell.indexOf('id="searchCount"') > 0 &&
+      cell.indexOf('id="searchCount"') < cell.indexOf('</div>'),
+    '#searchCount is inside .search-cell'
+  )
+  for (const token of ['--search-match', '--search-current', '--search-current-fg']) {
+    t.is(html.split(`${token}: #`).length - 1, 2, `${token} in both themes, as #rrggbb`)
+  }
+  t.ok(js.includes('allowProposedApi: true'), 'decorations are proposed API')
+  t.ok(js.includes('window.zbtermScanBuffer'), 'app.js uses the shared matcher')
+  t.ok(js.includes("event.key === 'Escape' && !event.shiftKey"), 'Esc in the box')
+  t.ok(js.includes('event.preventDefault()\n        clearSearch()'), 'no native type=search clear')
+})

@@ -124,6 +124,7 @@ Dated entries for done-project kit rows this project's layout change affects (`d
 
 - 2026-11-11 (builder P3): after the box and footer move, against the P3 package (`/tmp/claude-1000/zbbs/out`), `../261110_ui-chrome/acceptance/run_all.sh` 8/8 PASS (116 s) and `../261110_timeline-fixes/acceptance/run_all.sh` 9/9 PASS (526 s); no red, nothing to record. Logs `runs/261111_buffer-search/p3/kit_uichrome.txt`, `kit_tf.txt`.
 - 2026-11-11 (builder P3), for P4/P5: `R9_box_width.sh` cannot pass in P3 as written, and not because of its no-request line only: its collapsed block asserts `.inSession.total > 0` (P4) before the no-request check, and its last block the heading (P5). P3 ran every width/placement line (expanded, after the drag, collapsed, collapsed at 1000x700: all true) and a scratch copy with the search lines replaced by expand-and-compare (`p3/r9_widths_p3.txt`, 16/16 true); the kit itself is unchanged and fails on `.inSession.total > 0`.
+- 2026-11-11 (builder P4): `R3_escape.sh` cannot pass in P4: its line 36 asserts the buffer-match row for alpha (P5). P4 ran a scratch copy with only that line replaced (`runs/…/p4/r3_p4_scratch.sh`, `.log`): every other line true. `R9_box_width.sh` now passes `.inSession.total > 0` and the collapsed no-request line, and fails on the P5 heading (`.sessions.heading == "Session buffer matches"`).
 
 ## Do not
 
