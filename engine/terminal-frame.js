@@ -20,6 +20,11 @@ class TerminalFrame {
     })
     this.serializeAddon = new SerializeAddon()
     this.term.loadAddon(this.serializeAddon)
+    // Bumped by restore(), set by dispose(): a reader that yields between
+    // slices (session.searchBuffer) checks them to see that the screen it
+    // started on is still the one it reads.
+    this.generation = 0
+    this.disposed = false
   }
 
   get cols() {
@@ -41,6 +46,7 @@ class TerminalFrame {
   }
 
   async restore(frame) {
+    this.generation++
     this.resize(frame.cols || DEFAULT_COLS, frame.rows || DEFAULT_ROWS)
     this.term.reset()
     if (frame.data) await this.write(frame.data)
@@ -73,6 +79,7 @@ class TerminalFrame {
   }
 
   dispose() {
+    this.disposed = true
     this.term.dispose()
   }
 }

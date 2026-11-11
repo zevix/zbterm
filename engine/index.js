@@ -9,6 +9,7 @@ const { SessionStore } = require('./session-store')
 const { Player, seqForTime, scanAltScreenRanges } = require('./player')
 const { PacketKind } = require('./schema')
 const { TerminalFrame, LIVE_SCROLLBACK } = require('./terminal-frame')
+const { scanBuffer } = require('./buffer-search')
 const { loadOrCreateLocalDevice } = require('./crypto')
 const { EngineError, CODES } = require('./errors')
 const ShareManager = require('./share-manager')
@@ -23,6 +24,9 @@ const { openCore } = require('./zxterm/core')
 const { CoreHistoryHandle } = require('./zxterm/history')
 
 const SNAPSHOT_BYTES = 256 * 1024
+// session.searchBuffer reads a mirror this many logical lines at a time, then
+// yields, so several searches and the live output interleave in the worker.
+const BUFFER_SEARCH_SLICE = 500
 const SNAPSHOT_MS = 30 * 1000
 const FLOW_LIMIT = 1024 * 1024
 // The core's own backlog: output recorded but not yet written to the live
@@ -114,6 +118,9 @@ class SessionEngine extends EventEmitter {
       preferences: path.join(dataRoot, 'preferences.json')
     }
     this.catalog = new Catalog(this.paths.catalog)
+    // session.searchBuffer: the newest `seq` per `searchKey` (one key per
+    // renderer window), so a newer query stops the older one's scans.
+    this._bufferSearchSeq = new Map()
     // The Rust `zxterm-core` sidecar for this profile (not the JS
     // `zbterm-core` package this file belongs to): every identity path -
     // SSH keys, the identity claim, verification, provider key lookups and
@@ -263,6 +270,7 @@ class SessionEngine extends EventEmitter {
       }
       if (method === 'session.ack') return this.ack(args.sessionId, args.bytes)
       if (method === 'session.diagnostics') return this.diagnostics(args.sessionId)
+      if (method === 'session.searchBuffer') return await this.searchBuffer(args)
       if (method === 'session.setHd') return this.setHd(args.sessionId, args.enabled)
       if (method === 'session.removeHd') return await this.removeHd(args.sessionId)
       if (method === 'session.clearCaches') return await this.clearCaches(args.sessionId)
@@ -1186,6 +1194,84 @@ class SessionEngine extends EventEmitter {
       })
     }
     return { sessions }
+  }
+
+  // Counts the matches of `query` in a live session's in-memory screen: the
+  // headless mirror of an own session or of a joined one (the copy this app
+  // holds), its normal buffer with the scrollback plus the alternate screen
+  // while that is shown. Never reads, decrypts or replays the recording. An
+  // ended, pending or unknown session answers `gone`, never an error.
+  // Reads BUFFER_SEARCH_SLICE logical lines, then yields (never on
+  // mirrorQueue: a flood would hold it); at each yield it stops `cancelled`
+  // when a newer `seq` came for its `searchKey`, and `gone` when the mirror
+  // was disposed or restored (the session ended, or a resync repainted it).
+  // The count is the buffer as the scan saw it: output written meanwhile may
+  // or may not be in it (261111_buffer-search A-4).
+  async searchBuffer(args = {}) {
+    const sessionId = args.sessionId
+    const query = typeof args.query === 'string' ? args.query : ''
+    const searchKey = args.searchKey === null ? '' : String(args.searchKey)
+    const seq = Number.isFinite(args.seq) ? args.seq : null
+    const answer = (count, flags = {}) => ({
+      sessionId,
+      count,
+      cancelled: !!flags.cancelled,
+      gone: !!flags.gone
+    })
+    if (seq !== null) {
+      const latest = this._bufferSearchSeq.get(searchKey)
+      if (latest !== undefined && seq < latest) return answer(0, { cancelled: true })
+      this._bufferSearchSeq.set(searchKey, seq)
+    }
+    const liveMirror = () => {
+      const runtime = this.sessions.get(sessionId)
+      if (runtime) return runtime.mirror || null
+      const remote = this.remoteSessions.get(sessionId)
+      return remote && remote.active ? remote.mirror || null : null
+    }
+    const mirror = liveMirror()
+    if (!mirror || mirror.disposed) return answer(0, { gone: true })
+    if (query.trim() === '') return answer(0)
+    const generation = mirror.generation
+    const stopped = () => {
+      if (seq !== null && this._bufferSearchSeq.get(searchKey) !== seq) return { cancelled: true }
+      if (liveMirror() !== mirror || mirror.disposed || mirror.generation !== generation) {
+        return { gone: true }
+      }
+      return null
+    }
+    const term = mirror.term
+    const buffers = [term.buffer.normal]
+    if (term.buffer.active.type === 'alternate') buffers.push(term.buffer.alternate)
+    let count = 0
+    for (const buffer of buffers) {
+      let row = 0
+      for (;;) {
+        const slice = scanBuffer(buffer, query, { from: row, lines: BUFFER_SEARCH_SLICE, limit: 0 })
+        count += slice.count
+        if (slice.next >= buffer.length) break
+        // Output written while this yields can trim the oldest rows and move
+        // every row up; a marker on the next row follows it.
+        let marker = null
+        if (buffer.type === term.buffer.active.type) {
+          marker = term.registerMarker(slice.next - (buffer.baseY + buffer.cursorY)) || null
+        }
+        await new Promise((resolve) => setImmediate(resolve))
+        const stop = stopped()
+        if (stop) {
+          if (marker && !mirror.disposed) marker.dispose()
+          return answer(0, stop)
+        }
+        if (marker) {
+          // Trimmed away: every older row went too, so row 0 is the next unread.
+          row = marker.isDisposed || marker.line < 0 ? 0 : marker.line
+          marker.dispose()
+        } else {
+          row = slice.next
+        }
+      }
+    }
+    return answer(count)
   }
 
   ack(sessionId, bytes = 0) {

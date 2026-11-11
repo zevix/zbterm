@@ -37,3 +37,5 @@ ZBTerm searches the text live sessions hold in memory, never history on disk, fr
 Approved 2026-11-11 by the user ("I want one change - have a single search box on the bottom left - move our current search box to the bottom, and when collapsed keep it the same width as the top bar, go!", in chat, on the plan with Q-1/Q-2 as recommended; this revision applies that change), file at sha256 02875b2c64f0 (the file before this line).
 
 2026-11-11 (builder P1): soft detail changes behind U3 (echo timed on the renderer's rows), R2 (the flood paced over ~10 s), R7 (log and reads both asserted) and the kit's seeding (no `stats` probe), recorded in `notes--context.md` *Soft changes*; no row or check weakened. To be read back to the user before done.
+
+2026-11-11 (builder P2): soft detail changes behind R2/R7 (the matcher's `lines`/`next` slicing and `len` over a pushed wide character), scenario 7 (trailing erased cells are not text) and U2/R8 (an ended join answers `gone`; trimmed rows followed by a marker), recorded in `notes--context.md` *Soft changes*; no row or check weakened. To be read back to the user before done.
