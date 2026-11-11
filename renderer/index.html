@@ -578,6 +578,26 @@
         color: #f4f9ff;
       }
 
+      /* Playback paused because a selection began (timeline-fixes R2, A-3):
+         a caret in the selection colour, pulsing until playback resumes. */
+      .text-btn.selection-paused {
+        animation: selection-paused-blink 1s ease-in-out infinite;
+      }
+
+      .text-btn.selection-paused i {
+        color: var(--terminal-selection);
+      }
+
+      @keyframes selection-paused-blink {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.35;
+        }
+      }
+
       .text-btn.live-beacon {
         animation: live-beacon-pulse 1.05s steps(1, end) infinite;
         color: #f4f9ff;

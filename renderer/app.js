@@ -234,6 +234,15 @@
     // program swallowed can still be turned into a selection on mouseup.
     selectionDrag: null,
     selectionForced: false,
+    // Playback paused because a selection drag began while it played (R2).
+    selectionPaused: false,
+    // The play button's selection-paused mark as last drawn (R2).
+    selectionPausedMark: false,
+    // The selection as it stood at the last right press: { text, start, end } (R3).
+    rightClickSelection: null,
+    // A same-frame re-render's selection, re-selected once its write lands (R1).
+    pendingSelectionRestore: null,
+    renderVersion: 0,
     terminalGestureAt: 0,
     devLogActive: false,
     devLogPaused: false,
@@ -788,23 +797,10 @@
     els.terminal.addEventListener('click', () => {
       if (state.pendingLiveRevealSession) showRevealedLiveStream().catch(showError)
     })
-    // Listen on the window: a drag that leaves the terminal still ends here.
-    els.terminal.addEventListener('mousedown', (event) => {
-      noteTerminalGesture()
-      if (event.button !== 0) return
-      // A selection this app forced is not cleared by xterm while the program
-      // owns the mouse, so it is dropped when the next drag begins.
-      if (state.selectionForced) {
-        state.selectionForced = false
-        state.term.clearSelection()
-      }
-      state.selectionDrag = {
-        anchor: terminalSelectionCell(event),
-        x: event.clientX,
-        y: event.clientY
-      }
-      window.addEventListener('mouseup', copySelectionOnPointerUp, { once: true })
-    })
+    // In the capture phase, on the terminal's container: this runs before
+    // xterm's own mousedown handlers, which sit on elements inside it.
+    els.terminal.addEventListener('mousedown', handleTerminalMouseDown, true)
+    state.term.onSelectionChange(updateSelectionPausedMark)
     syncTerminalLayout()
     fitTerminalToContainer()
     state.term.onData((data) => {
@@ -1331,6 +1327,9 @@
     })
     api.on('player:data', ({ sessionId, tsMs, kind, cols, rows, hd, data }) => {
       if (sessionId !== state.selectedId || state.mode !== 'playback') return
+      // Paused for a selection: a packet sent before the pause reached the
+      // player would redraw under the selection (R2).
+      if (state.selectionPaused && !state.playbackPlaying) return
       enqueuePlaybackWrite({ tsMs, kind, cols, rows, hd, data })
     })
     // An extended session goes live before its history is rebuilt; the
@@ -2575,15 +2574,24 @@
     closeSettingsMenu()
     els.terminalMenu.replaceChildren()
     const canPaste = canPasteToTerminal()
+    // The selection as it was at the right press (R3): its highlight is put
+    // back, and Copy copies that text even if the highlight is lost later.
+    restoreRightClickSelection()
+    const saved = state.rightClickSelection
+    const selectedText = saved
+      ? saved.text
+      : state.term.hasSelection()
+        ? state.term.getSelection()
+        : ''
 
     const copy = document.createElement('button')
     copy.type = 'button'
     copy.className = 'context-menu-item label-btn'
-    copy.disabled = !state.term.hasSelection()
+    copy.disabled = !selectedText
     copy.innerHTML = '<i class="fa-solid fa-copy btn-icon" aria-hidden="true"></i><span>Copy</span>'
     copy.addEventListener('click', () => {
       closeTerminalMenu()
-      copyTerminalSelection().catch(showError)
+      copyTerminalSelection(selectedText).catch(showError)
     })
     els.terminalMenu.append(copy)
 
@@ -2818,9 +2826,12 @@
     else closeSettingsMenu()
   }
 
-  async function copyTerminalSelection() {
-    if (!state.term || !state.term.hasSelection()) return
-    await navigator.clipboard.writeText(state.term.getSelection())
+  async function copyTerminalSelection(text) {
+    if (!text) {
+      if (!state.term || !state.term.hasSelection()) return
+      text = state.term.getSelection()
+    }
+    await navigator.clipboard.writeText(text)
     setStatus('copied selection')
   }
 
@@ -3062,7 +3073,11 @@
     clearLiveWrites({ ack: true })
     clearPlaybackWrites()
     state.hd = !!frame.hd
+    const keep = selectionToKeep(frame)
+    if (!keep) state.selectionPaused = false
     resetVisibleTerminal()
+    const version = state.renderVersion
+    state.pendingSelectionRestore = keep
     if (state.mode === 'playback') {
       state.playbackFrame = frame
       state.liveFrame = null
@@ -3074,8 +3089,33 @@
       setTerminalFontSize(state.liveFontSize)
       state.term.resize(frame.cols || 100, frame.rows || 30)
     }
-    state.term.write(frame.data || '', refreshTerminal)
+    state.term.write(frame.data || '', () => {
+      refreshTerminal()
+      if (version !== state.renderVersion || !keep) return
+      state.pendingSelectionRestore = null
+      if (selectBufferRange(keep)) state.selectionForced = keep.forced
+      updateSelectionPausedMark()
+    })
     updatePlaybackClock(frame.tsMs)
+  }
+
+  // A re-render of the frame already shown (a seek inside its gap, a step's
+  // second render) keeps the selection (R1): same seq, same grid. The range
+  // is re-selected once the frame's write has landed. Any other frame drops
+  // it, because the text under it changed (A-1).
+  function selectionToKeep(frame) {
+    const term = state.term
+    const shown = state.playbackFrame
+    if (state.mode !== 'playback' || !shown || !frame) return null
+    if (frame.seq === undefined || frame.seq !== shown.seq) return null
+    if ((frame.cols || 0) !== (shown.cols || 0) || (frame.rows || 0) !== (shown.rows || 0)) {
+      return null
+    }
+    // A restore still waiting on an earlier render of this same frame.
+    if (state.pendingSelectionRestore) return state.pendingSelectionRestore
+    const pos = term.hasSelection() ? term.getSelectionPosition() : null
+    if (!pos) return null
+    return { start: pos.start, end: pos.end, cols: term.cols, forced: !!state.selectionForced }
   }
 
   function renderLiveFrame(frame, options = {}) {
@@ -4252,6 +4292,9 @@
     const liveRole = sessionLiveRoleClass(current)
 
     if (!isPlayback) state.playbackPlaying = false
+    if (!isPlayback || isRunningPlayback) state.selectionPaused = false
+    const selectionPausedMark = isSelectionPausedMark() && !seekWaiting
+    state.selectionPausedMark = selectionPausedMark
 
     els.rename.disabled = !hasSession
     els.clearCaches.disabled = !hasSession
@@ -4285,7 +4328,13 @@
 
     setIconOnly(
       els.playPause,
-      seekWaiting ? 'fa-hourglass-half' : isRunningPlayback ? 'fa-pause' : 'fa-play'
+      seekWaiting
+        ? 'fa-hourglass-half'
+        : isRunningPlayback
+          ? 'fa-pause'
+          : selectionPausedMark
+            ? 'fa-i-cursor'
+            : 'fa-play'
     )
     els.playPause.title = hasPendingLiveReveal
       ? 'Show live stream'
@@ -4293,7 +4342,10 @@
         ? 'Preparing playback'
         : isRunningPlayback
           ? 'Pause'
-          : 'Play'
+          : selectionPausedMark
+            ? 'Paused for the selection: Play to resume'
+            : 'Play'
+    els.playPause.classList.toggle('selection-paused', selectionPausedMark)
     els.playPause.classList.toggle('mode-live', isPausedPlayback && !seekWaiting)
     els.playPause.classList.toggle('mode-pause', isRunningPlayback && !seekWaiting)
     els.playPause.classList.toggle('transport-waiting', seekWaiting)
@@ -7074,17 +7126,139 @@
     return true
   }
 
+  // The terminal's mousedown, in the capture phase: it runs before xterm's own
+  // handlers, so what it reads and clears is the state before xterm acts.
+  function handleTerminalMouseDown(event) {
+    noteTerminalGesture()
+    if (event.button === 2) {
+      saveRightClickSelection()
+      return
+    }
+    if (event.button !== 0) return
+    state.rightClickSelection = null
+    // A selection this app forced is not cleared by xterm while the program
+    // owns the mouse, so it is dropped when the next drag begins. Cleared
+    // before xterm's mousedown: afterwards, clearSelection() would also
+    // remove the drag listeners xterm has just added.
+    if (state.selectionForced) {
+      state.selectionForced = false
+      state.term.clearSelection()
+    }
+    state.selectionDrag = {
+      anchor: terminalSelectionCell(event),
+      x: event.clientX,
+      y: event.clientY,
+      // Set when this drag paused playback and xterm was not selecting.
+      forced: false
+    }
+    // Listen on the window: a drag that leaves the terminal still ends here.
+    // The move listener is in the capture phase, because xterm's selection
+    // stops a drag's mousemove from propagating past the document.
+    window.addEventListener('mousemove', handleTerminalDragMove, true)
+    window.addEventListener('mouseup', copySelectionOnPointerUp, { once: true })
+  }
+
+  // A drag that starts in the terminal while playback plays pauses it (R2),
+  // once it has moved SELECTION_DRAG_MIN_PX; a plain click does not (U1).
+  // The pause is synchronous (the clock freezes and queued writes are
+  // dropped before anything is awaited), so no packet redraws under the drag.
+  function handleTerminalDragMove(event) {
+    const drag = state.selectionDrag
+    if (!drag || !state.term) return
+    if (drag.forced) {
+      // After xterm's handlers: a mouse report it sends clears the selection.
+      window.setTimeout(() => {
+        if (state.selectionDrag === drag) selectDraggedCells(drag, event)
+      }, 0)
+      return
+    }
+    if (state.mode !== 'playback' || !state.playbackPlaying || !state.selectedId) return
+    const moved = Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y)
+    if (moved < SELECTION_DRAG_MIN_PX) return
+    const sessionId = state.selectedId
+    freezePlaybackClock()
+    state.selectionPaused = true
+    clearPlaybackWrites()
+    // xterm saw the mousedown while playing: with mouse tracking on it is
+    // reporting the drag, not selecting, so the selection is made here from
+    // the drag's anchor and follows the pointer until mouseup.
+    const tracking = state.term.modes && state.term.modes.mouseTrackingMode
+    if (tracking && tracking !== 'none') {
+      drag.forced = true
+      window.setTimeout(() => {
+        if (state.selectionDrag === drag) selectDraggedCells(drag, event)
+      }, 0)
+    }
+    updateTransportControls()
+    api.invoke('player.pause', { sessionId }).catch(showError)
+  }
+
   // xterm fires onSelectionChange for every cell the drag crosses, so the
   // clipboard write waits for the pointer to come back up and the selection
-  // to be final.
+  // to be final. The selection is built whatever copy on select says (a
+  // program that owns the mouse gets none from xterm); only the clipboard
+  // write depends on it.
   function copySelectionOnPointerUp(event) {
+    window.removeEventListener('mousemove', handleTerminalDragMove, true)
     const drag = state.selectionDrag
     state.selectionDrag = null
-    if (!state.copyOnSelect || !state.term) return
-    const selected = state.term.hasSelection() ? state.term.getSelection() : ''
+    if (!state.term) return
+    const selected =
+      !(drag && drag.forced) && state.term.hasSelection() ? state.term.getSelection() : ''
     const text = selected || selectDraggedCells(drag, event)
-    if (!text) return
+    updateSelectionPausedMark()
+    if (!text || !state.copyOnSelect) return
     navigator.clipboard.writeText(text).then(() => setStatus('copied selection'), showError)
+  }
+
+  // A right press in a program that owns the mouse is reported to it as
+  // typed input, and xterm clears the selection on any input (R3). What it
+  // was is kept here, read before xterm's handler runs.
+  function saveRightClickSelection() {
+    const term = state.term
+    const pos = term && term.hasSelection() ? term.getSelectionPosition() : null
+    state.rightClickSelection = pos
+      ? { text: term.getSelection(), start: pos.start, end: pos.end, cols: term.cols }
+      : null
+    // The release is reported too, and clears the highlight again: put it
+    // back after xterm's own mouseup handler (on the document) has run.
+    if (state.rightClickSelection) {
+      window.addEventListener('mouseup', restoreRightClickSelection, { once: true })
+    }
+  }
+
+  // Puts the highlight of the last right press back, when it was lost.
+  function restoreRightClickSelection() {
+    const saved = state.rightClickSelection
+    if (!saved || !state.term || state.term.hasSelection()) return
+    selectBufferRange(saved)
+  }
+
+  // Selects { start, end } (as getSelectionPosition gives it) when the grid
+  // still has the columns it had then.
+  function selectBufferRange(range) {
+    const term = state.term
+    if (!term || !range || !range.start || !range.end || range.cols !== term.cols) return false
+    const length = (range.end.y - range.start.y) * term.cols + (range.end.x - range.start.x)
+    if (length <= 0) return false
+    term.select(range.start.x, range.start.y, length)
+    return term.hasSelection()
+  }
+
+  // The play button's mark (R2) is derived from state: paused, by a
+  // selection, which still stands. Redrawn only when that changes.
+  function isSelectionPausedMark() {
+    return !!(
+      state.selectionPaused &&
+      state.mode === 'playback' &&
+      !state.playbackPlaying &&
+      state.term &&
+      state.term.hasSelection()
+    )
+  }
+
+  function updateSelectionPausedMark() {
+    if (isSelectionPausedMark() !== state.selectionPausedMark) updateTransportControls()
   }
 
   // A program with mouse reporting on (Claude Code, vim, less) receives the
@@ -7539,6 +7713,9 @@
 
   function resetVisibleTerminal() {
     if (!state.term) return
+    // A selection restore waiting on an earlier write is void after a reset.
+    state.renderVersion++
+    state.pendingSelectionRestore = null
     state.term.reset()
     state.term.options.cursorBlink = !state.offlineView
     state.term.write(VISIBLE_TERMINAL_RESET, refreshTerminal)
