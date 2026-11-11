@@ -246,6 +246,13 @@ class Player extends EventEmitter {
         const last = batch[batch.length - 1]
         this.seq = last.seq
         this.currentTsMs = last.tsMs
+        // A collapsed gap was jumped: play on from the packet it jumped to.
+        // Otherwise the raw playhead lags it by (gap - threshold), and the
+        // packets after it stall that long (261110_timeline-fixes R7).
+        if (this.collapse && last.tsMs > this._rawPlayheadTsMs()) {
+          this.playStartedTsMs = last.tsMs
+          this.playStartedAt = Date.now()
+        }
         for (const packet of coalescePackets(batch)) this.emit('player:data', packet)
         const nextDelay =
           this.seq < targetSeq ? PLAYBACK_YIELD_MS : Math.min(this._delayToNext(), PLAYBACK_TICK_MS)
@@ -275,8 +282,12 @@ class Player extends EventEmitter {
     return packets
   }
 
+  _rawPlayheadTsMs() {
+    return this.playStartedTsMs + (Date.now() - this.playStartedAt) * this.speed
+  }
+
   _playheadTsMs() {
-    const raw = this.playStartedTsMs + (Date.now() - this.playStartedAt) * this.speed
+    const raw = this._rawPlayheadTsMs()
     if (!this.collapse) return raw
     if (this.seq >= storeLength(this.store)) return raw
     const nextTs = tsForSeq(this.store.timeline, this.seq + 1)

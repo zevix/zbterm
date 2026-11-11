@@ -622,6 +622,23 @@ test('debug renderer commands do not wait on a frame that never comes', (t) => {
   t.ok(/function debugSettle\(\)[\s\S]{0,200}setTimeout\(resolve, 100\)/.test(js))
 })
 
+test('timeline-fixes: compressed time comes from time-collapse.js; the time label has a tip, not a title', async (t) => {
+  const rendererDir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')
+  const html = await fs.promises.readFile(path.join(rendererDir, 'index.html'), 'utf8')
+  t.ok(html.includes('<script src="time-collapse.js"></script>'), 'index.html loads it')
+  t.ok(html.indexOf('time-collapse.js') < html.indexOf('<script src="app.js">'), 'before app.js')
+  t.ok(js.includes('const timeCollapse = window.zbtermTimeCollapse'), 'app.js uses it')
+  t.absent(js.includes('function buildTimeCollapseBreakpoints'), 'no second copy of the map')
+  t.absent(/timeLabel\.title\s*=/.test(js), 'no native title on the time label (R4)')
+  t.absent(js.includes('Ucompresses'), 'the typo is gone')
+  t.ok(html.includes('id="timeLabelTip"'), 'the tip element')
+  t.ok(
+    /\.time-label-tip \{[^}]*position: fixed;[^}]*pointer-events: none;/.test(html),
+    'fixed, no pointer events'
+  )
+})
+
 test('ui-chrome: version is the last settings item, the bubble has a wall clock, icons and identity dot are coloured', async (t) => {
   const rendererDir = path.join(__dirname, '..', 'renderer')
   const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')

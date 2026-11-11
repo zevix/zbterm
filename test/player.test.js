@@ -103,6 +103,51 @@ test('local player ignores stale playbackLength while session keeps recording', 
   t.is(packet.payload.toString('utf8'), 'p3')
 })
 
+// 261110_timeline-fixes R7: with empty time collapsed, a gap plays for the
+// threshold, and what follows it plays on time. The playhead used to keep the
+// wall clock it started with, so after one collapsed gap it lagged the packet
+// it had jumped to by (gap - threshold): the next packets stalled that long.
+test('collapsed playback does not lag after it jumps a gap', async (t) => {
+  const times = [0, 1000, 1050, 2000]
+  const timeline = times.map((tsMs, i) => ({ seq: i + 1, tsMs, hd: false }))
+  const store = {
+    remote: false,
+    log: { length: timeline.length },
+    info: { cols: 80, rows: 24 },
+    timeline,
+    async *readRange(from, to) {
+      for (let seq = from; seq <= to; seq++) {
+        yield { ...dataPacket(seq, `p${seq}`), tsMs: timeline[seq - 1].tsMs }
+      }
+    }
+  }
+  const player = new Player(store, null)
+  await player.seek(0)
+  const arrived = new Map()
+  const started = Date.now()
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('collapsed playback did not finish')), 3000)
+    player.on('player:data', (packet) => arrived.set(packet.seq, Date.now() - started))
+    player.once('player:end', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+    player.play(1, { enabled: true, thresholdMs: 200 })
+  })
+  player.pause()
+  // Gap 1 -> 2 (1000 ms) plays in the 200 ms threshold, 2 -> 3 in its own
+  // 50 ms, gap 3 -> 4 (950 ms) in the threshold again: about 450 ms in all.
+  t.ok(arrived.get(2) >= 150 && arrived.get(2) < 400, `seq 2 after ${arrived.get(2)} ms`)
+  t.ok(
+    arrived.get(3) - arrived.get(2) < 250,
+    `seq 3 ${arrived.get(3) - arrived.get(2)} ms after seq 2`
+  )
+  t.ok(
+    arrived.get(4) - arrived.get(3) >= 150 && arrived.get(4) - arrived.get(3) < 400,
+    `seq 4 ${arrived.get(4) - arrived.get(3)} ms after seq 3`
+  )
+})
+
 test('remote player clamps seeks to downloaded playback length', async (t) => {
   const store = {
     remote: true,

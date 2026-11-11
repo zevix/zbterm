@@ -31,7 +31,8 @@ Companion to `goal_requirements.md`. Not a spec; nothing here is approved or bui
 
 ## Soft changes
 
-None.
+- **2026-11-11 (builder P2, planner decision), R5 mechanism.** The design's answer (the map built for the current end, `toggleTimeCollapse` keeping the exact clock ts) was not enough: P1 found that in live mode `state.timeline` never takes in live output, so the compressed total of a running session stalled at about 0:02. The compressed map now also takes in the live session's output times (`state.liveTimeline`, fed from `session:data`; a burst of packets under 100 ms apart keeps only its first and last time, which leaves the compressed span unchanged). It is rebuilt with them at most once a second (design row 4); in between only its end moves to "now", in place. `state.timeline` itself is unchanged, so `lastSeq` and the scrubber marks are as before. Read back to the user before "done".
+- **2026-11-11 (builder P2), R7 mechanism, and the goal's *Out of scope* line on `engine/player.js`.** The bug also lives in the engine player, found in P2 rather than P1. After it jumps a collapsed gap, `_playheadTsMs` kept the wall clock it started with, so the playhead lagged the packet it had jumped to by (gap - threshold). The next packets stalled that long, and each later gap took the threshold plus that lag. Evidence: in `p3_kit/R7_compressed_playback.txt` a 3.2 s gap followed by the 20 s gap made the 20 s gap take about 3.2 s, not 2 s. A new `test/player.test.js` case failed before the fix (`seq 3 853 ms after seq 2`, want under 250; log `p2_player-before.log`). The fix, in `_scheduleNext`: when a delivered packet is ahead of the raw playhead with collapse on, the playhead re-anchors on it. Without it R7's renderer clock, held below the next packet, would stall about 1.2 s inside the gap. Read back to the user before "done".
 
 ## Superseded text
 

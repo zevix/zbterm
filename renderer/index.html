@@ -1237,6 +1237,27 @@
         font-variant-numeric: tabular-nums;
       }
 
+      /* The uncompressed time over #timeLabel (261110_timeline-fixes R4). */
+      .time-label-tip {
+        position: fixed;
+        left: 0;
+        top: 0;
+        z-index: 1000;
+        color: var(--text);
+        background: var(--control-bg);
+        border: 1px solid var(--control-border);
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        pointer-events: none;
+        white-space: nowrap;
+      }
+
+      .time-label-tip[hidden] {
+        display: none;
+      }
+
       .total-time.live-total {
         opacity: 0.5;
       }
@@ -2358,8 +2379,10 @@
     <button id="removeHd" class="text-btn" hidden>Remove HD</button>
     <button id="extendSessionHidden" class="text-btn" hidden>Extend</button>
     <button id="delete" class="text-btn" hidden>Delete</button>
+    <span id="timeLabelTip" class="time-label-tip" role="tooltip" hidden></span>
     <script src="logo-ascii.js"></script>
     <script src="wall-clock.js"></script>
+    <script src="time-collapse.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

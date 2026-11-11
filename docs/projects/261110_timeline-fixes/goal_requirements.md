@@ -41,3 +41,7 @@ Checks drive a scratch packaged app under `uisolate` with real mouse and keys. R
 ## Approval
 
 Approved 2026-11-11 by the user ("approved" in chat, covering all three projects), file at sha256 5db0b8ebda1f (the file as approved, before this line).
+
+2026-11-11 (builder P2): R5's mechanism changed (soft): the compressed map also takes in a running session's live output, rebuilt at most once a second; see `notes--context.md` *Soft changes*.
+
+2026-11-11 (builder P2): for R7, `engine/player.js` changed (the *Out of scope* exception, evidence found in P2): the playhead re-anchors after a collapsed gap; see `notes--context.md` *Soft changes*.

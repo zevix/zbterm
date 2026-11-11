@@ -7,6 +7,8 @@
 
   const bridge = window.bridge
   const api = window.zbterm
+  // renderer/time-collapse.js, loaded before this file.
+  const timeCollapse = window.zbtermTimeCollapse
 
   if (bridge && bridge.logToFile) {
     bridge.logToFile('=== ZBTerm renderer app.js loaded ===')
@@ -100,6 +102,10 @@
   const SIDEBAR_WIDTH_MIN = 220
   const SIDEBAR_WIDTH_MAX = 640
   const DEFAULT_GAP_COLLAPSE_MS = 2000
+  // A running session's collapse map takes in new output at most this often.
+  const TIME_COLLAPSE_REBUILD_MS = 1000
+  // Live output closer together than this is one burst to the collapse map.
+  const LIVE_POINT_MERGE_MS = 100
   const WHEEL_SCRUB_SENSITIVITY = 0.1
   const ZBTERM_JOIN_PREFIX = 'zbterm://join/'
   const IDENTITY_POPUP_ID = 'identity-setup'
@@ -192,13 +198,19 @@
       thresholdMs: DEFAULT_GAP_COLLAPSE_MS
     },
     timeCollapseMap: {
+      map: null,
       timeline: null,
       startTs: 0,
-      endTs: 0,
       thresholdMs: 0,
-      breakpoints: null,
-      compressedSpan: 0
+      liveVersion: -1,
+      builtAt: 0
     },
+    // Output times of the live session since its timeline was loaded, for the
+    // collapse map: in live mode state.timeline does not grow (R5).
+    liveTimeline: { points: [], version: 0 },
+    // The time-label tip's text as last written (R4).
+    timeLabelTipText: '',
+    timeLabelHover: false,
     liveActivityMaps: new Map(),
     liveFrame: null,
     playbackFrame: null,
@@ -219,6 +231,8 @@
     clockFrame: 0,
     clockStartedAt: 0,
     clockStartedTs: 0,
+    // The anchor on the compressed timeline, or null when collapse is off (R7).
+    clockStartedComp: null,
     clockSpeed: 1,
     liveFontSize: 13,
     sidebarWidthPreferred: null,
@@ -236,6 +250,8 @@
     selectionForced: false,
     // Playback paused because a selection drag began while it played (R2).
     selectionPaused: false,
+    // Paused from the play button: player:data still in flight is dropped.
+    playbackPaused: false,
     // The play button's selection-paused mark as last drawn (R2).
     selectionPausedMark: false,
     // The selection as it stood at the last right press: { text, start, end } (R3).
@@ -369,6 +385,7 @@
     scrubberIndicators: document.getElementById('scrubberIndicators'),
     scrubberTip: document.getElementById('scrubberTip'),
     timeLabel: document.getElementById('timeLabel'),
+    timeLabelTip: document.getElementById('timeLabelTip'),
     currentTime: document.getElementById('currentTime'),
     totalTime: document.getElementById('totalTime'),
     playPause: document.getElementById('playPause'),
@@ -1260,6 +1277,16 @@
     window.addEventListener('pointerup', commitScrub)
     els.scrubber.addEventListener('mousemove', handleScrubberHover)
     els.scrubber.addEventListener('mouseenter', handleScrubberHover)
+    if (els.timeLabel) {
+      els.timeLabel.addEventListener('mouseenter', () => {
+        state.timeLabelHover = true
+        syncTimeLabelTip()
+      })
+      els.timeLabel.addEventListener('mouseleave', () => {
+        state.timeLabelHover = false
+        syncTimeLabelTip()
+      })
+    }
     els.scrubber.addEventListener('mouseleave', hideScrubberHover)
     els.scrubber.addEventListener('wheel', handleScrubberWheel, { passive: false })
     // xterm may stop bubbling wheel events while its mouse-reporting mode is
@@ -1295,6 +1322,7 @@
       }
       state.hd = !!hd
       hideTerminalPending()
+      noteLiveOutput()
       enqueueLiveWrite({ sessionId, hd, data: bytes })
       updateLiveClock()
     })
@@ -1330,6 +1358,9 @@
       // Paused for a selection: a packet sent before the pause reached the
       // player would redraw under the selection (R2).
       if (state.selectionPaused && !state.playbackPlaying) return
+      // Paused from the play button: the same, for packets sent before the
+      // engine heard of the pause.
+      if (state.playbackPaused) return
       enqueuePlaybackWrite({ tsMs, kind, cols, rows, hd, data })
     })
     // An extended session goes live before its history is rebuilt; the
@@ -3594,10 +3625,14 @@
     }
     if (!state.selectedId || state.mode !== 'playback' || !state.playerReady) return
     if (state.playbackPlaying) {
+      // Synchronous: freeze, drop what is queued and what is still on its
+      // way, then tell the engine.
+      const sessionId = state.selectedId
       freezePlaybackClock()
-      await api.invoke('player.pause', { sessionId: state.selectedId })
+      state.playbackPaused = true
       clearPlaybackWrites()
       updateTransportControls()
+      await api.invoke('player.pause', { sessionId })
     } else {
       cancelPendingSeek()
       state.mode = 'playback'
@@ -3611,14 +3646,19 @@
         })
         renderFrame(frame)
       }
-      await api.invoke('player.play', {
-        sessionId: state.selectedId,
-        speed: Number(els.speed.value),
-        collapse: playbackCollapseOptions()
-      })
+      await invokePlayerPlay()
       startPlaybackClock(Number(els.speed.value))
       updateTransportControls()
     }
+  }
+
+  function invokePlayerPlay() {
+    state.playbackPaused = false
+    return api.invoke('player.play', {
+      sessionId: state.selectedId,
+      speed: Number(els.speed.value),
+      collapse: playbackCollapseOptions()
+    })
   }
 
   function playbackCollapseOptions() {
@@ -3631,12 +3671,8 @@
   async function changePlaybackSpeed() {
     if (!state.selectedId || state.mode !== 'playback' || !state.playerReady) return
     if (!state.playbackPlaying) return
-    updatePlaybackClock(currentRunningPlaybackTs())
-    await api.invoke('player.play', {
-      sessionId: state.selectedId,
-      speed: Number(els.speed.value),
-      collapse: playbackCollapseOptions()
-    })
+    updatePlaybackClock(runningClockTs())
+    await invokePlayerPlay()
     startPlaybackClock(Number(els.speed.value))
   }
 
@@ -3653,7 +3689,22 @@
     cancelPendingSeek()
     stopPlaybackClock()
     clearPlaybackWrites()
+    const before = state.playbackFrame ? state.playbackFrame.seq : undefined
     const frame = await api.invoke('player.step', { sessionId: state.selectedId, delta })
+    // A step forward asked for at the last frame comes back with the same
+    // frame: a running session then goes live, as the plain wheel does at the
+    // scrubber's end (R6); an ended one stays on it (U2).
+    if (
+      delta > 0 &&
+      frame &&
+      before !== undefined &&
+      frame.seq === before &&
+      state.currentSession &&
+      state.currentSession.active
+    ) {
+      await goLive()
+      return
+    }
     renderFrame(frame)
   }
 
@@ -4001,11 +4052,7 @@
 
   async function resumePlayback() {
     if (!state.selectedId || state.mode !== 'playback') return
-    await api.invoke('player.play', {
-      sessionId: state.selectedId,
-      speed: Number(els.speed.value),
-      collapse: playbackCollapseOptions()
-    })
+    await invokePlayerPlay()
     state.seek.waitingForRender = false
     startPlaybackClock(Number(els.speed.value))
     updateTransportControls()
@@ -4015,15 +4062,36 @@
     stopPlaybackClock()
     state.playbackPlaying = true
     state.clockSpeed = speed || 1
-    state.clockStartedAt = performance.now()
-    state.clockStartedTs = state.playbackClockTs
+    anchorClock(state.playbackClockTs)
     tickPlaybackClock()
   }
 
-  function currentRunningPlaybackTs() {
+  // The running clock (R7) has one writer, anchorClock, and one reader,
+  // runningClockTs. With collapse on it runs on the compressed timeline, so an
+  // empty stretch passes in the threshold with the time moving, as the engine
+  // plays it; it waits just below the next packet until that packet lands.
+  function anchorClock(realTs) {
+    state.clockStartedTs = realTs
+    state.clockStartedAt = performance.now()
+    const map = getTimeCollapseMap(state.playbackStartTs, currentPlaybackEndTs())
+    state.clockStartedComp = map ? timeCollapse.realToCompressed(map, realTs) : null
+  }
+
+  function runningClockTs() {
     if (!state.playbackPlaying) return state.playbackClockTs
-    const elapsed = (performance.now() - state.clockStartedAt) * state.clockSpeed
-    return clamp(state.clockStartedTs + elapsed, state.playbackStartTs, currentPlaybackEndTs())
+    const advanced = (performance.now() - state.clockStartedAt) * state.clockSpeed
+    const end = currentPlaybackEndTs()
+    const map = getTimeCollapseMap(state.playbackStartTs, end)
+    const tsMs =
+      map && state.clockStartedComp !== null
+        ? timeCollapse.compressedClockTs(
+            map,
+            state.clockStartedTs,
+            state.clockStartedComp,
+            advanced
+          )
+        : state.clockStartedTs + advanced
+    return clamp(tsMs, state.playbackStartTs, end)
   }
 
   function stopPlaybackClock() {
@@ -4034,25 +4102,13 @@
   }
 
   function freezePlaybackClock() {
-    if (!state.playbackPlaying) {
-      stopPlaybackClock()
-      return
-    }
-    const elapsed = (performance.now() - state.clockStartedAt) * state.clockSpeed
-    updatePlaybackClock(
-      clamp(state.clockStartedTs + elapsed, state.playbackStartTs, currentPlaybackEndTs())
-    )
+    if (state.playbackPlaying) updatePlaybackClock(runningClockTs())
     stopPlaybackClock()
   }
 
   function tickPlaybackClock() {
     if (!state.playbackPlaying) return
-    const elapsed = (performance.now() - state.clockStartedAt) * state.clockSpeed
-    const tsMs = clamp(
-      state.clockStartedTs + elapsed,
-      state.playbackStartTs,
-      currentPlaybackEndTs()
-    )
+    const tsMs = runningClockTs()
     updatePlaybackClock(tsMs)
     if (tsMs >= currentPlaybackEndTs()) {
       stopPlaybackClock()
@@ -4064,8 +4120,7 @@
 
   function updatePlaybackClockFromPacket(tsMs) {
     if (!tsMs) return
-    state.clockStartedTs = tsMs
-    state.clockStartedAt = performance.now()
+    anchorClock(tsMs)
     updatePlaybackClock(tsMs)
   }
 
@@ -4806,7 +4861,15 @@
     state.timelineSignal.activity = null
     state.timelineSignal.history = null
     state.timelineSignal.historyAvailableLength = -1
+    state.liveTimeline.points = []
+    state.liveTimeline.version++
     invalidateTimeCollapseMap()
+  }
+
+  // Live output of the selected session, for the collapse map (R5).
+  function noteLiveOutput() {
+    timeCollapse.addLivePoint(state.liveTimeline.points, Date.now(), LIVE_POINT_MERGE_MS)
+    state.liveTimeline.version++
   }
 
   function recordLiveActivity(sessionId, source, bytes) {
@@ -6188,22 +6251,67 @@
     const realTotal = end - start
     let currentElapsed = realElapsed
     let totalElapsed = realTotal
-    let uncompressedTitle = ''
+    let tipText = ''
     if (state.timeCollapse.enabled) {
       const collapseMap = getTimeCollapseMap(start, end)
       if (collapseMap && collapseMap.compressedSpan > 0) {
         currentElapsed = realToCompressed(collapseMap, state.playbackClockTs)
         totalElapsed = collapseMap.compressedSpan
-        uncompressedTitle = `Ucompresses: ${formatDuration(realElapsed)} / ${formatDuration(realTotal)}`
+        tipText = `Uncompressed: ${formatDuration(realElapsed)} / ${formatDuration(realTotal)}`
       }
     }
-    els.currentTime.textContent = formatDuration(currentElapsed)
-    els.totalTime.textContent = formatDuration(totalElapsed)
-    if (els.timeLabel) els.timeLabel.title = uncompressedTitle
+    // Written only when they change: this runs on every clock frame (R4).
+    setTextIfChanged(els.currentTime, formatDuration(currentElapsed))
+    setTextIfChanged(els.totalTime, formatDuration(totalElapsed))
+    setTimeLabelTipText(tipText)
     if (!state.seek.hovering) {
       els.scrubberTip.textContent = scrubberTipTextForTs(state.playbackClockTs)
     }
     updateTransportControls()
+  }
+
+  function setTextIfChanged(el, text) {
+    if (el && el.textContent !== text) el.textContent = text
+  }
+
+  // The uncompressed time, shown over the time label while it is hovered and
+  // collapse is on (R4). Not a native title: Chromium re-shows a tooltip whose
+  // text changes, which made it blink on every clock frame. Placed once when
+  // it shows; only its text changes while it stays up.
+  function setTimeLabelTipText(text) {
+    if (text === state.timeLabelTipText) return
+    state.timeLabelTipText = text
+    const tip = els.timeLabelTip
+    if (!tip) return
+    if (!tip.firstChild) tip.append(document.createTextNode(''))
+    tip.firstChild.data = text
+    syncTimeLabelTip()
+  }
+
+  function syncTimeLabelTip() {
+    const tip = els.timeLabelTip
+    if (!tip || !els.timeLabel) return
+    const show = !!state.timeLabelTipText && state.timeLabelHover
+    if (show === !tip.hidden) return
+    if (!show) {
+      tip.hidden = true
+      return
+    }
+    tip.hidden = false
+    const label = els.timeLabel.getBoundingClientRect()
+    const margin = 4
+    const width = tip.offsetWidth
+    const height = tip.offsetHeight
+    const left = clamp(
+      label.right - width,
+      margin,
+      Math.max(margin, window.innerWidth - width - margin)
+    )
+    const above = label.top - height - 6
+    const top =
+      above >= margin ? above : Math.min(label.bottom + 6, window.innerHeight - height - margin)
+    tip.style.left = `${Math.round(left)}px`
+    tip.style.top = `${Math.round(Math.max(margin, top))}px`
   }
 
   function positionScrubberTip() {
@@ -7576,121 +7684,69 @@
 
   async function toggleTimeCollapse() {
     const wasPlaying = state.playbackPlaying
-    const tsMs = wasPlaying
-      ? currentRunningPlaybackTs()
-      : els.scrubber
-        ? tsForScrubberValue(Number(els.scrubber.value))
-        : state.playbackClockTs
+    // The clock's own ts, not the scrubber's rounded one (R5).
+    const tsMs = wasPlaying ? runningClockTs() : state.playbackClockTs
     if (wasPlaying) updatePlaybackClock(tsMs)
     applyTimeCollapse(!state.timeCollapse.enabled, true)
+    // The clock runs on under the new rule from where it was.
+    if (wasPlaying) anchorClock(tsMs)
     if (els.scrubber) {
       const value = clamp(scrubberValueForTs(tsMs), 0, SCRUBBER_STEPS)
       els.scrubber.value = value
       state.seek.pendingValue = value
       state.seek.lastDrawValue = value
       state.seek.lastDrawAt = Date.now()
-      updateDragTime()
+      state.playbackClockTs = tsMs
+      updateTimeLabels()
+      positionScrubberTip()
       renderScrubberIndicators()
     }
     if (wasPlaying && state.selectedId && state.mode === 'playback') {
-      await api.invoke('player.play', {
-        sessionId: state.selectedId,
-        speed: Number(els.speed.value),
-        collapse: playbackCollapseOptions()
-      })
+      await invokePlayerPlay()
       startPlaybackClock(Number(els.speed.value))
     }
   }
 
   function invalidateTimeCollapseMap() {
-    state.timeCollapseMap.timeline = null
-    state.timeCollapseMap.breakpoints = null
-    state.timeCollapseMap.compressedSpan = 0
+    state.timeCollapseMap.map = null
   }
 
+  // The collapse map for start..end (R5). It is rebuilt when the timeline,
+  // the start or the threshold changes, and takes in a running session's live
+  // output at most once every TIME_COLLAPSE_REBUILD_MS; in between, only its
+  // end moves (to "now"), in place.
   function getTimeCollapseMap(startTs, endTs) {
     if (!state.timeCollapse.enabled) return null
     const thresholdMs = state.timeCollapse.thresholdMs
     const cache = state.timeCollapseMap
+    const live = state.liveTimeline
     if (
+      cache.map &&
       cache.timeline === state.timeline &&
       cache.startTs === startTs &&
-      cache.endTs === endTs &&
       cache.thresholdMs === thresholdMs &&
-      cache.breakpoints
+      (cache.liveVersion === live.version ||
+        performance.now() - cache.builtAt < TIME_COLLAPSE_REBUILD_MS) &&
+      timeCollapse.retargetTimeCollapseMap(cache.map, endTs, thresholdMs)
     ) {
-      return cache
+      return cache.map
     }
-    const breakpoints = buildTimeCollapseBreakpoints(state.timeline, startTs, endTs, thresholdMs)
+    const points = state.timeline.map((item) => item.tsMs).concat(live.points)
+    cache.map = timeCollapse.buildTimeCollapseMap(points, startTs, endTs, thresholdMs)
     cache.timeline = state.timeline
     cache.startTs = startTs
-    cache.endTs = endTs
     cache.thresholdMs = thresholdMs
-    cache.breakpoints = breakpoints
-    cache.compressedSpan = breakpoints.length ? breakpoints[breakpoints.length - 1].compTs : 0
-    return cache
-  }
-
-  function buildTimeCollapseBreakpoints(timeline, startTs, endTs, thresholdMs) {
-    if (endTs <= startTs) {
-      return [
-        { realTs: startTs, compTs: 0 },
-        { realTs: endTs, compTs: 0 }
-      ]
-    }
-    const points = new Set([startTs, endTs])
-    for (const item of timeline) {
-      if (item.tsMs > startTs && item.tsMs < endTs) points.add(item.tsMs)
-    }
-    const sorted = Array.from(points).sort((a, b) => a - b)
-    const breakpoints = [{ realTs: sorted[0], compTs: 0 }]
-    let compTs = 0
-    for (let i = 1; i < sorted.length; i++) {
-      const gap = sorted[i] - sorted[i - 1]
-      compTs += Math.min(gap, thresholdMs)
-      breakpoints.push({ realTs: sorted[i], compTs })
-    }
-    return breakpoints
+    cache.liveVersion = live.version
+    cache.builtAt = performance.now()
+    return cache.map
   }
 
   function realToCompressed(map, tsMs) {
-    const bp = map.breakpoints
-    if (!bp || !bp.length) return 0
-    if (tsMs <= bp[0].realTs) return bp[0].compTs
-    if (tsMs >= bp[bp.length - 1].realTs) return bp[bp.length - 1].compTs
-    let lo = 0
-    let hi = bp.length - 1
-    while (hi - lo > 1) {
-      const mid = (lo + hi) >> 1
-      if (bp[mid].realTs <= tsMs) lo = mid
-      else hi = mid
-    }
-    const a = bp[lo]
-    const b = bp[hi]
-    const realSpan = b.realTs - a.realTs
-    if (realSpan <= 0) return a.compTs
-    const frac = (tsMs - a.realTs) / realSpan
-    return a.compTs + (b.compTs - a.compTs) * frac
+    return timeCollapse.realToCompressed(map, tsMs)
   }
 
   function compressedToReal(map, compTs) {
-    const bp = map.breakpoints
-    if (!bp || !bp.length) return 0
-    if (compTs <= bp[0].compTs) return bp[0].realTs
-    if (compTs >= bp[bp.length - 1].compTs) return bp[bp.length - 1].realTs
-    let lo = 0
-    let hi = bp.length - 1
-    while (hi - lo > 1) {
-      const mid = (lo + hi) >> 1
-      if (bp[mid].compTs <= compTs) lo = mid
-      else hi = mid
-    }
-    const a = bp[lo]
-    const b = bp[hi]
-    const compSpan = b.compTs - a.compTs
-    if (compSpan <= 0) return a.realTs
-    const frac = (compTs - a.compTs) / compSpan
-    return a.realTs + (b.realTs - a.realTs) * frac
+    return timeCollapse.compressedToReal(map, compTs)
   }
 
   function terminalTheme() {
