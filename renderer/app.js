@@ -8161,6 +8161,243 @@
     )
   }
 
+  // The 261110_timeline-fixes kit: reads of the selection, the terminal menu,
+  // the time labels and the playback clock, and recorders that only observe
+  // (installed on the first call, never before).
+  const debugKit = {
+    log: [],
+    logging: false,
+    popupObserving: false,
+    popupShown: false,
+    popupShows: 0,
+    popupMutations: [],
+    titleWrites: 0
+  }
+
+  function debugSelectionState() {
+    const term = state.term
+    const has = !!(term && term.hasSelection())
+    return {
+      has,
+      text: has ? term.getSelection() : '',
+      position:
+        has && typeof term.getSelectionPosition === 'function'
+          ? term.getSelectionPosition() || null
+          : null,
+      forced: !!state.selectionForced,
+      mouseTracking: term && term.modes ? term.modes.mouseTrackingMode : null
+    }
+  }
+
+  function debugTerminalMenuState() {
+    const menu = els.terminalMenu
+    const open = !!(menu && !menu.hidden)
+    const items = open ? Array.from(menu.querySelectorAll('button')) : []
+    const copy = items.find((el) => el.textContent.trim() === 'Copy')
+    return {
+      open,
+      copyEnabled: !!(copy && !copy.disabled),
+      items: items.map((el) => ({
+        label: el.textContent.trim(),
+        disabled: !!el.disabled,
+        rect: debugRect(el)
+      })),
+      rect: open ? debugRect(menu) : null
+    }
+  }
+
+  function debugTimeLabels() {
+    const tip = document.getElementById('timeLabelTip')
+    const shown = !!(tip && !tip.hidden && tip.getClientRects().length)
+    return {
+      current: els.currentTime ? els.currentTime.textContent : null,
+      total: els.totalTime ? els.totalTime.textContent : null,
+      popupText: tip ? tip.textContent : null,
+      popupShown: shown,
+      popupRect: shown ? debugRect(tip) : null,
+      title: els.timeLabel ? els.timeLabel.title : null,
+      labelRect: debugRect(els.timeLabel),
+      labelHover: !!(els.timeLabel && els.timeLabel.matches(':hover')),
+      collapse: !!state.timeCollapse.enabled,
+      window: { innerWidth: window.innerWidth, innerHeight: window.innerHeight }
+    }
+  }
+
+  function debugPlaybackState() {
+    const timeline = state.timeline || []
+    const frame = state.playbackFrame
+    const start = state.playbackStartTs
+    const end = currentPlaybackEndTs()
+    const map = getTimeCollapseMap(start, end)
+    return {
+      mode: state.mode,
+      playing: !!state.playbackPlaying,
+      playerReady: !!state.playerReady,
+      // When this was read, on the renderer's monotonic clock (ms).
+      at: performance.now(),
+      clockTs: state.playbackClockTs,
+      // The clock on the timeline the user sees: compressed when collapse is on.
+      compMs: map ? realToCompressed(map, state.playbackClockTs) : state.playbackClockTs - start,
+      seq: frame && frame.seq !== undefined ? frame.seq : null,
+      lastSeq: timeline.length ? timeline[timeline.length - 1].seq : null,
+      pauseReason: state.selectionPaused ? 'selection' : null,
+      startTs: start,
+      endTs: end,
+      collapse: !!state.timeCollapse.enabled,
+      thresholdMs: state.timeCollapse.thresholdMs,
+      scrubber: els.scrubber ? Number(els.scrubber.value) : null,
+      timeline: timeline.map((item) => [item.seq, item.tsMs]),
+      active: !!(state.currentSession && state.currentSession.active)
+    }
+  }
+
+  // The app's own callers of a selection change (xterm's frames left out).
+  function debugStack() {
+    const limit = Error.stackTraceLimit
+    Error.stackTraceLimit = 60
+    const stack = String(new Error().stack || '')
+    Error.stackTraceLimit = limit
+    return stack
+      .split('\n')
+      .slice(3)
+      .filter((line) => !/xterm[^/]*\.js/.test(line))
+      .slice(0, 12)
+      .map((line) =>
+        line
+          .trim()
+          .replace(/^at /, '')
+          .replace(/ \(.*\/([^/]+)\)$/, ' ($1)')
+      )
+      .join(' < ')
+  }
+
+  function debugLogEvent(ev, extra = {}) {
+    const term = state.term
+    const has = !!(term && term.hasSelection())
+    debugKit.log.push({
+      t: Math.round(performance.now()),
+      ev,
+      has,
+      mode: state.mode,
+      playing: !!state.playbackPlaying,
+      ...extra
+    })
+    if (debugKit.log.length > 500) debugKit.log.shift()
+  }
+
+  // selection-log: selection changes (with the caller's stack), the terminal's
+  // mouse presses and context menu, and the menu opening, as they happen.
+  function debugStartSelectionLog() {
+    if (debugKit.logging || !state.term) return
+    debugKit.logging = true
+    // What the terminal sends as typed input (a mouse report, for one).
+    state.term.onData((data) => debugLogEvent('data', { data: JSON.stringify(data).slice(0, 40) }))
+    state.term.onSelectionChange(() => {
+      const term = state.term
+      debugLogEvent('selection-change', {
+        text: term && term.hasSelection() ? term.getSelection().slice(0, 80) : '',
+        stack: debugStack()
+      })
+    })
+    // On the window, in the capture phase: before xterm and the app see them.
+    for (const type of ['mousedown', 'mouseup', 'contextmenu']) {
+      window.addEventListener(
+        type,
+        (event) =>
+          debugLogEvent(type, {
+            button: event.button,
+            target: debugNodeKey(event.target),
+            inTerminal: !!(els.terminal && els.terminal.contains(event.target))
+          }),
+        true
+      )
+    }
+    if (els.terminalMenu) {
+      new window.MutationObserver(() => {
+        if (els.terminalMenu.hidden) return
+        debugLogEvent('menu-open', { copyEnabled: debugTerminalMenuState().copyEnabled })
+      }).observe(els.terminalMenu, { attributes: true, attributeFilter: ['hidden'] })
+    }
+  }
+
+  // popup-shows: hidden-to-shown changes of #timeLabelTip and the mutations on
+  // it, plus the rewrites of #timeLabel's title, since the last call.
+  function debugStartPopupWatch() {
+    if (debugKit.popupObserving) return
+    debugKit.popupObserving = true
+    const tip = document.getElementById('timeLabelTip')
+    if (tip) {
+      debugKit.popupShown = !tip.hidden
+      new window.MutationObserver((records) => {
+        for (const record of records) {
+          debugKit.popupMutations.push({
+            type: record.type,
+            attributeName: record.attributeName || null,
+            target: record.target === tip ? 'tip' : 'child'
+          })
+        }
+        if (debugKit.popupMutations.length > 500) debugKit.popupMutations.splice(0, 100)
+        const shown = !tip.hidden
+        if (shown && !debugKit.popupShown) debugKit.popupShows++
+        debugKit.popupShown = shown
+      }).observe(tip, { attributes: true, childList: true, characterData: true, subtree: true })
+    }
+    if (els.timeLabel) {
+      new window.MutationObserver((records) => {
+        debugKit.titleWrites += records.length
+      }).observe(els.timeLabel, { attributes: true, attributeFilter: ['title'] })
+    }
+  }
+
+  function debugTakePopupShows() {
+    const first = !debugKit.popupObserving
+    debugStartPopupWatch()
+    const answer = {
+      present: !!document.getElementById('timeLabelTip'),
+      first,
+      shows: debugKit.popupShows,
+      mutations: debugKit.popupMutations.slice(),
+      titleWrites: debugKit.titleWrites
+    }
+    debugKit.popupShows = 0
+    debugKit.popupMutations = []
+    debugKit.titleWrites = 0
+    return answer
+  }
+
+  // The computed value of a CSS colour variable, as `color` reports it.
+  function debugCssVarColor(name) {
+    const probe = document.createElement('span')
+    probe.style.color = `var(${name})`
+    probe.hidden = true
+    document.body.append(probe)
+    const color = window.getComputedStyle(probe).color
+    probe.remove()
+    return color
+  }
+
+  function debugStyleOf(selector) {
+    const el = selector ? document.querySelector(selector) : null
+    if (!el) return { found: false, selector: selector || null }
+    const styles = window.getComputedStyle(el)
+    const icon = el.querySelector('i')
+    const animations =
+      typeof el.getAnimations === 'function' ? el.getAnimations({ subtree: true }) : []
+    return {
+      found: true,
+      selector,
+      rect: debugRect(el),
+      className: el.className,
+      iconClass: icon ? icon.className : null,
+      animationName: styles.animationName,
+      color: styles.color,
+      iconColor: icon ? window.getComputedStyle(icon).color : null,
+      animations: animations.length,
+      runningAnimations: animations.filter((a) => a.playState === 'running').length,
+      selectionColor: debugCssVarColor('--terminal-selection')
+    }
+  }
+
   window.__zbtermDebugCommand = async (request = {}) => {
     const command = request.command || request.action
     const modal = () => {
@@ -8373,6 +8610,19 @@
     }
     if (command === 'triggers-add') {
       throw new Error('no trigger table: triggers-add needs NEW_SESSION_TRIGGERS')
+    }
+    // The 261110_timeline-fixes kit's commands: pure reads and recorders.
+    if (command === 'selection-state') return debugSelectionState()
+    if (command === 'terminal-menu-state') return debugTerminalMenuState()
+    if (command === 'time-labels') return debugTimeLabels()
+    if (command === 'playback-state') return debugPlaybackState()
+    if (command === 'popup-shows') return debugTakePopupShows()
+    if (command === 'style-of') return debugStyleOf(request.selector)
+    if (command === 'selection-log') {
+      debugStartSelectionLog()
+      const events = debugKit.log.slice()
+      debugKit.log = []
+      return { logging: debugKit.logging, events }
     }
     throw new Error(`Unknown debug renderer command: ${command}`)
   }
