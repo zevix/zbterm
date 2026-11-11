@@ -5,7 +5,7 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-verifying, 2026-11-11: P1–P4 built on branch `session-templates`. At P4's HEAD on host zr the kit is green (11/11), the sibling ui-chrome kit is green against the same package (8/8), every test file matches the P0 baseline (no new failure), lint exits 0 with the baseline's 95 warnings, and the packaged app boots. README, `docs/ARCHITECTURE.md` §8.4 and `docs/CORE-CONTRACT.md` describe the unrecorded mode and the templates. Next: the verifier, then read back the soft changes below; the `D-nn` row is Open (no `docs/decisions.md` on this machine).
+done, 2026-11-11: the user said "Done for now, we will do bug fixes later" (2026-11-11, in chat) after the soft changes were read back to them. Verifier report `acceptance/report--2026-11-11.md`: GREEN 11/11 at d4e8948 on `zr`. Still Open for the maintainer: the `D-nn` row (text below) and the `zbterm-core` minor bump.
 
 ## Done
 
