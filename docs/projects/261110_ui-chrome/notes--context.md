@@ -76,6 +76,8 @@ row, so the goal page stays one screen. Not a spec; nothing here is approved or 
 
 - 2026-11-11 (builder P2), R2 detail: "in the future" means a *later calendar day*. `formatWallClock` compares local calendar dates only, so a timestamp later today (e.g. a joined host's clock a few seconds ahead) shows `14:32:05`, not the full date; a timestamp on a later day gets the full date (`design.md` Q-2 / scenario 12 said "a future timestamp gets the full date"). The kit's future case (the next day) is unchanged and passes.
 
+- 2026-11-11 (builder P3), R5 detail: `.topbar-brand` uses `var(--panel-bg)`, the token `.sidebar` is actually drawn with (`design.md` *Collapsed DOM* names `--sidebar-bg`, which does not exist). The colour is the pane's, as R5 says; the kit compares the two computed colours.
+
 ## Superseded text
 
 None.

@@ -5,14 +5,21 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-in-progress, 2026-11-11: P2 is built. R1, R2 and R3 are green. R6 is green up to its last two lines, which need the side-pane toggle (P3): it fails on `jq -e '.sideCollapsed == true and .identityDotSettings == "set"'`. R4, R5, U1 and U2 still fail on their P1 lines. The next phase is P3 (side pane); R6 goes green with it.
+in-progress, 2026-11-11: P3 is built. All 8 scripts of this kit are green (R1–R6, U1, U2). The sibling kit fails each of its 11 scripts on the same line as in P2. The next phase is P4 (close).
 
 ## Next
 
-P3 (side pane): `toggleSidePane`/`applySidePane` (call `updateIdentityDot()` from it), the hamburger, Ctrl+Shift+B, the collapsed top bar, and the collapsed-only Identity and Theme menu items (give the Identity item `identity: identityDotState()`; place them before the separator). Then R4, R5, R6, U1, U2.
+P4: repackage, run `acceptance/run_all.sh` at HEAD, the test files one by one and `npm run lint`; the README UI text (Ctrl+Shift+B, the logo toggle) and `docs/debug_server_howto.md`; rename this file to `status--verifying.md`.
 
 ## Done
 
+- 2026-11-11 builder P3:
+  - `renderer/index.html`: the logo is `<button id="brandMark" class="brand-mark">` with the image and an `fa-bars` `.brand-hamburger`; CSS swaps them on `:hover`/`:focus-visible`. A new empty `<div class="topbar-brand">` starts `.topbar`. `.app.side-collapsed` gives the grid one column and one row (so the 780px single-column layout has no empty sidebar row), hides `.sidebar` and `.sidebar-resizer`, lets the top bar wrap (`height: auto`), shows `.topbar-brand` on `--panel-bg` (the sidebar's own background token; the design said `--sidebar-bg`, which does not exist), its children `flex: 0 0 auto` and New/Join `width: auto` (`#joinLink` is 100% in the pane, an id rule), and `.topbar-title { flex: 1 1 120px }` (the 120px basis is what wraps the actions to a second row in a narrow window).
+  - `renderer/app.js`: `SIDE_COLLAPSED_STORAGE_KEY = 'zbterm.sideCollapsed'` (app preference, `persistAppPreference`); `sidePaneHomes` (node → `{ parent, next }`); `isSidePaneCollapsed`, `isSidePaneHotkey` (exact modifiers, `key.toLowerCase() === 'b'`), `sidePaneBlocked` (a `.modal-overlay`/`.session-editor-overlay` or the profile picker), `toggleSidePane`, `applySidePane` (closes the three menus, moves logo, name, New, Join, Settings into `.topbar-brand` and back, sets the logo's title/aria-label "Hide|Show side pane (Ctrl+Shift+B)", calls `updateIdentityDot()`, refits with `fitAndResize()` on the next frame). The state is applied from localStorage before `init()` and again from the engine's app preference right after the theme in `init()`.
+  - Hotkey: first branch of the capture `keydown` on `document` (blocked → returns without `preventDefault`; else swallows and toggles, ignoring auto-repeat), and `term.attachCustomKeyEventHandler((e) => !isSidePaneHotkey(e))`.
+  - Settings menu while collapsed (`collapsedPaneItems`, before the separator): `field` "Identity…" carrying `identity: identityDotState()` (opens the wizard anchored to the settings button) and `check` "Dark theme".
+  - Width gotcha: the window `resize` handler in `wireSidebarResizer` returns early while collapsed, so a 0-wide hidden sidebar is never fed back into `--sidebar-width`; the resizer is hidden, so no drag or key can persist a width while collapsed.
+  - No kit corrections.
 - 2026-11-11 builder P2:
   - Settings menu items carry a `kind` (`check`, `field`, `separator`, `info`): `renderer/app.js::settingsMenuItems` (= `settingsPreferenceItems()`, a separator, then `info` "ZBTerm v<version>"), `renderSettingsMenuItem`, `settingsMenuItemKind` (an item without `kind` still works: `field: true` → field, else check). Every rendered row has `data-kind`; info rows are disabled; separators are `<div role="separator" class="context-menu-separator">`. The sibling's template section goes into `settingsMenuItems` before the separator.
   - `#version` is gone from the brand bar (span, `.version` CSS, `els.version`); the version is `state.appVersion` from `bridge.pkg()`.
@@ -30,6 +37,12 @@ P3 (side pane): `toggleSidePane`/`applySidePane` (call `updateIdentityDot()` fro
 - 2026-11-10 planner: project files, review (Sonnet, fresh context, 15 rows, answered), P0 baseline (`baseline.md`).
 
 ## Measured
+
+P3 logs: same dir, `p3_kit_ui/`, `p3_kit_templates/`, `p3_kit_ui_first/` (the first green run, before the New/Join width fix), `p3_wall-clock.log`, `p3_renderer-static.log`, `p3_lint.log`, `p3_package.log`; screenshots `p3_shot_expanded.png`, `p3_shot_collapsed.png`, `p3_shot_collapsed_hover.png`, `p3_shot_collapsed_menu.png`, `p3_shot_narrow_collapsed.png`, `p3_shot_narrow_expanded.png`.
+
+- Package → exit 0. `test/wall-clock.test.js` → `tests = 3/3 pass`, `asserts = 16/16 pass`, 0 skipped. `test/renderer-static.test.js` → `tests = 34/34 pass`, `asserts = 206/206 pass`, 0 skipped.
+- `npm run lint` → exit 0, 95 warnings, all `require-await` (`grep -c require-await p3_lint.log` → 95).
+- This kit → PASS all 8 (1 min 56 s wall). Sibling kit → 11 FAIL, each on the same `+` line as in P2 (1 min 2 s wall).
 
 P2 logs: same dir, `p2_kit_ui/`, `p2_kit_templates/`, `p2_kit_ui_r2/` (R2 alone after the TZ correction), `p2_wall-clock.log`, `p2_renderer-static.log`, `p2_lint.log`, `p2_package.log`.
 
@@ -85,9 +98,9 @@ None.
 
 ## Open
 
-- R6's last two lines click the logo and need the side pane collapsed: P2 cannot turn R6 green without building P3's toggle. Left red on that line for P3.
 - Sibling design's reference program says the U1 control is "found" by the on-disk grep; with encryption that cannot happen. The kit uses the header's wording ("in a recorded session's mirror") instead. Planner to confirm.
 
 ## Soft changes to read back
 
 - 2026-11-11 (P2), R2 detail: a timestamp later *today* shows the time only; only a later *day* gets the full date (`notes--context.md` *Soft changes*).
+- 2026-11-11 (P3), R5 detail: the collapsed top bar's brand cluster uses `--panel-bg` (the sidebar's real token), not the design's non-existent `--sidebar-bg` (`notes--context.md` *Soft changes*).

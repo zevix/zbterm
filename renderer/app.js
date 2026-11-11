@@ -84,6 +84,10 @@
   const JOIN_AUTO_PASTE_STORAGE_KEY = 'zbterm.join.autoPaste'
   const TIME_COLLAPSE_STORAGE_KEY = 'zbterm.collapseGaps'
   const SIDEBAR_WIDTH_STORAGE_KEY = 'zbterm.sidebarWidth'
+  // Install-wide (A-6): '1' while the side pane is collapsed.
+  const SIDE_COLLAPSED_STORAGE_KEY = 'zbterm.sideCollapsed'
+  // Each node the collapsed top bar borrowed → { parent, next } to put it back.
+  const sidePaneHomes = new Map()
   // Install-wide: the STUN/TURN servers for direct connections (D-11), a
   // comma-separated list of ICE URLs; empty leaves the flag, the environment
   // or the built-in list in charge.
@@ -339,6 +343,9 @@
     topbar: document.querySelector('.topbar'),
     app: document.querySelector('.app'),
     sidebar: document.querySelector('.sidebar'),
+    brandMark: document.getElementById('brandMark'),
+    brandName: document.querySelector('.brand-name'),
+    topbarBrand: document.querySelector('.topbar-brand'),
     sidebarResizer: document.getElementById('sidebarResizer'),
     terminalWrap: document.querySelector('.terminal-wrap'),
     terminal: document.getElementById('terminal'),
@@ -376,8 +383,10 @@
     showError(event.reason)
   })
 
-  // Applied before init() so the sidebar never flashes at its default width.
+  // Applied before init() so the sidebar never flashes at its default width,
+  // nor a collapsed pane at its expanded layout.
   restoreSidebarWidth()
+  applySidePane(window.localStorage.getItem(SIDE_COLLAPSED_STORAGE_KEY) === '1')
   init().catch(showError)
 
   async function init() {
@@ -386,6 +395,7 @@
     state.appVersion = String(bridge.pkg().version || '')
     await loadAppInfo()
     applyTheme(await storedThemePreference(), false)
+    applySidePane((await storedAppPreference(SIDE_COLLAPSED_STORAGE_KEY)) === '1')
     applyDevb(await preferredDevb(), false)
     await restoreZoomPreferences()
     await restoreIceServers()
@@ -770,6 +780,9 @@
       }
     }
     enablePausedTerminalSelection()
+    // The app's own chords never reach the program in the terminal, whichever
+    // listener sees the key first (U1); the document handler acts on them.
+    state.term.attachCustomKeyEventHandler((event) => !isSidePaneHotkey(event))
     state.term.parser.registerOscHandler(52, copyFromOsc52)
     els.terminal.addEventListener('keydown', noteTerminalGesture, true)
     els.terminal.addEventListener('click', () => {
@@ -1122,6 +1135,7 @@
     els.inputMode.addEventListener('click', guard(toggleInputMode))
     els.hdToggle.addEventListener('click', guard(toggleHd))
     els.themeToggle.addEventListener('click', toggleTheme)
+    if (els.brandMark) els.brandMark.addEventListener('click', toggleSidePane)
     if (els.status) {
       els.status.addEventListener('click', () => {
         if (!state.identityRefusal) return
@@ -1175,6 +1189,15 @@
     document.addEventListener(
       'keydown',
       (event) => {
+        if (isSidePaneHotkey(event)) {
+          // While a dialog is open the key is left alone: not acted on, and not
+          // swallowed either (U2).
+          if (sidePaneBlocked()) return
+          event.preventDefault()
+          event.stopPropagation()
+          if (!event.repeat) toggleSidePane()
+          return
+        }
         if (event.ctrlKey && !event.metaKey && !event.altKey) {
           const appZoom = appZoomKey(event)
           if (appZoom !== null) {
@@ -2614,6 +2637,7 @@
   function settingsMenuItems() {
     return [
       ...settingsPreferenceItems(),
+      ...collapsedPaneItems(),
       { kind: 'separator' },
       { kind: 'info', label: `ZBTerm v${state.appVersion || '?'}` }
     ]
@@ -2649,6 +2673,29 @@
         kind: 'field',
         label: 'STUN/TURN servers…',
         toggle: editIceServers
+      }
+    ]
+  }
+
+  // While the side pane is collapsed its identity and theme buttons are out
+  // of sight, so the menu carries them (R5); the Identity item has the dot.
+  function collapsedPaneItems() {
+    if (!isSidePaneCollapsed()) return []
+    return [
+      {
+        kind: 'field',
+        label: 'Identity…',
+        identity: identityDotState(),
+        toggle: () => {
+          closeSettingsMenu()
+          openIdentityWizard(els.settingsToggle).catch(showError)
+        }
+      },
+      {
+        kind: 'check',
+        label: 'Dark theme',
+        checked: state.theme === 'dark',
+        toggle: toggleTheme
       }
     ]
   }
@@ -5241,8 +5288,7 @@
     const dot = identityDotState()
     if (els.identitySetup) els.identitySetup.dataset.identity = dot
     if (els.settingsToggle) {
-      const app = els.app || document.querySelector('.app')
-      if (app && app.classList.contains('side-collapsed')) {
+      if (isSidePaneCollapsed()) {
         els.settingsToggle.dataset.identity = dot
       } else {
         delete els.settingsToggle.dataset.identity
@@ -7091,6 +7137,91 @@
     return { col, row: row + viewportY }
   }
 
+  // The side pane (R4, R5). Collapsed, `.app.side-collapsed` hides the
+  // sidebar and its resizer, and the brand cluster (logo, name, New, Join,
+  // Settings) is moved into the top bar's `.topbar-brand`; expanding puts each
+  // node back where it was (sidePaneHomes). Moving, not cloning, keeps one
+  // set of listeners.
+  function isSidePaneCollapsed() {
+    return !!(els.app && els.app.classList.contains('side-collapsed'))
+  }
+
+  // Ctrl+Shift+B: exact modifiers, and the key's letter whatever the layout's
+  // case (Caps Lock), like Ctrl+R.
+  function isSidePaneHotkey(event) {
+    return (
+      !!event &&
+      event.ctrlKey &&
+      event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      String(event.key || '').toLowerCase() === 'b'
+    )
+  }
+
+  // A dialog (or the profile picker) owns the window: the toggle is refused.
+  function sidePaneBlocked() {
+    if (document.querySelector('.modal-overlay, .session-editor-overlay')) return true
+    return !!(els.profilePicker && !els.profilePicker.hidden)
+  }
+
+  function sidePaneMovedNodes() {
+    return [els.brandMark, els.brandName, els.newSession, els.joinLink, els.settingsToggle].filter(
+      Boolean
+    )
+  }
+
+  function toggleSidePane() {
+    if (sidePaneBlocked()) return false
+    const collapsed = !isSidePaneCollapsed()
+    applySidePane(collapsed)
+    persistAppPreference(SIDE_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0')
+    return true
+  }
+
+  function applySidePane(collapsed) {
+    if (!els.app || !els.topbarBrand) return
+    collapsed = !!collapsed
+    if (collapsed === isSidePaneCollapsed() && (!collapsed || sidePaneHomes.size)) return
+    // Menus are anchored to buttons that are about to move.
+    closeSettingsMenu()
+    closeSessionMenu()
+    closeTerminalMenu()
+    if (collapsed) {
+      for (const node of sidePaneMovedNodes()) {
+        if (!sidePaneHomes.has(node)) {
+          sidePaneHomes.set(node, { parent: node.parentNode, next: node.nextSibling })
+        }
+        els.topbarBrand.append(node)
+      }
+    } else {
+      // In reverse, so each node's old next sibling is back in place first.
+      for (const node of sidePaneMovedNodes().reverse()) {
+        const home = sidePaneHomes.get(node)
+        if (!home) continue
+        const next = home.next && home.next.parentNode === home.parent ? home.next : null
+        home.parent.insertBefore(node, next)
+      }
+      sidePaneHomes.clear()
+    }
+    els.app.classList.toggle('side-collapsed', collapsed)
+    if (els.brandMark) {
+      const label = `${collapsed ? 'Show' : 'Hide'} side pane (Ctrl+Shift+B)`
+      els.brandMark.title = label
+      els.brandMark.setAttribute('aria-label', label)
+      els.brandMark.setAttribute('aria-expanded', collapsed ? 'false' : 'true')
+    }
+    updateIdentityDot()
+    // The terminal's column count changed with the layout.
+    window.requestAnimationFrame(() => {
+      try {
+        fitAndResize()
+      } catch (err) {
+        console.warn('refit after side pane toggle failed', err)
+      }
+    })
+  }
+
   function clampSidebarWidth(width) {
     if (!Number.isFinite(width)) return SIDEBAR_WIDTH_DEFAULT
     // Never let the sidebar squeeze the terminal below a usable width.
@@ -7221,7 +7352,8 @@
     window.addEventListener('resize', () => {
       // Below 780px the sidebar spans the full width, so its measured size is
       // not the drag width and must not be fed back into the CSS variable.
-      if (window.innerWidth <= 780) return
+      // A collapsed pane measures 0 wide: that is not a width either.
+      if (window.innerWidth <= 780 || isSidePaneCollapsed()) return
       if (Number.isFinite(state.sidebarWidthPreferred)) {
         applySidebarWidth(state.sidebarWidthPreferred)
       } else {

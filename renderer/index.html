@@ -228,6 +228,97 @@
         object-fit: contain;
       }
 
+      /* The logo is the side pane's toggle (R4): a button that turns into a
+         hamburger on hover and keyboard focus. */
+      .brand-mark {
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      .brand-mark .brand-hamburger {
+        display: none;
+        font-size: 24px;
+        line-height: 1;
+      }
+
+      .brand-mark:hover,
+      .brand-mark:focus-visible {
+        background: var(--control-bg);
+      }
+
+      .brand-mark:hover img,
+      .brand-mark:focus-visible img {
+        display: none;
+      }
+
+      .brand-mark:hover .brand-hamburger,
+      .brand-mark:focus-visible .brand-hamburger {
+        display: inline-block;
+      }
+
+      /* Collapsed side pane (R5): the sidebar is gone, the main column fills
+         the window, and the top bar starts with the brand cluster the pane
+         used to hold (applySidePane moves the nodes in and back out). */
+      .topbar-brand {
+        display: none;
+      }
+
+      .app.side-collapsed {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr);
+      }
+
+      .app.side-collapsed .sidebar,
+      .app.side-collapsed .sidebar-resizer {
+        display: none;
+      }
+
+      .app.side-collapsed .topbar {
+        flex-wrap: wrap;
+        height: auto;
+        row-gap: 12px;
+      }
+
+      .app.side-collapsed .topbar-brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 0 0 auto;
+        align-self: stretch;
+        min-height: calc(var(--header-height) - 1px);
+        margin: -10px 0 -10px -12px;
+        padding: 0 12px;
+        border-right: 1px solid var(--border);
+        background: var(--panel-bg);
+      }
+
+      .app.side-collapsed .topbar-brand .brand-name {
+        font-size: 22px;
+        font-weight: 650;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      /* Minimal width, with their text (#joinLink is 100% wide in the pane). */
+      .app.side-collapsed .topbar-brand > * {
+        flex: 0 0 auto;
+      }
+
+      .app.side-collapsed .topbar-brand #newSession,
+      .app.side-collapsed .topbar-brand #joinLink {
+        width: auto;
+      }
+
+      .app.side-collapsed .topbar-title {
+        flex: 1 1 120px;
+      }
+
       .brand-actions {
         display: flex;
         align-items: center;
@@ -2084,9 +2175,18 @@
       <aside class="sidebar">
         <div class="brand">
           <h1>
-            <span class="brand-mark" aria-hidden="true"
-              ><img src="../build/icon/icon-64x64.png" alt=""
-            /></span>
+            <button
+              id="brandMark"
+              class="brand-mark"
+              type="button"
+              title="Hide side pane (Ctrl+Shift+B)"
+              aria-label="Hide side pane (Ctrl+Shift+B)"
+            >
+              <img src="../build/icon/icon-64x64.png" alt="" /><i
+                class="fa-solid fa-bars brand-hamburger"
+                aria-hidden="true"
+              ></i>
+            </button>
             <span class="brand-name">ZBTerm</span>
           </h1>
           <span class="brand-actions">
@@ -2135,6 +2235,7 @@
       </aside>
       <main class="main">
         <header class="topbar">
+          <div class="topbar-brand"></div>
           <div class="topbar-title">
             <h2 id="title">No session selected</h2>
             <div id="meta" class="meta"></div>
