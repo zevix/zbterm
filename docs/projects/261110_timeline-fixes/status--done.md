@@ -5,7 +5,7 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-verifying, 2026-11-11: P1, P2, P3 and P4 (close) done; ready for the verifier. At the P4 package the kit is 9/9 PASS and the ui-chrome kit 8/8 PASS. R5's running check now shows 17 s for 17 s real in four runs of four (three single runs plus the kit run), where before P4 it showed 16 s in three runs of three. Three soft changes wait to be read back to the user (*Soft changes to read back*).
+done, 2026-11-11: the user said "Done for now, we will do bug fixes later" (2026-11-11, in chat) after the three soft changes were read back to them. Verifier report `acceptance/report--2026-11-11.md`: GREEN 9/9 at e487c53 on `zr`. The Open items below are deferred to a later bug-fix project.
 
 ## Done
 
