@@ -54,6 +54,8 @@
     "vendor:assets": "node scripts/vendor-assets.js",
     "postinstall": "node bin/lib/postinstall.js",
     "prepack": "node scripts/vendor-assets.js",
+    "prepackage": "node scripts/vendor-assets.js",
+    "premake": "node scripts/vendor-assets.js",
     "pretest": "node scripts/vendor-assets.js",
     "prestart": "node scripts/vendor-assets.js",
     "test": "brittle-node test/*.test.js test/backends/*.test.js",
