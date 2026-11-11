@@ -2374,6 +2374,13 @@
               'session-editor-default'
             )
           : null
+      // Ticked by default; Copy takes it from its source (design A-3).
+      // 261110_session-templates P1 wires it to the engine; P2 adds the rest
+      // of the dialog (greying Copy history and Share when unticked).
+      const recordInput =
+        options.mode === 'new' || options.mode === 'copy'
+          ? addCheck('Record session', session.record !== false, 'session-editor-record')
+          : null
       // Off every time: copying history is never the implied choice.
       const copyHistoryInput =
         options.mode === 'copy' ? addCheck('Copy history', false, 'session-editor-history') : null
@@ -2440,6 +2447,7 @@
           cwd: options.launch ? cwd.value.trim() : undefined,
           command: options.launch ? command.value.trim() : undefined,
           launch: !!options.launch,
+          record: recordInput ? recordInput.checked : true,
           isDefault: defaultInput ? defaultInput.checked : false,
           copyHistory: copyHistoryInput ? copyHistoryInput.checked : false,
           share: shareInput && shareInput.checked && shareForm ? { ...shareForm.settings } : null
@@ -2938,6 +2946,8 @@
       cwd: profile.cwd || undefined,
       command: profile.command || undefined,
       copyHistoryFrom: profile.copyHistoryFrom || undefined,
+      // Only an unrecorded session says so; absent means recorded.
+      record: profile.record === false ? false : undefined,
       cols: dims.cols,
       rows: dims.rows
     })

@@ -429,6 +429,12 @@ class ShareManager extends EventEmitter {
     // `opts.backend` names the backend to share over; the default otherwise.
     // Resolved before anything is recorded, so a build without that backend
     // (or with none) leaves no half-made share behind.
+    // An unrecorded session (session.create `record: false`) is live only:
+    // sharing replicates the recording, so there is nothing to share.
+    const unrecorded = this.engine.sessions.get(sessionId)
+    if (unrecorded && unrecorded.record === false) {
+      throw new EngineError(CODES.E_NOT_RECORDED, 'session is not recorded')
+    }
     const backend = this._backendNow(opts.backend)
     const runtime = this.engine.sessions.get(sessionId)
     if (!runtime) throw new EngineError(CODES.E_INTERNAL, 'Only live sessions can be shared')

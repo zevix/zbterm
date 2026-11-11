@@ -350,6 +350,11 @@ class SessionStore {
       rows: info.rows || 30,
       hostDeviceKey: b4a.toString(this.localDevice.publicKey, 'hex')
     }
+    // An unrecorded session (session.create `record: false`) keeps this
+    // header and its first resize only; appendPlain refuses its output. The
+    // flag lives in the JSON `value` beside the encoded info, which it does
+    // not change (the wire format has no field for it).
+    if (info.record === false) fullInfo.record = false
     const envelope = sealEnvelope(this.localDevice.publicKey, {
       version: VERSION,
       sessionId: this.sessionId,
@@ -386,6 +391,7 @@ class SessionStore {
   // already copied is ever written to disk.
   beginHistoryCopy(length, timeline = null) {
     if (this.remote) throw new EngineError(CODES.E_INTERNAL, 'Remote sessions are read-only')
+    this._assertRecorded()
     if (this.log.length) {
       throw new EngineError(CODES.E_INTERNAL, 'History can only be copied into a new session')
     }
@@ -400,6 +406,7 @@ class SessionStore {
   // like the original and the source's snapshots stay valid for it.
   async appendCopied(packets) {
     if (this.remote) throw new EngineError(CODES.E_INTERNAL, 'Remote sessions are read-only')
+    this._assertRecorded()
     if (!packets.length) return this.log.length
     const start = this.log.length
     const blocks = []
@@ -762,8 +769,22 @@ class SessionStore {
     })
   }
 
+  // False for a session created with `record: false`.
+  get recorded() {
+    return !(this.info && this.info.record === false)
+  }
+
+  // The store's own guard: whatever the engine skips, no output of an
+  // unrecorded session reaches its log.
+  _assertRecorded() {
+    if (!this.recorded) {
+      throw new EngineError(CODES.E_NOT_RECORDED, 'session is not recorded')
+    }
+  }
+
   async appendPlain(plain) {
     if (this.remote) throw new EngineError(CODES.E_INTERNAL, 'Remote sessions are read-only')
+    if (plain.kind !== PacketKind.RESIZE) this._assertRecorded()
     const seq = this.log.length + 1
     await this.log.append(this._seal(seq, plain))
     this.timeline.push({ seq, tsMs: plain.tsMs, hd: !!plain.hd })

@@ -350,6 +350,13 @@ class SessionEngine extends EventEmitter {
       throw new EngineError(CODES.E_INTERNAL, 'PTY host does not support attach mode')
     }
     const copyFrom = typeof opts.copyHistoryFrom === 'string' ? opts.copyHistoryFrom : ''
+    // `record: false` runs the session live only: its store keeps a header
+    // and the first resize, and no snapshot, archive screen, share or player
+    // ever sees its output. Fixed at creation (updateSession refuses it).
+    const record = opts.record !== false
+    if (!record && copyFrom) {
+      throw new EngineError(CODES.E_INVALID, 'An unrecorded session cannot take copied history')
+    }
     // Only the source's length and timeline are read up front; the packets are
     // copied in the background once the shell is running (see _copyHistory).
     const plan = copyFrom ? await this._planHistoryCopy(copyFrom, now) : null
@@ -357,15 +364,18 @@ class SessionEngine extends EventEmitter {
     const store = await SessionStore.create(
       this.paths.corestore,
       this.localDevice,
-      { name, createdAt: startedAt, cols, rows },
+      { name, createdAt: startedAt, cols, rows, ...(record ? {} : { record: false }) },
       // A copy records its first resize after the copied history.
       { initialResize: !plan }
     )
-    const snapshot = new SnapshotCache(this.paths.snapshots, store.sessionId, this.localDevice)
+    // An unrecorded session has no snapshot cache (null): nothing to cache.
+    const snapshot = record
+      ? new SnapshotCache(this.paths.snapshots, store.sessionId, this.localDevice)
+      : null
     let runtime
     let beginCopy = null
     try {
-      await snapshot.ready()
+      if (snapshot) await snapshot.ready()
       runtime = this._createRuntime(store.sessionId, store, snapshot, cols, rows, mode)
       runtime.launch = launch
       if (plan) store.beginHistoryCopy(plan.length, plan.timeline)
@@ -373,7 +383,7 @@ class SessionEngine extends EventEmitter {
     } catch (err) {
       // Nothing was spawned: leave no session behind.
       await store.delete().catch(() => {})
-      await snapshot.clear().catch(() => {})
+      if (snapshot) await snapshot.clear().catch(() => {})
       throw err
     }
     if (plan) {
@@ -398,7 +408,12 @@ class SessionEngine extends EventEmitter {
     }
     this.sessions.set(store.sessionId, runtime)
     try {
-      return await this._registerCreatedSession(store, runtime, { name, now, startedAt, launch })
+      return await this._registerCreatedSession(store, runtime, {
+        name,
+        now,
+        startedAt,
+        launch: record ? launch : { ...launch, record: false }
+      })
     } finally {
       if (beginCopy) beginCopy()
     }
@@ -440,6 +455,9 @@ class SessionEngine extends EventEmitter {
     }
     if (entry.owner === 'joined' || this.remoteSessions.has(sourceId)) {
       throw new EngineError(CODES.E_INTERNAL, 'History of a joined session cannot be copied')
+    }
+    if (entry.record === false) {
+      throw new EngineError(CODES.E_NOT_RECORDED, 'session is not recorded')
     }
     const live = this.sessions.get(sourceId)
     if (live && live.historyCopy) {
@@ -706,6 +724,16 @@ class SessionEngine extends EventEmitter {
       const store = await SessionStore.open(this.paths.corestore, sessionId, this.localDevice)
       let runtime = null
       try {
+        if (!store.recorded) {
+          // Unrecorded: there is no history to restore, so it relaunches on
+          // an empty screen at its last geometry, still unrecorded.
+          runtime = this._createRuntime(sessionId, store, null, store.info.cols, store.info.rows)
+          runtime.fontSize = isFontSize(entry.fontSize) ? entry.fontSize : null
+          runtime.launch = launchOptions(entry)
+          this.sessions.set(sessionId, runtime)
+          this._startRuntimePty(sessionId, runtime)
+          return runtime
+        }
         const snapshot = new SnapshotCache(this.paths.snapshots, sessionId, this.localDevice)
         await snapshot.ready()
         const base = await restoreBase(store, snapshot)
@@ -757,7 +785,7 @@ class SessionEngine extends EventEmitter {
       rows: runtime.rows,
       fontSize: runtime.fontSize,
       active: true,
-      restoring: runtime.restoring,
+      restoring: !!runtime.restoring,
       endedAt: null,
       exit: null,
       info: store.info,
@@ -894,7 +922,7 @@ class SessionEngine extends EventEmitter {
       await this._withStoreLock(sessionId, async () => {
         await this._closePlayerNow(sessionId)
         await runtime.store.delete()
-        await runtime.snapshot.clear()
+        if (runtime.snapshot) await runtime.snapshot.clear()
       })
       runtime.mirror.dispose()
       runtime.archiveMirror.dispose()
@@ -962,6 +990,10 @@ class SessionEngine extends EventEmitter {
     if (!sessionId) throw new EngineError(CODES.E_INTERNAL, 'Session id is required')
     const entry = await this.catalog.get(sessionId)
     if (!entry) throw new EngineError(CODES.E_INTERNAL, 'Session was not found')
+    // Recording is fixed at creation; restating the current value is no change.
+    if ('record' in patch && (patch.record !== false) !== (entry.record !== false)) {
+      throw new EngineError(CODES.E_INVALID, 'Recording cannot be changed after a session starts')
+    }
     const name = typeof patch.name === 'string' ? patch.name.trim() : ''
     if (name && name !== entry.name) await this.renameSession(sessionId, name)
     if (entry.owner !== 'joined' && ('cwd' in patch || 'command' in patch)) {
@@ -983,7 +1015,7 @@ class SessionEngine extends EventEmitter {
       if (runtime) {
         item.active = runtime.active
         item.length = runtime.store.log.length
-        item.snapshotCount = runtime.snapshot.index.snapshots.length
+        item.snapshotCount = runtime.snapshot ? runtime.snapshot.index.snapshots.length : 0
         Object.assign(item, this.share.status(item.sessionId))
         item.inputMode = runtime.inputMode || 'host'
       } else if (this.remoteSessions.has(item.sessionId)) {
@@ -1068,6 +1100,8 @@ class SessionEngine extends EventEmitter {
     // what it is told and never resizes a terminal it does not own.
     if (runtime.mode !== 'attach') runtime.pty.resize(cols, rows)
     runtime.mirrorQueue = runtime.mirrorQueue.then(() => runtime.mirror.resize(cols, rows))
+    // Unrecorded: only the live screen follows; nothing is logged or cached.
+    if (!this._recorded(runtime)) return true
     const tsMs = Date.now()
     runtime.appendQueue = runtime.appendQueue
       .then(() => runtime.store.appendResize(cols, rows, { hd: runtime.hd, tsMs }))
@@ -1105,9 +1139,11 @@ class SessionEngine extends EventEmitter {
       await runtime.appendQueue
       runtime.hd = false
       const result = await runtime.store.removeHd()
-      await runtime.snapshot.clear()
-      runtime.archiveMirror.dispose()
-      runtime.archiveMirror = await buildArchiveMirror(runtime.store)
+      if (this._recorded(runtime)) {
+        await runtime.snapshot.clear()
+        runtime.archiveMirror.dispose()
+        runtime.archiveMirror = await buildArchiveMirror(runtime.store)
+      }
       runtime.archiveStale = false
       runtime.lastSnapshotBytes = runtime.bytesSeen
       this.emit('session:hd-changed', { sessionId, hd: false })
@@ -1220,7 +1256,7 @@ class SessionEngine extends EventEmitter {
         runtime.archiveStale = false
         runtime.lastSnapshotAt = Date.now()
         runtime.lastSnapshotBytes = runtime.bytesSeen
-        await runtime.snapshot.clear()
+        if (runtime.snapshot) await runtime.snapshot.clear()
         this.share.broadcastTimeline(sessionId)
         this.emit('session:list-changed', await this.listSessions())
         return { timeline: [], active: true }
@@ -1248,6 +1284,9 @@ class SessionEngine extends EventEmitter {
     const runtime = {
       store,
       snapshot,
+      // False for an unrecorded session: the one guard every recording path
+      // checks (see _recorded).
+      record: store.recorded,
       pty: null,
       mode,
       mirror: new TerminalFrame(cols, rows, { scrollback: LIVE_SCROLLBACK }),
@@ -1299,6 +1338,7 @@ class SessionEngine extends EventEmitter {
   }
 
   async openPlayer(sessionId) {
+    await this._assertRecorded(sessionId)
     // Outside the lock: it takes the other sessions' locks, and two opens
     // doing that inside their own would deadlock.
     await this._closeOtherPlayers(sessionId)
@@ -1655,9 +1695,13 @@ class SessionEngine extends EventEmitter {
     if (runtime.resumed && runtime.restoring && !runtime.fullScreenOutput) {
       runtime.fullScreenOutput = isFullScreenOutput(data)
     }
+    const record = this._recorded(runtime)
+    // pendingBytes is the renderer's flow (lowered by its acks) and
+    // mirrorBacklog the live screen's; appendBacklog counts only what is
+    // queued for the store, so an unrecorded session never adds to it.
     runtime.pendingBytes += data.byteLength
     runtime.mirrorBacklog += data.byteLength
-    runtime.appendBacklog += data.byteLength
+    if (record) runtime.appendBacklog += data.byteLength
     this._updateFlow(sessionId, runtime)
     this.emit('session:data', {
       sessionId,
@@ -1665,9 +1709,11 @@ class SessionEngine extends EventEmitter {
       hd: !!runtime.hd,
       data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
     })
-    this.share.broadcastData(sessionId, data, { hd: runtime.hd })
-    runtime.packetBuffer.push(data)
-    this._schedulePacketFlush(sessionId, data)
+    if (record) {
+      this.share.broadcastData(sessionId, data, { hd: runtime.hd })
+      runtime.packetBuffer.push(data)
+      this._schedulePacketFlush(sessionId, data)
+    }
     runtime.mirrorPending.push(data)
     runtime.mirrorQueue = runtime.mirrorQueue.then(async () => {
       try {
@@ -1679,7 +1725,7 @@ class SessionEngine extends EventEmitter {
       }
     })
     runtime.bytesSeen += data.byteLength
-    this._maybeSnapshot(sessionId)
+    if (record) this._maybeSnapshot(sessionId)
   }
 
   _flushPacketBuffer(sessionId) {
@@ -1689,7 +1735,7 @@ class SessionEngine extends EventEmitter {
     runtime.flushTimer = null
     runtime.firstBufferedAt = 0
     const chunks = runtime.packetBuffer.splice(0)
-    if (!chunks.length) return
+    if (!chunks.length || !this._recorded(runtime)) return
     const data = Buffer.concat(chunks)
     const hd = runtime.hd
     // Output held behind a restore or history copy keeps the time it was
@@ -1769,6 +1815,11 @@ class SessionEngine extends EventEmitter {
       this._flushPacketBuffer(sessionId)
       await runtime.appendQueue.catch(() => {})
       await this._writeSnapshot(sessionId)
+      // An unrecorded session logs no resizes: its last geometry is kept in
+      // the info instead, for Extend to relaunch at.
+      if (!this._recorded(runtime)) {
+        await runtime.store.updateInfo({ cols: runtime.cols, rows: runtime.rows })
+      }
       await runtime.store.finalize()
       await this.catalog.update(sessionId, {
         active: false,
@@ -1801,7 +1852,7 @@ class SessionEngine extends EventEmitter {
 
   _maybeSnapshot(sessionId, force = false) {
     const runtime = this.sessions.get(sessionId)
-    if (!runtime) return
+    if (!runtime || !this._recorded(runtime)) return
     const enoughBytes = runtime.bytesSeen - runtime.lastSnapshotBytes >= SNAPSHOT_BYTES
     const enoughTime = Date.now() - runtime.lastSnapshotAt >= SNAPSHOT_MS
     if (!force && !enoughBytes && !enoughTime) return
@@ -1817,7 +1868,7 @@ class SessionEngine extends EventEmitter {
 
   async _writeSnapshot(sessionId) {
     const runtime = this.sessions.get(sessionId)
-    if (!runtime) return
+    if (!runtime || !this._recorded(runtime)) return
     this._flushPacketBuffer(sessionId)
     const snapshotQueue = runtime.appendQueue
     await snapshotQueue
@@ -1827,6 +1878,25 @@ class SessionEngine extends EventEmitter {
     await runtime.snapshot.write(frame.seq, frame)
     runtime.lastSnapshotAt = Date.now()
     runtime.lastSnapshotBytes = runtime.bytesSeen
+  }
+
+  // The one guard of an unrecorded session (session.create `record: false`).
+  _recorded(runtime) {
+    return !(runtime && runtime.record === false)
+  }
+
+  // Playback, sharing and history copy refuse an unrecorded session, live or
+  // ended: E_NOT_RECORDED.
+  async _assertRecorded(sessionId) {
+    const runtime = this.sessions.get(sessionId)
+    let recorded = true
+    if (runtime) {
+      recorded = this._recorded(runtime)
+    } else {
+      const entry = await this.catalog.get(sessionId).catch(() => null)
+      recorded = !(entry && entry.record === false)
+    }
+    if (!recorded) throw new EngineError(CODES.E_NOT_RECORDED, 'session is not recorded')
   }
 
   _live(sessionId) {

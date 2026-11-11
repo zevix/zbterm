@@ -38,3 +38,5 @@ The checks drive a scratch packaged app under `uisolate`. Reference program: `ac
 ## Approval
 
 Approved 2026-11-11 by the user ("approved" in chat, covering all three projects), file at sha256 3eae9d24681e (the file as approved, before this line).
+
+2026-11-11, P1 builder (planner decision): U1's check keeps the on-disk grep for the unrecorded marker; its control reads the recorded marker through playback and it checks that the unrecorded log does not grow across the flood, because recorded history is encrypted on disk (`notes--context.md` *Soft changes*). The approved text above is unchanged.

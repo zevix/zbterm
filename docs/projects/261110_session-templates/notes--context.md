@@ -45,7 +45,13 @@ Verbatim, dated 2026-11-10, in `../261110_ui-chrome/notes--context.md` *The user
 
 ## Soft changes
 
-None.
+Dated, old → new, why. Read back to the user before "done".
+
+- 2026-11-11 (P1, planner decision), U1 check detail. Old (`design.md` *The reference program*): "As a control, the same marker in a recorded session must be found" by the on-disk `grep -rF`. New: the control reads the recorded session's marker back through playback (`player.open` + `player.seek`, the mirror the recording rebuilds), and U1 also checks that the unrecorded session's log does not grow across the 5 MB flood (`GET /sessions/<id>/stats` log length, before = after). Why: recorded history and snapshots are encrypted on disk, so the marker of a recorded session is never in any file either (`../261110_ui-chrome/status--done.md` *Gotchas*: `grep -rlF` → none); the on-disk control could never pass. The on-disk grep for the unrecorded marker is unchanged.
+- 2026-11-11 (P1), R2/U1 mechanism detail. Old (`design.md` *Unrecorded runtime*): "`_recordLiveData` does not add to `appendBacklog`/`pendingBytes`". New: it does not add to `appendBacklog`; it still adds to `pendingBytes`. Why: `pendingBytes` is the renderer's flow window, lowered by the renderer's `session.ack` for every byte it is sent, recorded or not; it cannot stall, and dropping it would remove the only backpressure between a flood and the renderer. `appendBacklog` (the store's queue) is the counter that would never drain (review row 1). Covered by `test/engine-unrecorded.test.js` "a 5 MB flood …" (`appendBacklog` stays 0, `pendingBytes` back to 0 after acks, the PTY is not left paused).
+- 2026-11-11 (P1), U1 mechanism detail. Old: "After the header and first resize the log takes nothing more", with no word on where the geometry lives. New: the engine logs no resize after the first (the store itself refuses every non-resize packet, `E_NOT_RECORDED`), and on exit the last `cols`/`rows` go into the store's info, which Extend relaunches at. Why: Extend of a recorded session takes its geometry from the snapshot or the replayed log; an unrecorded one has neither.
+- 2026-11-11 (P1), *Refuses* detail. `session.create` with `record: false` and `copyHistoryFrom` answers `E_INVALID` (copied history would be recorded); `session.update` with the session's current `record` value is accepted as no change, and only a different value is refused with `E_INVALID`. `E_INVALID` and `E_NOT_RECORDED` are new `CODES`. Why: the design names the codes but not these two cases; restating the value lets a dialog send its whole form.
+- 2026-11-11 (P1), *Unrecorded runtime* detail. "`archiveMirror` is not built": no archive replay is built; the runtime keeps the empty in-memory `TerminalFrame` every runtime starts with, never written. Why: every teardown path disposes it; an object that is never written holds nothing and needs no null checks.
 
 ## Superseded text
 
