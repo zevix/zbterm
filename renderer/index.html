@@ -895,6 +895,40 @@
         min-width: 0;
       }
 
+      /* A box that does not apply (Record unticked, no trigger chosen). */
+      .session-editor .modal-check.disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
+      /* Advanced: the template choice, folded away by default. */
+      .session-editor-advanced {
+        grid-column: 1 / -1;
+        display: grid;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .session-editor-advanced > summary {
+        color: var(--soft-text);
+        font-size: 13px;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .session-editor-advanced .session-editor-label {
+        white-space: normal;
+      }
+
+      .session-editor-advanced select {
+        width: 100%;
+        min-width: 0;
+      }
+
+      .session-editor-advanced .modal-check {
+        margin-top: 0;
+      }
+
       .session-editor-share-options[hidden] {
         display: none;
       }
