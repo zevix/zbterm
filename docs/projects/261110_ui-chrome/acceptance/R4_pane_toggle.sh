@@ -10,5 +10,33 @@ need "$ZBUI_APP" "packaged build under test"
 need xdotool "real key presses on the private display, not synthetic events"
 # A skip is a FAIL: a missing precondition exits 75 "cannot run here"; never `exit 0` around it.
 set -x
-# Body: written in P1 from this header; start_app, then drive with cmd/state, assert with jq -e / grep -F.
-echo "not written yet" >&2; exit 1
+start_app
+logo_center() { jq -r '.brandMark.rect | "\((.left + .width / 2) | floor) \((.top + .height / 2) | floor)"'; }
+s="$(state)"
+jq -e '.sideCollapsed == false' <<<"$s"
+read -r x y < <(logo_center <<<"$s")
+# Hover: the real pointer on the logo swaps it for the hamburger.
+mouse_to "$x" "$y"
+s="$(state)"
+jq '.brandMark' <<<"$s"
+jq -e '.brandMark.hover == true' <<<"$s"
+jq -e '.brandMark.hamburger == true' <<<"$s"
+jq -e '.brandMark.title | test("^Hide side pane \\(Ctrl\\+Shift\\+B\\)$")' <<<"$s"
+# A real click collapses the pane, and again expands it.
+click_at "$x" "$y"
+s="$(state)"
+jq -e '.sideCollapsed == true' <<<"$s"
+jq -e '.brandMark.title | test("^Show side pane \\(Ctrl\\+Shift\\+B\\)$")' <<<"$s"
+read -r x y < <(logo_center <<<"$s")
+click_at "$x" "$y"
+jq -e '.sideCollapsed == false' <<<"$(state)"
+# Ctrl+Shift+B, a real key press, toggles it too.
+key ctrl+shift+b
+jq -e '.sideCollapsed == true' <<<"$(state)"
+# The state survives a restart.
+restart_app
+jq -e '.sideCollapsed == true' <<<"$(state)"
+key ctrl+shift+b
+jq -e '.sideCollapsed == false' <<<"$(state)"
+restart_app
+jq -e '.sideCollapsed == false' <<<"$(state)"

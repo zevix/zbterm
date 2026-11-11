@@ -7740,6 +7740,220 @@
     return debugModalState()
   }
 
+  // The acceptance kits' read of the window chrome (docs/projects/261110_ui-chrome
+  // design, *Debug commands*). Every field is read off the DOM as it is: a
+  // feature that is not built yet reads as absent (null, false, []), so a kit
+  // fails on its assertion rather than on a missing command.
+  function debugColor(el, prop = 'color', pseudo = null) {
+    if (!el) return null
+    return window.getComputedStyle(el, pseudo)[prop] || null
+  }
+
+  // The colour of a dot drawn by ::before or ::after, whichever has content.
+  function debugDotColor(el) {
+    if (!el) return null
+    for (const pseudo of ['::after', '::before']) {
+      const style = window.getComputedStyle(el, pseudo)
+      if (style.content && style.content !== 'none' && style.content !== 'normal') {
+        return style.backgroundColor || null
+      }
+    }
+    return null
+  }
+
+  function debugNodeKey(el) {
+    if (!el) return null
+    return el.id || (el.classList[0] ? `.${el.classList[0]}` : el.tagName.toLowerCase())
+  }
+
+  function debugFieldLabel(el, root) {
+    const wrapping = el.closest('label')
+    if (wrapping && root.contains(wrapping)) return wrapping.textContent.trim()
+    if (el.id) {
+      const label = root.querySelector(`label[for="${el.id}"]`)
+      if (label) return label.textContent.trim()
+    }
+    return el.getAttribute('aria-label') || el.placeholder || ''
+  }
+
+  function debugFields(root) {
+    return Array.from(root.querySelectorAll('input, select, textarea')).map((el) => {
+      const field = {
+        name: el.name || el.id || null,
+        label: debugFieldLabel(el, root),
+        type: el.type || el.tagName.toLowerCase(),
+        value: el.value,
+        disabled: !!el.disabled
+      }
+      if (el.type === 'checkbox' || el.type === 'radio') field.checked = !!el.checked
+      if (el.tagName === 'SELECT') {
+        field.options = Array.from(el.options).map((option) => ({
+          value: option.value,
+          text: option.textContent.trim(),
+          selected: option.selected
+        }))
+      }
+      return field
+    })
+  }
+
+  // The open overlay: the session editor (New/Copy/Edit) or a `.modal-overlay`
+  // (confirmations, Share, Join, the identity wizard).
+  function debugOverlayState() {
+    const overlay = document.querySelector('.session-editor-overlay, .modal-overlay')
+    if (!overlay) return null
+    const kind = overlay.classList.contains('session-editor-overlay') ? 'session-editor' : 'modal'
+    const panel = overlay.querySelector('.session-editor, .modal-panel') || overlay
+    const title = overlay.querySelector('.modal-title')
+    // On top: what is drawn at the panel's centre belongs to this overlay.
+    const box = panel.getBoundingClientRect()
+    const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    return {
+      id: overlay.id || null,
+      kind,
+      onTop: !!(top && overlay.contains(top)),
+      title: title ? title.textContent : '',
+      text: panel.textContent.replace(/\s+/g, ' ').trim(),
+      fields: debugFields(panel),
+      details: Array.from(panel.querySelectorAll('details')).map((details) => {
+        const summary = details.querySelector('summary')
+        return { summary: summary ? summary.textContent.trim() : '', open: !!details.open }
+      }),
+      actions: Array.from(panel.querySelectorAll('.modal-actions button')).map((button) => ({
+        text: button.textContent.trim(),
+        type: button.type,
+        disabled: !!button.disabled
+      }))
+    }
+  }
+
+  function debugMenuItemKind(el) {
+    if (el.dataset.kind) return el.dataset.kind
+    if (el.getAttribute('role') === 'separator' || el.tagName === 'HR') return 'separator'
+    if (el.getAttribute('role') === 'menuitemcheckbox') return 'check'
+    if (el.classList.contains('context-menu-field')) return 'field'
+    return 'item'
+  }
+
+  function debugSettingsMenuState() {
+    if (!els.settingsMenu || els.settingsMenu.hidden) return null
+    return Array.from(els.settingsMenu.children).map((el) => ({
+      kind: debugMenuItemKind(el),
+      label: el.textContent.replace(/\s+/g, ' ').trim(),
+      disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
+      checked: el.hasAttribute('aria-checked') ? el.getAttribute('aria-checked') === 'true' : null,
+      identity: el.dataset.identity || null
+    }))
+  }
+
+  function debugUiState() {
+    const app = els.app || document.querySelector('.app')
+    const topbarBrand = document.querySelector('.topbar-brand')
+    const brandMark = document.getElementById('brandMark') || document.querySelector('.brand-mark')
+    const hamburger = brandMark ? brandMark.querySelector('.fa-bars') : null
+    const newIcon = els.newSession ? els.newSession.querySelector('.btn-icon') : null
+    const joinIcon = els.joinLink ? els.joinLink.querySelector('.btn-icon') : null
+    const newText = els.newSession ? els.newSession.querySelector('span') : null
+    const joinText = els.joinLink ? els.joinLink.querySelector('span') : null
+    const topbarTitle = document.querySelector('.topbar-title')
+    return {
+      sideCollapsed: !!(app && app.classList.contains('side-collapsed')),
+      topbarLeft: topbarBrand ? Array.from(topbarBrand.children).map(debugNodeKey) : [],
+      topbarLeftText: topbarBrand
+        ? Array.from(topbarBrand.children).map((el) => el.innerText.trim())
+        : [],
+      menuOpen: !!(els.settingsMenu && !els.settingsMenu.hidden),
+      menu: debugSettingsMenuState(),
+      brandVersion: els.version ? els.version.textContent : null,
+      brandMark: brandMark
+        ? {
+            key: debugNodeKey(brandMark),
+            title: brandMark.title || brandMark.getAttribute('aria-label') || '',
+            hover: brandMark.matches(':hover'),
+            hamburger: !!(hamburger && hamburger.getClientRects().length),
+            rect: debugRect(brandMark)
+          }
+        : null,
+      identityDot: els.identitySetup ? els.identitySetup.dataset.identity || null : null,
+      identityDotSettings: els.settingsToggle ? els.settingsToggle.dataset.identity || null : null,
+      identityDotColor: debugDotColor(els.identitySetup),
+      identityDotSettingsColor: debugDotColor(els.settingsToggle),
+      colors: {
+        newIcon: debugColor(newIcon),
+        joinIcon: debugColor(joinIcon),
+        newText: debugColor(newText),
+        joinText: debugColor(joinText),
+        newButton: debugColor(els.newSession),
+        joinButton: debugColor(els.joinLink),
+        topbarBrandBg: debugColor(topbarBrand, 'backgroundColor'),
+        sidebarBg: debugColor(els.sidebar, 'backgroundColor')
+      },
+      bubble: els.scrubberTip
+        ? {
+            text: els.scrubberTip.textContent,
+            hidden: !!els.scrubberTip.hidden,
+            scrubber: debugRect(els.scrubber),
+            playbackHidden: els.playback ? !!els.playback.hidden : null
+          }
+        : null,
+      modal: debugOverlayState(),
+      titleBox: {
+        title: debugRect(topbarTitle),
+        main: debugRect(els.main),
+        actions: debugRect(document.querySelector('.topbar-actions')),
+        topbarBrand: debugRect(topbarBrand)
+      },
+      sidebar: {
+        rect: debugRect(els.sidebar),
+        visible: !!(
+          els.sidebar &&
+          els.sidebar.getClientRects().length &&
+          els.sidebar.getBoundingClientRect().width > 0
+        )
+      },
+      controls: Object.fromEntries(
+        [
+          'newSession',
+          'joinLink',
+          'shareSession',
+          'extendSession',
+          'goLive',
+          'playPause',
+          'scrubber'
+        ]
+          .map((id) => [id, document.getElementById(id)])
+          .map(([id, el]) => [
+            id,
+            el
+              ? {
+                  disabled: !!el.disabled,
+                  hidden: !el.getClientRects().length,
+                  title: el.title || '',
+                  rect: debugRect(el)
+                }
+              : null
+          ])
+      ),
+      window: { innerWidth: window.innerWidth, innerHeight: window.innerHeight },
+      selectedId: state.selectedId,
+      mode: state.mode
+    }
+  }
+
+  function debugFindField(root, name) {
+    const needle = String(name || '')
+      .trim()
+      .replace(/:$/, '')
+      .toLowerCase()
+    const fields = Array.from(root.querySelectorAll('input, select, textarea'))
+    return (
+      fields.find((el) => (el.name || '').toLowerCase() === needle) ||
+      fields.find((el) => (el.id || '').toLowerCase() === needle) ||
+      fields.find((el) => debugFieldLabel(el, root).replace(/:$/, '').toLowerCase() === needle) ||
+      null
+    )
+  }
+
   window.__zbtermDebugCommand = async (request = {}) => {
     const command = request.command || request.action
     const modal = () => {
@@ -7818,6 +8032,141 @@
       return debugModalState()
     }
     if (command === 'modal-state') return debugModalState()
+    // The acceptance kits' commands (261110_ui-chrome, 261110_session-templates).
+    if (command === 'ui-state') return debugUiState()
+    if (command === 'bubble-format') {
+      // The wall-clock formatter is not built yet (261110_ui-chrome P2): there
+      // is nothing to format with, so the answer is null.
+      return null
+    }
+    if (command === 'click') {
+      // A real click on a real element; `text` picks a button by its label
+      // (inside the open overlay when there is one), `shift` holds SHIFT.
+      let target = null
+      if (request.selector) {
+        const matches = Array.from(document.querySelectorAll(request.selector))
+        target = request.text
+          ? matches.find(
+              (el) =>
+                el.textContent.trim().toLowerCase() === String(request.text).trim().toLowerCase()
+            )
+          : matches[0]
+      } else if (request.text) {
+        const overlay = document.querySelector('.session-editor-overlay, .modal-overlay')
+        target = debugButtonByText(overlay || document, request.text)
+      }
+      if (!target) return { clicked: false, selector: request.selector || null, ...debugUiState() }
+      target.dispatchEvent(
+        new window.MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          shiftKey: !!request.shift,
+          ctrlKey: !!request.ctrl,
+          altKey: !!request.alt,
+          metaKey: !!request.meta
+        })
+      )
+      await debugSettle()
+      return { clicked: true, ...debugUiState() }
+    }
+    if (command === 'settings-open') {
+      if (els.settingsMenu && els.settingsMenu.hidden && els.settingsToggle) {
+        els.settingsToggle.click()
+      }
+      await debugSettle()
+      return debugUiState()
+    }
+    if (command === 'settings-click') {
+      const needle = String(request.label || '')
+        .trim()
+        .toLowerCase()
+      const item = els.settingsMenu
+        ? Array.from(els.settingsMenu.querySelectorAll('button')).find(
+            (button) => button.textContent.replace(/\s+/g, ' ').trim().toLowerCase() === needle
+          )
+        : null
+      if (!item) return { clicked: false, label: request.label || '', ...debugUiState() }
+      item.click()
+      await debugSettle()
+      return { clicked: true, ...debugUiState() }
+    }
+    if (command === 'dialog-set') {
+      const overlay = document.querySelector('.session-editor-overlay, .modal-overlay')
+      if (!overlay) return { set: false, field: request.field || '', modal: null }
+      const needle = String(request.field || '')
+        .trim()
+        .toLowerCase()
+      const details = Array.from(overlay.querySelectorAll('details')).find((el) => {
+        const summary = el.querySelector('summary')
+        return summary && summary.textContent.trim().toLowerCase() === needle
+      })
+      const field = details ? null : debugFindField(overlay, request.field)
+      if (!details && !field) {
+        return { set: false, field: request.field || '', modal: debugOverlayState() }
+      }
+      if (details) {
+        details.open = request.value !== false
+      } else if (field.type === 'checkbox' || field.type === 'radio') {
+        if (field.checked !== !!request.value) field.click()
+      } else {
+        let value = request.value === undefined || request.value === null ? '' : request.value
+        if (field.tagName === 'SELECT') {
+          // A select takes an option's value or its visible text.
+          const option = Array.from(field.options).find(
+            (el) => el.value === String(value) || el.textContent.trim() === String(value).trim()
+          )
+          if (!option) {
+            return { set: false, field: request.field || '', modal: debugOverlayState() }
+          }
+          value = option.value
+        }
+        field.value = value
+        field.dispatchEvent(new window.Event('input', { bubbles: true }))
+        field.dispatchEvent(new window.Event('change', { bubbles: true }))
+      }
+      await debugSettle()
+      return { set: true, field: request.field || '', modal: debugOverlayState() }
+    }
+    if (command === 'dialog-submit' || command === 'dialog-cancel') {
+      const overlay = document.querySelector('.session-editor-overlay, .modal-overlay')
+      if (!overlay) return { done: false, ...debugUiState() }
+      const buttons = Array.from(overlay.querySelectorAll('.modal-actions button'))
+      const button =
+        command === 'dialog-submit'
+          ? buttons.find((el) => el.type === 'submit')
+          : buttons.find((el) => el.type !== 'submit')
+      if (!button) return { done: false, ...debugUiState() }
+      button.click()
+      await debugSettle()
+      return { done: true, ...debugUiState() }
+    }
+    if (command === 'confirm-state') return debugModalState()
+    if (command === 'confirm-answer') {
+      const overlay = document.querySelector('.modal-overlay')
+      if (!overlay) return { answered: false, confirm: null }
+      const buttons = Array.from(overlay.querySelectorAll('.modal-actions button'))
+      const button =
+        request.ok === false
+          ? buttons.find((el) => el.type !== 'submit')
+          : buttons.find((el) => el.type === 'submit')
+      if (!button) return { answered: false, confirm: debugModalState() }
+      button.click()
+      await debugSettle()
+      return { answered: true, confirm: debugModalState() }
+    }
+    if (command === 'templates') {
+      // No trigger table and no per-trigger templates exist yet
+      // (261110_session-templates P2); the old Shift+New default is reported.
+      return {
+        triggers: [],
+        newSessionTemplates: {},
+        defaultSessionId: state.defaultSessionId || null
+      }
+    }
+    if (command === 'triggers-add') {
+      throw new Error('no trigger table: triggers-add needs NEW_SESSION_TRIGGERS')
+    }
     throw new Error(`Unknown debug renderer command: ${command}`)
   }
 

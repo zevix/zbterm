@@ -9,5 +9,11 @@ need curl "talks to the debug server"
 need "$ZBUI_APP" "packaged build under test"
 # A skip is a FAIL: a missing precondition exits 75 "cannot run here"; never `exit 0` around it.
 set -x
-# Body: written in P1 from this header; start_app, then drive with cmd/state, assert with jq -e / grep -F.
-echo "not written yet" >&2; exit 1
+start_app
+s="$(state)"
+jq '.colors' <<<"$s"
+jq -e -L "$ZBUI_JQ_LIB" "$JQ_COLOR"'.colors.newIcon | is_green' <<<"$s"
+jq -e -L "$ZBUI_JQ_LIB" "$JQ_COLOR"'.colors.joinIcon | is_blue' <<<"$s"
+# The text keeps the button's own colour; only the icons change.
+jq -e '.colors.newText == .colors.newButton and .colors.joinText == .colors.joinButton' <<<"$s"
+jq -e -L "$ZBUI_JQ_LIB" "$JQ_COLOR"'(.colors.newText | is_green | not) and (.colors.joinText | is_blue | not)' <<<"$s"
