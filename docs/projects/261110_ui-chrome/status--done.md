@@ -5,7 +5,7 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-verifying, 2026-11-11: P4 (close) is done. All 8 scripts of this kit pass on the repackaged build at HEAD; the test files, lint and package are within their Cost targets. Waiting for the user's check (see *User owes*), then the verifier's report.
+done, 2026-11-11: the user tried the build and said "its great - its what I asked for" (2026-11-11, in chat), after the soft changes below were read back to them. Verifier report `acceptance/report--2026-11-11b.md`: GREEN 8/8 at e56faf6 on `zr`. The first report (`report--2026-11-11.md`) was RED from a packaging gap (`npm run package` did not vendor renderer assets), fixed in e56faf6.
 
 ## Done
 
@@ -78,9 +78,7 @@ None.
 
 ## User owes
 
-- Try the packaged build (`/tmp/claude-1000/zbui/out/ZBTerm-linux-x64/ZBTerm`, or `ZBTERM_FORGE_OUT_DIR=<dir> npm run package`): the version at the bottom of the settings menu, the wall clock in the timeline bubble, the green/blue New/Join icons, the identity dot, and the side pane (logo click, Ctrl+Shift+B, the collapsed top bar). Then approve "done".
-- Read back the soft changes in `notes--context.md` *Soft changes* (both listed below) and confirm them.
-- Commits are on `ui-chrome`, not pushed. The sibling projects' `status--in-progress.md` edits that were uncommitted before P1 are still left uncommitted.
+None. Commits are on `ui-chrome`, not pushed or merged.
 
 ## Open
 
@@ -88,7 +86,7 @@ None.
 
 - `backends/freenet-backend.test.js` "the core's debug event carries the tag" failed once in the P4 loop and passed in three reruns; outside this project's code. Worth a look on `main`.
 
-## Soft changes to read back
+## Soft changes (read back to the user 2026-11-11; accepted with the build)
 
 - 2026-11-11 (P2), R2 detail: a timestamp later *today* shows the time only; only a later *day* gets the full date (`notes--context.md` *Soft changes*).
 - 2026-11-11 (P3), R5 detail: the collapsed top bar's brand cluster uses `--panel-bg` (the sidebar's real token), not the design's non-existent `--sidebar-bg` (`notes--context.md` *Soft changes*).
