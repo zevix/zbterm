@@ -29,6 +29,11 @@ const CODES = {
   E_HOST_UNREACHABLE: 'E_HOST_UNREACHABLE',
   E_BACKEND_UNSUPPORTED: 'E_BACKEND_UNSUPPORTED',
   E_BACKEND_UNAVAILABLE: 'E_BACKEND_UNAVAILABLE',
+  // A request that cannot be honoured as asked (e.g. changing a fixed field).
+  E_INVALID: 'E_INVALID',
+  // Playback, sharing or a history copy asked of a session created with
+  // `record: false`: it keeps no history to play, share or copy.
+  E_NOT_RECORDED: 'E_NOT_RECORDED',
   E_INTERNAL: 'E_INTERNAL'
 }
 

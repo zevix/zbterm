@@ -40,6 +40,14 @@ jq -e '.error.code == "E_NOT_RECORDED"' <<<"$(api POST /invoke "{\"method\":\"se
 api POST "/sessions/$sid/input" '{"text":"exit","enter":true}' >/dev/null
 ended() { api GET "/sessions/$sid" | jq -e '.entry.active == false or .opened.active == false'; }
 wait_until 20 ended
+# Kit correction 2026-11-11 (builder P3): added (a stronger check, nothing relaxed). When an
+# unrecorded session ended, the renderer opened playback for it and showed the engine's
+# E_NOT_RECORDED in the status line (P2 status *Gotchas*); it must end quietly instead.
+sleep 1.5
+st="$(api GET /renderer/layout | jq -r '.renderer.app.status')"
+printf 'status: %s\n' "$st"
+# The engine's refusal reads "session is not recorded"; the quiet end says "not recorded" alone.
+jq -e -n --arg s "$st" '($s | test("E_NOT_RECORDED|is not recorded") | not) and ($s | test("not recorded"))'
 api POST "/sessions/$sid/extend" '{}' >/dev/null
 sleep 2
 jq -e '.record == false' <<<"$(entry_of "$sid")"

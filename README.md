@@ -66,6 +66,20 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Ended sessions can be resumed (extended) at any time by the host: Ctrl+R in an
   offline session, or the Extend button. The new shell starts on a fresh line
   under the old screen; a full-screen program redraws in place
+- Unrecorded sessions: untick "Record session" in the New or Copy dialog and
+  the session runs live with nothing of its output stored. It cannot be
+  shared, played back or copied with history (those controls read "Not
+  recorded"); when it ends, its last screen stays until you switch away, and
+  Extend starts a fresh shell, unrecorded, on an empty screen. Recording cannot
+  be turned on or off for an existing session
+- New-session templates: each way to start a session — "+ New", Ctrl+Shift+T,
+  and Shift + "+ New" — copies one template profile with all its settings. A
+  profile becomes a trigger's template from its dialog's Advanced section,
+  which can also skip the dialog for that trigger; the settings menu edits each
+  trigger's template. Deleting a template (the app warns first) keeps a hidden
+  copy that still serves its trigger until the session it creates becomes the
+  new template. Ctrl+Shift+T is never sent to the program in the terminal. The
+  old Shift + "+ New" default carries over as that trigger's template
 - Key rotation on user join and exit
 - Debugging and instrumentation REST server for e2e tests and live debugging
 - Sharing over Freenet (experimental; needs your own Freenet node), alongside
@@ -272,7 +286,7 @@ The default profile lives in `zbterm/`, every other profile in
   identity, and `account/zxterm-core.sock` is the `zxterm-core` sidecar's
   socket while it runs
 - `preferences.json` — per-profile settings, such as pinned sessions and the
-  default session
+  new-session templates (`newSessionTemplate.<trigger>`)
 
 App-wide settings, such as the theme and the STUN/TURN servers, are kept in
 `preferences.json` directly under Electron `userData`.

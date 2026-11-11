@@ -51,9 +51,13 @@ function createDebugServer(opts) {
         selectedSessionId = result.selectedSessionId
       }
       if (result && result.selectedMode !== undefined) selectedMode = result.selectedMode
+      // A switch is forwarded even when this server already had that session
+      // selected: the app may have moved to another one on its own (a new
+      // session from a hotkey), which this server does not see.
       if (
         selectedSessionId &&
-        (selectedSessionId !== previousSelection.sessionId ||
+        ((result && result.forceSelect) ||
+          selectedSessionId !== previousSelection.sessionId ||
           selectedMode !== previousSelection.mode)
       ) {
         onSelectSession({ sessionId: selectedSessionId, mode: selectedMode })
@@ -182,6 +186,7 @@ function createDebugServer(opts) {
       return {
         selectedSessionId: params.sessionId,
         selectedMode: 'live',
+        forceSelect: true,
         body: { selectedSessionId: params.sessionId }
       }
     }),

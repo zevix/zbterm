@@ -1375,6 +1375,33 @@ refusal is a `share.inputRefused` event, raised as the same `engine:error` as be
 `input` message's sealed plaintext is postcard, not JSON. Pear and loopback shares seal
 and open input in `engine/share-manager.js::sealInput` and `_openInputMessage`, as described.
 
+### 8.4 Unrecorded Sessions
+
+`session.create {record: false}` runs a session live with nothing of its
+output stored. The session still has a `SessionStore`, so the catalog, the
+session list, Extend and delete need no second path, but its log holds a
+header only: the store info (with `record: false`, also on the catalog entry)
+and the first resize. `SessionStore.appendPlain` refuses every other packet for
+such a store (`E_NOT_RECORDED`), so a missed branch above it fails loudly
+instead of writing output to disk.
+
+Above the store, one guard decides: the runtime's `record` flag
+(`engine/index.js::_recorded`). For an unrecorded session the worker keeps
+the live headless mirror (the renderer's screen) but does not buffer output
+for the log, does not broadcast it, keeps no snapshot cache and replays no
+archive. Later resizes are not logged; the last geometry is kept in the store
+info, and Extend relaunches the shell at it, unrecorded, on an empty screen.
+`pendingBytes` still counts the output until the renderer acknowledges it, so
+backpressure (§8.2) works as for a recorded session.
+
+`share.createLink`, `player.open` and `session.create {copyHistoryFrom}` of an
+unrecorded session reject with `E_NOT_RECORDED`; `session.update` cannot change
+`record` (`E_INVALID`). The renderer greys Share, Play, Step back, the scrubber
+and "Copy history" with the title "Not recorded", and when the session ends it
+keeps the last screen instead of opening playback. Design decision: the
+pending `D-nn` of `docs/projects/261110_session-templates/` (a header-only
+store rather than no store).
+
 ## 9. Sharing and Joining
 
 ### 9.1 Share Link Creation

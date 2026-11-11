@@ -38,3 +38,9 @@ The checks drive a scratch packaged app under `uisolate`. Reference program: `ac
 ## Approval
 
 Approved 2026-11-11 by the user ("approved" in chat, covering all three projects), file at sha256 3eae9d24681e (the file as approved, before this line).
+
+2026-11-11, P1 builder (planner decision): U1's check keeps the on-disk grep for the unrecorded marker; its control reads the recorded marker through playback and it checks that the unrecorded log does not grow across the flood, because recorded history is encrypted on disk (`notes--context.md` *Soft changes*). The approved text above is unchanged.
+
+2026-11-11, P2 builder: four details reworded to reality (trigger table order is the shown order with exact-modifier matching; two optional table fields; skip-dialog templates share without the wizard; templates stored as JSON text), recorded in `notes--context.md` *Soft changes*. No requirement text or check changed.
+
+2026-11-11, P3 builder: seven details reworded to reality (warning wording "for new sessions when you …"; the questions asked at the dialog's OK; what "will replace it" does; a template delete always asks; a hidden-copy takeover asks; the further "Not recorded" controls and the quiet end; the raised confirmation layer), recorded in `notes--context.md` *Soft changes*. No requirement text changed; R2's check gained one assertion (the quiet end), nothing relaxed.

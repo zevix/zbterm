@@ -94,10 +94,59 @@
   // comma-separated list of ICE URLs; empty leaves the flag, the environment
   // or the built-in list in charge.
   const ICE_SERVERS_STORAGE_KEY = 'zbterm.iceServers'
-  // Per profile: the session SHIFT+New copies. Empty means the default shell.
+  // Per profile, superseded: the session SHIFT+New used to copy. Read once, by
+  // the migration to the trigger table's template for that click.
   const DEFAULT_SESSION_PREFERENCE = 'zbterm.defaultSessionId'
+  // Per profile, one key per trigger: `<prefix><trigger id>` holds the JSON
+  // { sessionId | null, copy: { name, cwd, command, record, skipDialog, share } }
+  // (261110_session-templates design, *Templates*). Separate keys, so two
+  // triggers are never lost to each other's write.
+  const TEMPLATE_PREFERENCE_PREFIX = 'newSessionTemplate.'
   // Per profile: pinned session ids, in the order they were pinned.
   const PINNED_SESSIONS_PREFERENCE = 'zbterm.pinnedSessions'
+  // The ways to start a new session, each served by its own template profile
+  // (261110_session-templates R3–R7). This table is the only place a trigger
+  // is named: the Advanced dropdown, the settings-menu section, the key and
+  // click dispatch and the warnings all iterate it, so a new trigger is one
+  // more entry here. The order is the order shown. A click or key matches an
+  // entry on its exact modifiers, so no entry can shadow another.
+  //   id          the template's preference key suffix
+  //   choice      its line in the dialog's dropdown
+  //   menuLabel   its settings-menu item (edits its template)
+  //   verb        how a sentence names it ("the template for <verb>")
+  //   source      'click' (the + New button) or 'key' (a document hotkey, `key`)
+  //   noTemplate  'dialog': with no template, open an empty New dialog;
+  //               otherwise start the default shell (design A-8)
+  //   migrateFrom an older preference naming the session it took over
+  const NEW_SESSION_TRIGGERS = [
+    {
+      id: 'new',
+      choice: 'The "+ New" button is clicked',
+      menuLabel: 'Edit new profile defaults',
+      verb: 'click "+ New"',
+      source: 'click',
+      mods: { ctrl: false, shift: false, alt: false, meta: false },
+      noTemplate: 'dialog'
+    },
+    {
+      id: 'ctrlShiftT',
+      choice: 'CTRL+SHIFT+T is pressed',
+      menuLabel: 'Edit new profile defaults for CTRL+SHIFT+t',
+      verb: 'press CTRL+SHIFT+T',
+      source: 'key',
+      key: 't',
+      mods: { ctrl: true, shift: true, alt: false, meta: false }
+    },
+    {
+      id: 'shiftNew',
+      choice: 'The "+ New" button is clicked while holding "Shift"',
+      menuLabel: 'Edit new profile defaults for Shift + "+ New" button',
+      verb: 'click "+ New" while holding Shift',
+      source: 'click',
+      mods: { ctrl: false, shift: true, alt: false, meta: false },
+      migrateFrom: DEFAULT_SESSION_PREFERENCE
+    }
+  ]
   const SIDEBAR_WIDTH_DEFAULT = 310
   const SIDEBAR_WIDTH_MIN = 220
   const SIDEBAR_WIDTH_MAX = 640
@@ -169,10 +218,10 @@
     appVersion: '',
     sessions: [],
     pendingJoins: [],
-    // defaultSessionId is the stored preference; defaultSession is its catalog
-    // entry, or null when unset or pointing at a session that no longer exists.
-    defaultSessionId: '',
-    defaultSession: null,
+    // The stored new-session templates, trigger id → { sessionId, copy }, as
+    // last read or written by this window (marks and titles only; every
+    // write reads the key again first).
+    templates: {},
     // Sessions a session.delete is in flight for; their exit must not reopen
     // them for playback.
     deletingSessionIds: new Set(),
@@ -809,7 +858,9 @@
     enablePausedTerminalSelection()
     // The app's own chords never reach the program in the terminal, whichever
     // listener sees the key first (U1); the document handler acts on them.
-    state.term.attachCustomKeyEventHandler((event) => !isSidePaneHotkey(event))
+    state.term.attachCustomKeyEventHandler(
+      (event) => !isSidePaneHotkey(event) && !keyTriggerFor(event)
+    )
     state.term.parser.registerOscHandler(52, copyFromOsc52)
     els.terminal.addEventListener('keydown', noteTerminalGesture, true)
     els.terminal.addEventListener('click', () => {
@@ -1212,6 +1263,15 @@
           if (!event.repeat) toggleSidePane()
           return
         }
+        const keyTrigger = keyTriggerFor(event)
+        if (keyTrigger) {
+          // As the side-pane key: a dialog owns the window, so it is left alone.
+          if (sidePaneBlocked()) return
+          event.preventDefault()
+          event.stopPropagation()
+          if (!event.repeat) guard(() => startNewSession(keyTrigger.id, els.newSession))()
+          return
+        }
         if (event.ctrlKey && !event.metaKey && !event.altKey) {
           const appZoom = appZoomKey(event)
           if (appZoom !== null) {
@@ -1466,14 +1526,13 @@
     state.pendingJoins = state.pendingJoins.filter((join) => !realIds.has(join.sessionId))
     await prunePinnedSessions(realIds)
     state.sessions = withPinnedFirst([...state.pendingJoins, ...sessions])
-    await resolveDefaultSession(sessions)
     ingestSessionIdentities(state.sessions)
     syncSelectedSessionFromList()
     renderSessions()
   }
 
   async function loadSessionListPreferences() {
-    await Promise.all([loadDefaultSessionPreference(), loadPinnedSessionsPreference()])
+    await Promise.all([loadTemplates(), loadPinnedSessionsPreference()])
   }
 
   async function loadPinnedSessionsPreference() {
@@ -1528,43 +1587,466 @@
     await refreshSessions()
   }
 
-  async function loadDefaultSessionPreference() {
-    let saved = null
+  // --- New-session templates (261110_session-templates design, *Templates*) ---
+
+  function triggerById(id) {
+    return NEW_SESSION_TRIGGERS.find((trigger) => trigger.id === id) || null
+  }
+
+  function eventHasMods(event, mods = {}) {
+    return (
+      !!event.ctrlKey === !!mods.ctrl &&
+      !!event.shiftKey === !!mods.shift &&
+      !!event.altKey === !!mods.alt &&
+      !!event.metaKey === !!mods.meta
+    )
+  }
+
+  function modsLabel(mods = {}) {
+    return ['ctrl', 'shift', 'alt', 'meta']
+      .filter((mod) => mods[mod])
+      .map((mod) => mod.toUpperCase())
+      .join('+')
+  }
+
+  // The + New click's trigger, on its exact modifiers. Keyboard activation
+  // (Enter/Space) carries none. A chord no entry names counts as the plain
+  // click, as it did before there were templates.
+  function clickTriggerFor(event) {
+    const clicks = NEW_SESSION_TRIGGERS.filter((trigger) => trigger.source === 'click')
+    return (
+      clicks.find((trigger) => eventHasMods(event || {}, trigger.mods)) ||
+      clicks.find((trigger) => !modsLabel(trigger.mods)) ||
+      null
+    )
+  }
+
+  function keyTriggerFor(event) {
+    if (!event || event.type === 'keyup') return null
+    const key = String(event.key || '').toLowerCase()
+    return (
+      NEW_SESSION_TRIGGERS.find(
+        (trigger) =>
+          trigger.source === 'key' &&
+          String(trigger.key || '').toLowerCase() === key &&
+          eventHasMods(event, trigger.mods)
+      ) || null
+    )
+  }
+
+  function parseTemplate(raw) {
+    if (typeof raw !== 'string' || !raw) return null
     try {
-      saved = api ? await api.invoke('preference.get', { key: DEFAULT_SESSION_PREFERENCE }) : null
-    } catch {}
-    state.defaultSessionId = typeof saved === 'string' && saved !== 'null' ? saved : ''
-    state.defaultSession = null
-    updateNewSessionTitle()
-  }
-
-  // `sessions` may be filtered by the search box or the live-only toggle; the
-  // default still counts then, so look it up in the full list.
-  async function resolveDefaultSession(sessions) {
-    const id = state.defaultSessionId
-    let entry = id ? sessions.find((session) => session.sessionId === id) : null
-    if (id && !entry && (state.query || state.activeOnly)) {
-      const all = await api.invoke('session.list', {}).catch(() => [])
-      entry = all.find((session) => session.sessionId === id)
+      const value = JSON.parse(raw)
+      if (!value || typeof value !== 'object') return null
+      return {
+        sessionId: typeof value.sessionId === 'string' && value.sessionId ? value.sessionId : null,
+        copy: value.copy && typeof value.copy === 'object' ? value.copy : null
+      }
+    } catch {
+      return null
     }
-    state.defaultSession = entry && entry.owner !== 'joined' && !entry.isJoined ? entry : null
+  }
+
+  async function readTemplate(triggerId) {
+    const raw = await api.invoke('preference.get', { key: TEMPLATE_PREFERENCE_PREFIX + triggerId })
+    const template = parseTemplate(raw)
+    if (template) state.templates[triggerId] = template
+    else delete state.templates[triggerId]
+    return template
+  }
+
+  // `null` releases the trigger (no template); a write replaces this one key.
+  async function writeTemplate(triggerId, template) {
+    await api.invoke('preference.set', {
+      key: TEMPLATE_PREFERENCE_PREFIX + triggerId,
+      value: template ? JSON.stringify(template) : ''
+    })
+    if (template) state.templates[triggerId] = template
+    else delete state.templates[triggerId]
     updateNewSessionTitle()
   }
 
-  async function setDefaultSession(sessionId) {
-    state.defaultSessionId = sessionId || ''
-    if (!sessionId) state.defaultSession = null
+  async function readAllTemplates() {
+    const out = {}
+    for (const trigger of NEW_SESSION_TRIGGERS) {
+      const template = await readTemplate(trigger.id)
+      if (template) out[trigger.id] = template
+    }
+    return out
+  }
+
+  async function triggersHeldBy(sessionId) {
+    if (!sessionId) return []
+    const templates = await readAllTemplates()
+    return NEW_SESSION_TRIGGERS.filter(
+      (trigger) => templates[trigger.id] && templates[trigger.id].sessionId === sessionId
+    ).map((trigger) => trigger.id)
+  }
+
+  function isProfileSession(entry) {
+    return !!entry && !entry.pending && !entry.isJoined && entry.owner !== 'joined'
+  }
+
+  async function allSessions() {
+    try {
+      return await api.invoke('session.list', {})
+    } catch {
+      return state.sessions
+    }
+  }
+
+  async function loadTemplates() {
+    try {
+      await migrateLegacyTemplates()
+      await readAllTemplates()
+    } catch (err) {
+      console.warn('new-session templates unavailable:', err && err.message ? err.message : err)
+    }
     updateNewSessionTitle()
-    await api.invoke('preference.set', {
-      key: DEFAULT_SESSION_PREFERENCE,
-      value: state.defaultSessionId
+  }
+
+  // Once, idempotent (design *Migration*): a trigger that took over an older
+  // preference gets a template from the live session it named, skipping the
+  // dialog as that preference did; the old key is cleared only after the
+  // write. A gone session migrates nothing.
+  async function migrateLegacyTemplates() {
+    for (const trigger of NEW_SESSION_TRIGGERS) {
+      if (!trigger.migrateFrom) continue
+      if (await readTemplate(trigger.id)) continue
+      const legacy = await api.invoke('preference.get', { key: trigger.migrateFrom })
+      if (typeof legacy !== 'string' || !legacy || legacy === 'null') continue
+      const entry = (await allSessions()).find((session) => session.sessionId === legacy)
+      if (!isProfileSession(entry)) continue
+      await writeTemplate(trigger.id, {
+        sessionId: entry.sessionId,
+        copy: templateCopy({ ...entry, record: entry.record !== false, skipDialog: true }, null)
+      })
+      await api.invoke('preference.set', { key: trigger.migrateFrom, value: '' })
+    }
+  }
+
+  // What a template carries (notes R4): everything the profile's dialog sets.
+  function templateCopy(values, previous) {
+    const prev = previous || {}
+    const pick = (key, fallback) =>
+      values[key] !== undefined ? values[key] : prev[key] !== undefined ? prev[key] : fallback
+    return {
+      name: pick('name', ''),
+      cwd: pick('cwd', ''),
+      command: pick('command', ''),
+      record: pick('record', true) !== false,
+      skipDialog: !!pick('skipDialog', false),
+      share: pick('share', null) || null
+    }
+  }
+
+  // The trigger's template: a live catalog entry's current values win, the
+  // stored copy fills the rest; with the session gone, the copy (the hidden
+  // copy) is the template. Null when the trigger has none.
+  async function resolveTemplate(trigger) {
+    const stored = await readTemplate(trigger.id)
+    if (!stored || (!stored.sessionId && !stored.copy)) return null
+    const copy = stored.copy || {}
+    const entry = stored.sessionId
+      ? (await allSessions()).find((session) => session.sessionId === stored.sessionId)
+      : null
+    const live = isProfileSession(entry) ? entry : null
+    const profile = live
+      ? templateCopy(
+          {
+            name: live.name,
+            cwd: live.cwd || '',
+            command: live.command || '',
+            record: live.record !== false
+          },
+          copy
+        )
+      : templateCopy({}, copy)
+    if (!live && !profile.name) return null
+    return { trigger, stored, live, profile }
+  }
+
+  // A live template is copied as "<name> #N"; a hidden copy comes back under
+  // its own name, or "<name> #N" when a session has that name (design A-5).
+  async function templateSessionName(template) {
+    const name = template.profile.name
+    if (template.live) return uniqueSessionName(name)
+    const taken = (await allSessions()).some((session) => session.name === name)
+    return taken ? uniqueSessionName(name) : name
+  }
+
+  // A session created from a hidden copy becomes its trigger's template,
+  // under whatever name it got (design *Hidden copy*).
+  async function adoptRestoredTemplate(template, sessionId) {
+    if (!template || template.live || !sessionId) return
+    const entry = (await allSessions()).find((session) => session.sessionId === sessionId)
+    await writeTemplate(template.trigger.id, {
+      sessionId,
+      copy: templateCopy({ name: entry ? entry.name : template.profile.name }, template.profile)
     })
+  }
+
+  // The dialog's Advanced choice, written at submit (read-modify-write of each
+  // key): the chosen trigger now names this profile, with a fresh copy; any
+  // trigger the profile held and no longer picks is released. `held` are the
+  // triggers the profile held when the dialog opened.
+  async function saveTemplateChoice(sessionId, values, held = []) {
+    if (values.triggerId === undefined) return
+    const previous = held.length ? await readTemplate(held[0]) : null
+    for (const trigger of NEW_SESSION_TRIGGERS) {
+      if (trigger.id === values.triggerId) {
+        await writeTemplate(trigger.id, {
+          sessionId: sessionId || null,
+          copy: templateCopy(values, previous && previous.copy)
+        })
+      } else if (held.includes(trigger.id)) {
+        await writeTemplate(trigger.id, null)
+      }
+    }
+  }
+
+  // A rename keeps every template copy of that session current.
+  async function renameTemplateCopies(sessionId, name) {
+    for (const id of await triggersHeldBy(sessionId)) {
+      const template = state.templates[id]
+      await writeTemplate(id, { sessionId, copy: templateCopy({ name }, template.copy) })
+    }
+  }
+
+  // A deleted template stays as its hidden copy (design *Hidden copy*).
+  async function releaseDeletedTemplate(sessionId) {
+    for (const id of await triggersHeldBy(sessionId)) {
+      await writeTemplate(id, { sessionId: null, copy: state.templates[id].copy })
+    }
+  }
+
+  function triggersOf(ids) {
+    return NEW_SESSION_TRIGGERS.filter((trigger) => ids.includes(trigger.id))
+  }
+
+  function triggerVerbs(triggers) {
+    return triggers.map((trigger) => trigger.verb).join(' or ')
+  }
+
+  // The triggers whose template is a hidden copy named `name` (U2), but not
+  // `except` (the trigger whose copy is being restored, or a template-mode
+  // dialog's own). A template whose session is gone counts as hidden.
+  async function hiddenCopiesNamed(name, except = null) {
+    const target = String(name || '').trim()
+    if (!target) return []
+    const templates = await readAllTemplates()
+    const candidates = NEW_SESSION_TRIGGERS.filter((trigger) => {
+      const stored = templates[trigger.id]
+      return trigger.id !== except && stored && stored.copy && stored.copy.name === target
+    })
+    if (!candidates.length) return []
+    const sessions = await allSessions()
+    return candidates.filter((trigger) => {
+      const id = templates[trigger.id].sessionId
+      return !id || !isProfileSession(sessions.find((session) => session.sessionId === id))
+    })
+  }
+
+  function hiddenCopyWarning(name, triggers) {
+    return `"${name}" is the deleted template for new sessions when you ${triggerVerbs(triggers)}; this profile will replace it.`
+  }
+
+  function confirmHiddenCopyName(name, triggers) {
+    return askConfirm(hiddenCopyWarning(name, triggers), { okText: 'Replace' })
+  }
+
+  // A profile named like a hidden copy, holding no trigger of its own, takes
+  // the copy's place as that trigger's template (U2, "it will override").
+  // The trigger's own settings (skip-dialog, share) carry over.
+  async function claimHiddenCopies(sessionId, triggers, profile) {
+    for (const trigger of triggers) {
+      const stored = await readTemplate(trigger.id)
+      if (!stored || !stored.copy) continue
+      await writeTemplate(trigger.id, {
+        sessionId,
+        copy: templateCopy(
+          {
+            name: profile.name,
+            cwd: profile.cwd || '',
+            command: profile.command || '',
+            record: profile.record !== false
+          },
+          stored.copy
+        )
+      })
+    }
+  }
+
+  // The question U3 asks before a trigger moves: null when nobody else holds
+  // it (a free trigger, or `selfId`'s own).
+  async function triggerTakeoverQuestion(triggerId, selfId) {
+    const trigger = triggerById(triggerId)
+    const stored = trigger ? await readTemplate(trigger.id) : null
+    if (!stored) return null
+    const entry = stored.sessionId
+      ? (await allSessions()).find((session) => session.sessionId === stored.sessionId)
+      : null
+    if (isProfileSession(entry)) {
+      if (selfId && entry.sessionId === selfId) return null
+      return `"${entry.name}" is the template for new sessions when you ${trigger.verb}. Make this profile the template instead?`
+    }
+    if (stored.copy && stored.copy.name) return hiddenCopyWarning(stored.copy.name, [trigger])
+    return null
+  }
+
+  // The dialog's checks at OK (U2, U3), asked over the open dialog; Cancel
+  // leaves the dialog open as it was. `selfId` is the profile's own session
+  // (none for New and Copy), `ownTrigger` the trigger a dialog was opened
+  // for, `nameFrom` the name it had (only a changed name is checked).
+  function templateChecks({ selfId = null, ownTrigger = null, nameFrom = null } = {}) {
+    return async (values) => {
+      const renamed = nameFrom === null || values.name !== nameFrom
+      const hidden = renamed ? await hiddenCopiesNamed(values.name, ownTrigger) : []
+      if (hidden.length && !(await confirmHiddenCopyName(values.name, hidden))) return false
+      values.nameConfirmed = true
+      const picked = values.triggerId
+      if (picked && picked !== ownTrigger && !hidden.some((trigger) => trigger.id === picked)) {
+        const question = await triggerTakeoverQuestion(picked, selfId)
+        if (question && !(await askConfirm(question, { okText: 'Make template' }))) return false
+      }
+      return true
+    }
+  }
+
+  function templateTriggersOf(sessionId) {
+    return NEW_SESSION_TRIGGERS.filter(
+      (trigger) =>
+        state.templates[trigger.id] && state.templates[trigger.id].sessionId === sessionId
+    )
   }
 
   function updateNewSessionTitle() {
     if (!els.newSession) return
-    const source = state.defaultSession ? state.defaultSession.name : 'default shell'
-    els.newSession.title = `New session (hold SHIFT to skip dialog and copy from ${source})`
+    const held = NEW_SESSION_TRIGGERS.filter(
+      (trigger) => trigger.source === 'click' && modsLabel(trigger.mods)
+    ).map((trigger) => `hold ${modsLabel(trigger.mods)} for its own template`)
+    els.newSession.title = held.length ? `New session (${held.join('; ')})` : 'New session'
+  }
+
+  // The single entry point for every trigger (design *Triggers*).
+  async function startNewSession(triggerId, anchor) {
+    const trigger = triggerById(triggerId)
+    if (!trigger) throw new Error(`Unknown new-session trigger: ${triggerId}`)
+    const template = await resolveTemplate(trigger)
+    if (!template) {
+      if (trigger.noTemplate === 'dialog') return newSessionDialog(anchor, null)
+      await createSession({})
+      return
+    }
+    const profile = template.profile
+    if (!profile.skipDialog) return newSessionDialog(anchor, template)
+    const session = await createSession({
+      name: await templateSessionName(template),
+      cwd: profile.cwd,
+      command: profile.command,
+      record: profile.record,
+      restoring: template.live ? null : trigger.id
+    })
+    if (!session) return
+    await adoptRestoredTemplate(template, session.sessionId)
+    // Straight to sharing, no wizard (design A-9): the link is copied when the
+    // template's options say so, and the status line reports it.
+    if (profile.share && profile.record !== false && sharingAvailable()) {
+      await shareQuietly(session.sessionId, profile.share)
+    }
+  }
+
+  async function newSessionDialog(anchor, template) {
+    const profile = template ? template.profile : null
+    const name = template
+      ? await templateSessionName(template)
+      : (await api.invoke('session.defaultName')).name
+    const values = await showSessionEditor(anchor, profile ? { ...profile, name } : { name }, {
+      mode: 'new',
+      launch: true,
+      share: profile ? profile.share : null,
+      shareAutoCopy: await shareAutoCopyPreference(),
+      beforeSubmit: templateChecks({ ownTrigger: template ? template.trigger.id : null })
+    })
+    if (!values) return
+    await createSessionFromEditor(values, '', template)
+  }
+
+  // A settings-menu item: the trigger's template in the dialog. With a live
+  // template session, OK edits that session; without one, only the copy.
+  async function editNewSessionTemplate(triggerId, anchor) {
+    const trigger = triggerById(triggerId)
+    if (!trigger) return
+    const template = await resolveTemplate(trigger)
+    const profile = template
+      ? template.profile
+      : templateCopy({ name: (await api.invoke('session.defaultName')).name, cwd: '~/' }, null)
+    const live = template ? template.live : null
+    const values = await showSessionEditor(anchor, profile, {
+      mode: 'template',
+      launch: true,
+      triggerId: trigger.id,
+      skipDialog: profile.skipDialog,
+      share: profile.share,
+      recordLocked: !!live,
+      shareAutoCopy: await shareAutoCopyPreference(),
+      beforeSubmit: templateChecks({
+        selfId: live ? live.sessionId : null,
+        ownTrigger: trigger.id,
+        nameFrom: live ? live.name : profile.name
+      })
+    })
+    if (!values) return
+    if (live) {
+      await api.invoke('session.update', {
+        sessionId: live.sessionId,
+        name: values.name,
+        cwd: values.cwd,
+        command: values.command
+      })
+      await saveTemplateChoice(live.sessionId, values, await triggersHeldBy(live.sessionId))
+      await refreshSessions()
+      return
+    }
+    await saveTemplateChoice(template ? template.stored.sessionId : null, values, [trigger.id])
+  }
+
+  function templateMenuItems() {
+    return NEW_SESSION_TRIGGERS.map((trigger) => ({
+      kind: 'field',
+      label: trigger.menuLabel,
+      toggle: () => {
+        closeSettingsMenu()
+        editNewSessionTemplate(trigger.id, els.settingsToggle).catch(showError)
+      }
+    }))
+  }
+
+  // Test only (the R7 kit): one more table entry, exactly as a build would add it.
+  function addNewSessionTrigger(entry = {}) {
+    const id = String(entry.id || '')
+    if (!/^[A-Za-z][\w-]*$/.test(id)) throw new Error('trigger id is required')
+    if (triggerById(id)) throw new Error(`trigger exists: ${id}`)
+    if (!entry.choice || !entry.menuLabel) {
+      throw new Error('trigger choice and menuLabel are required')
+    }
+    if (entry.source !== 'click' && entry.source !== 'key') {
+      throw new Error('trigger source must be click or key')
+    }
+    if (entry.source === 'key' && !entry.key) throw new Error('a key trigger needs its key')
+    const mods = entry.mods || {}
+    NEW_SESSION_TRIGGERS.push({
+      id,
+      choice: String(entry.choice),
+      menuLabel: String(entry.menuLabel),
+      verb: String(entry.verb || entry.choice),
+      source: entry.source,
+      ...(entry.key ? { key: String(entry.key) } : {}),
+      mods: { ctrl: !!mods.ctrl, shift: !!mods.shift, alt: !!mods.alt, meta: !!mods.meta }
+    })
+    updateNewSessionTitle()
+    return NEW_SESSION_TRIGGERS.map((trigger) => ({ ...trigger }))
   }
 
   function syncSelectedSessionFromList() {
@@ -2075,8 +2557,10 @@
       if (isPinnedSession(session)) {
         marks.append(sessionMark('fa-thumbtack session-pin-mark', 'Pinned'))
       }
-      if (state.defaultSession && state.defaultSession.sessionId === session.sessionId) {
-        marks.append(sessionMark('fa-check session-default-mark', 'Default for new sessions'))
+      const templateFor = templateTriggersOf(session.sessionId)
+      if (templateFor.length) {
+        const verbs = templateFor.map((trigger) => trigger.verb).join(', ')
+        marks.append(sessionMark('fa-check session-default-mark', `Template when you ${verbs}`))
       }
       if (marks.childElementCount) {
         row.classList.add('has-marks')
@@ -2206,24 +2690,33 @@
 
   async function editSessionProfile(session, anchor) {
     const joined = session.isJoined || session.owner === 'joined'
-    // Only a session New could copy may be the default.
-    const canBeDefault = !joined && !session.pending
-    const wasDefault = !!state.defaultSessionId && state.defaultSessionId === session.sessionId
+    // Only a session a trigger could copy may be a template.
+    const canBeTemplate = !joined && !session.pending
+    const held = canBeTemplate ? await triggersHeldBy(session.sessionId) : []
+    const heldTemplate = held.length ? state.templates[held[0]] : null
     const values = await showSessionEditor(anchor, session, {
       mode: 'edit',
       launch: !joined,
-      defaultChoice: canBeDefault,
-      isDefault: wasDefault
+      advanced: canBeTemplate,
+      triggerId: held[0] || '',
+      skipDialog: !!(heldTemplate && heldTemplate.copy && heldTemplate.copy.skipDialog),
+      beforeSubmit: canBeTemplate
+        ? templateChecks({ selfId: session.sessionId, nameFrom: session.name })
+        : null
     })
     if (!values) return
+    // Read before the rename: afterwards the name is no longer a hidden copy's alone.
+    const hidden =
+      canBeTemplate && values.name !== session.name ? await hiddenCopiesNamed(values.name) : []
     const patch = { sessionId: session.sessionId, name: values.name }
     if (values.launch) {
       patch.cwd = values.cwd
       patch.command = values.command
     }
     await api.invoke('session.update', patch)
-    if (canBeDefault && values.isDefault !== wasDefault) {
-      await setDefaultSession(values.isDefault ? session.sessionId : '')
+    if (canBeTemplate) await saveTemplateChoice(session.sessionId, values, held)
+    if (hidden.length && !(await triggersHeldBy(session.sessionId)).length) {
+      await claimHiddenCopies(session.sessionId, hidden, { ...session, ...values })
     }
     await refreshSessions()
     if (state.selectedId === session.sessionId && values.name) {
@@ -2232,50 +2725,45 @@
     }
   }
 
-  // New opens the same editor as Copy, prefilled with the name the engine
-  // would pick on its own. SHIFT skips the editor: it copies the default
-  // session, or starts the default shell when there is none.
+  // The + New button: its click's trigger (exact modifiers) decides the
+  // template, and whether the dialog opens (startNewSession).
   async function newSessionProfile(anchor, event) {
-    if (event && event.shiftKey) {
-      const source = state.defaultSession
-      if (!source) {
-        await createSession({})
-        return
-      }
-      await createSession({
-        name: await uniqueSessionName(source.name),
-        cwd: source.cwd,
-        command: source.command
-      })
-      return
-    }
-    const { name } = await api.invoke('session.defaultName')
-    const values = await showSessionEditor(
-      anchor,
-      { name },
-      { mode: 'new', launch: true, shareAutoCopy: await shareAutoCopyPreference() }
-    )
-    if (!values) return
-    await createSessionFromEditor(values)
+    const trigger = clickTriggerFor(event)
+    if (!trigger) return
+    await startNewSession(trigger.id, anchor)
   }
 
   async function copySessionProfile(session, anchor, event) {
     const name = await uniqueSessionName(session.name)
+    const record = session.record !== false
     if (event && event.shiftKey) {
-      await createSession({ name, cwd: session.cwd, command: session.command })
+      await createSession({ name, cwd: session.cwd, command: session.command, record })
       return
     }
+    // Copy has no Advanced section, but its name is still checked (U2).
     const values = await showSessionEditor(
       anchor,
-      { ...session, name },
-      { mode: 'copy', launch: true, shareAutoCopy: await shareAutoCopyPreference() }
+      { ...session, name, record },
+      {
+        mode: 'copy',
+        launch: true,
+        noHistory: !record,
+        shareAutoCopy: await shareAutoCopyPreference(),
+        beforeSubmit: templateChecks()
+      }
     )
     if (!values) return
     await createSessionFromEditor(values, values.copyHistory ? session.sessionId : '')
   }
 
-  async function createSessionFromEditor(values, copyHistoryFrom) {
-    const session = await createSession({ ...values, copyHistoryFrom })
+  // The template choice is written before the Share wizard opens: the wizard
+  // stays open until Done.
+  async function createSessionFromEditor(values, copyHistoryFrom, template = null) {
+    const restoring = template && !template.live ? template.trigger.id : null
+    const session = await createSession({ ...values, copyHistoryFrom, restoring })
+    if (!session) return
+    await saveTemplateChoice(session.sessionId, values, [])
+    if (template && !values.triggerId) await adoptRestoredTemplate(template, session.sessionId)
     if (values.share) await shareCreatedSession(session.sessionId, values.share)
   }
 
@@ -2352,10 +2840,13 @@
   }
 
   // A small popover editor anchored under a row action, left edges aligned.
-  // `options.mode` is 'edit', 'new' or 'copy'. Resolves with
-  // { name, cwd, command, launch, isDefault, copyHistory, share } or null when
-  // cancelled; `share` is the Share form's settings when "Share session now"
-  // was ticked, else null.
+  // `options.mode` is 'edit', 'new', 'copy' or 'template' (a trigger's
+  // template, from the settings menu). Resolves with
+  // { name, cwd, command, launch, record, copyHistory, share, triggerId,
+  // skipDialog } or null when cancelled. `share` is the Share form's settings
+  // when "Share session now" was ticked, null when not, undefined in a dialog
+  // without it; `triggerId` is the Advanced choice ('' for none), undefined
+  // without that section. `options.triggerId`/`skipDialog`/`share` prefill.
   function showSessionEditor(anchor, session, options = {}) {
     closeSessionMenu()
     const existing = document.querySelector('.session-editor-overlay')
@@ -2398,37 +2889,113 @@
         panel.insertBefore(toggle.label, actionsRow)
         return toggle.input
       }
-      const defaultInput =
-        options.mode === 'edit' && options.defaultChoice
-          ? addCheck(
-              'Default for new sessions (hold SHIFT on New)',
-              !!options.isDefault,
-              'session-editor-default'
-            )
+      const creates = options.mode === 'new' || options.mode === 'copy'
+      // Ticked by default; Copy takes it from its source, New from its
+      // template (design A-3). Fixed once a session exists: a template backed
+      // by a live session shows it, greyed.
+      const recordInput =
+        creates || options.mode === 'template'
+          ? addCheck('Record session', session.record !== false, 'session-editor-record')
           : null
+      if (recordInput && options.recordLocked) {
+        recordInput.disabled = true
+        recordInput.title = 'Fixed when the session was created'
+      }
       // Off every time: copying history is never the implied choice.
       const copyHistoryInput =
         options.mode === 'copy' ? addCheck('Copy history', false, 'session-editor-history') : null
       let shareForm = null
       // No share box (checkbox or options) in a build with no usable backend.
-      const shareInput =
-        sharingAvailable() && (options.mode === 'new' || options.mode === 'copy')
-          ? addCheck('Share session now', false, 'session-editor-share')
-          : null
+      // A template carries its share choice too (design A-9).
+      const sharesHere =
+        (sharingAvailable() && (options.mode === 'new' || options.mode === 'copy')) ||
+        (sharingAvailable() && options.mode === 'template')
+      const shareInput = sharesHere
+        ? addCheck('Share session now', !!options.share, 'session-editor-share')
+        : null
+      let shareBox = null
+      const syncShareBox = () => {
+        if (!shareInput) return
+        if (shareInput.checked && !shareForm) {
+          const initial = options.share || { autoCopy: !!options.shareAutoCopy }
+          shareForm = shareOptionsForm({ ...initial })
+          shareBox.append(shareForm.root)
+        }
+        shareBox.hidden = !shareInput.checked
+      }
       if (shareInput) {
         // Expands the editor with the Share wizard's options; the panel is
         // anchored, so it re-places itself as it grows.
-        const shareBox = document.createElement('div')
+        shareBox = document.createElement('div')
         shareBox.className = 'session-editor-share-options'
         shareBox.hidden = true
         panel.insertBefore(shareBox, actionsRow)
-        shareInput.addEventListener('change', () => {
-          if (shareInput.checked && !shareForm) {
-            shareForm = shareOptionsForm({ autoCopy: !!options.shareAutoCopy })
-            shareBox.append(shareForm.root)
+        shareInput.addEventListener('change', syncShareBox)
+        syncShareBox()
+      }
+      // An unrecorded session has no history to copy and cannot be shared:
+      // unticking Record greys both (R1).
+      const syncRecord = () => {
+        const recorded = !recordInput || recordInput.checked
+        for (const input of [copyHistoryInput, shareInput]) {
+          if (!input) continue
+          // A Copy of an unrecorded session has no history to copy at all.
+          const usable = recorded && !(input === copyHistoryInput && options.noHistory)
+          if (!usable && input.checked) {
+            input.checked = false
+            input.dispatchEvent(new window.Event('change'))
           }
-          shareBox.hidden = !shareInput.checked
-        })
+          input.disabled = !usable
+          input.title = usable ? '' : 'Not recorded'
+          input.closest('label').classList.toggle('disabled', !usable)
+        }
+      }
+      if (recordInput) {
+        recordInput.addEventListener('change', syncRecord)
+        syncRecord()
+      }
+      // Advanced (R3): make this profile one trigger's template, and whether
+      // that trigger skips the dialog. Every trigger comes from the table.
+      let triggerSelect = null
+      let skipInput = null
+      if (options.launch && options.advanced !== false) {
+        const advanced = document.createElement('details')
+        advanced.className = 'session-editor-advanced'
+        const summary = document.createElement('summary')
+        summary.textContent = 'Advanced'
+        const label = document.createElement('label')
+        label.className = 'session-editor-label'
+        label.htmlFor = 'sessionEditorTrigger'
+        label.textContent = 'Set this profile as default for new sessions when:'
+        triggerSelect = document.createElement('select')
+        triggerSelect.id = 'sessionEditorTrigger'
+        triggerSelect.name = 'trigger'
+        triggerSelect.className = 'modal-input'
+        const none = document.createElement('option')
+        none.value = ''
+        none.textContent = 'none'
+        triggerSelect.append(none)
+        for (const trigger of NEW_SESSION_TRIGGERS) {
+          const option = document.createElement('option')
+          option.value = trigger.id
+          option.textContent = trigger.choice
+          triggerSelect.append(option)
+        }
+        triggerSelect.value = triggerById(options.triggerId) ? options.triggerId : ''
+        const skip = preferenceCheckbox(
+          'Skip new/edit profile dialog and open directly',
+          !!options.skipDialog
+        )
+        skip.label.classList.add('session-editor-skip')
+        skipInput = skip.input
+        const syncSkip = () => {
+          skipInput.disabled = !triggerSelect.value
+          skip.label.classList.toggle('disabled', skipInput.disabled)
+        }
+        triggerSelect.addEventListener('change', syncSkip)
+        syncSkip()
+        advanced.append(summary, label, triggerSelect, skip.label)
+        panel.insertBefore(advanced, actionsRow)
       }
       overlay.append(panel)
       document.body.append(overlay)
@@ -2460,22 +3027,50 @@
       panel.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') close(null)
       })
+      // `options.beforeSubmit(values)` asks its questions over the open
+      // dialog; false keeps the dialog open as it was (U2, U3).
+      let checking = false
       panel.addEventListener('submit', (event) => {
         event.preventDefault()
+        if (checking) return
         const value = name.value.trim()
         if (!value) {
           name.focus()
           return
         }
-        close({
+        const values = {
           name: value,
           cwd: options.launch ? cwd.value.trim() : undefined,
           command: options.launch ? command.value.trim() : undefined,
           launch: !!options.launch,
-          isDefault: defaultInput ? defaultInput.checked : false,
-          copyHistory: copyHistoryInput ? copyHistoryInput.checked : false,
-          share: shareInput && shareInput.checked && shareForm ? { ...shareForm.settings } : null
-        })
+          record: recordInput ? recordInput.checked : session.record !== false,
+          copyHistory: copyHistoryInput
+            ? copyHistoryInput.checked && !copyHistoryInput.disabled
+            : false,
+          share: shareInput
+            ? shareInput.checked && !shareInput.disabled && shareForm
+              ? { ...shareForm.settings }
+              : null
+            : undefined,
+          triggerId: triggerSelect ? triggerSelect.value : undefined,
+          skipDialog: skipInput ? skipInput.checked && !skipInput.disabled : false
+        }
+        if (!options.beforeSubmit) {
+          close(values)
+          return
+        }
+        checking = true
+        overlay.dataset.checking = '1'
+        Promise.resolve(options.beforeSubmit(values))
+          .then((ok) => {
+            if (ok) close(values)
+            else if (!closed) name.focus()
+          })
+          .catch(showError)
+          .finally(() => {
+            checking = false
+            delete overlay.dataset.checking
+          })
       })
 
       anchorPanel(panel, anchor, 'left')
@@ -2674,10 +3269,14 @@
   //   field      an action that opens a dialog or acts: { label, toggle }
   //   separator  a rule between groups: {}
   //   info       a line of text, disabled: { label } (the version, last)
+  // The new-session templates sit in a section of their own (R5).
   function settingsMenuItems() {
+    const paneItems = collapsedPaneItems()
     return [
       ...settingsPreferenceItems(),
-      ...collapsedPaneItems(),
+      { kind: 'separator' },
+      ...templateMenuItems(),
+      ...(paneItems.length ? [{ kind: 'separator' }, ...paneItems] : []),
       { kind: 'separator' },
       { kind: 'info', label: `ZBTerm v${state.appVersion || '?'}` }
     ]
@@ -2961,7 +3560,15 @@
     await selectSession(selectable[nextIndex])
   }
 
+  // The single funnel every profile creation goes through (design *Refuses*):
+  // a name that is a deleted template's asks first (U2) unless a dialog
+  // already did (`nameConfirmed`), and resolves null when refused.
+  // `restoring` is the trigger whose hidden copy this creation restores.
   async function createSession(profile = {}) {
+    const hidden = profile.name ? await hiddenCopiesNamed(profile.name, profile.restoring) : []
+    if (hidden.length && !profile.nameConfirmed) {
+      if (!(await confirmHiddenCopyName(profile.name, hidden))) return null
+    }
     await ensureTerminalReady()
     const dims = dimensions()
     setStatus('starting session')
@@ -2970,9 +3577,14 @@
       cwd: profile.cwd || undefined,
       command: profile.command || undefined,
       copyHistoryFrom: profile.copyHistoryFrom || undefined,
+      // Only an unrecorded session says so; absent means recorded.
+      record: profile.record === false ? false : undefined,
       cols: dims.cols,
       rows: dims.rows
     })
+    if (hidden.length && !profile.triggerId) {
+      await claimHiddenCopies(session.sessionId, hidden, profile)
+    }
     await refreshSessions()
     // The listed entry, not the create result: a command that failed at once
     // is already inactive there, and selecting it must not extend it again.
@@ -3061,6 +3673,10 @@
   async function openPlayback(sessionId) {
     cancelPendingSeek()
     stopPlaybackClock()
+    if (isUnrecordedSession(sessionEntry(sessionId))) {
+      showUnrecordedEnded(sessionId)
+      return
+    }
     clearLiveWrites({ ack: true })
     state.mode = 'playback'
     state.playbackGridLayout = null
@@ -3097,6 +3713,32 @@
     } else {
       renderFrame(player.frame)
     }
+  }
+
+  // The session looked up by id: the list's entry, else the open one.
+  function sessionEntry(sessionId) {
+    return (
+      state.sessions.find((session) => session.sessionId === sessionId) ||
+      (state.currentSession && state.currentSession.sessionId === sessionId
+        ? state.currentSession
+        : null)
+    )
+  }
+
+  // An unrecorded session that ended has no playback (it would answer
+  // E_NOT_RECORDED). The last live screen stays, under the offline dots,
+  // when the session ended while shown; otherwise the screen is empty.
+  function showUnrecordedEnded(sessionId) {
+    const wasShownLive = state.mode === 'live' && state.selectedId === sessionId
+    clearLiveWrites({ ack: true })
+    state.mode = 'playback'
+    state.playbackGridLayout = null
+    state.playerReady = false
+    state.playbackFrame = null
+    if (!wasShownLive && state.term) resetVisibleTerminal()
+    hideTerminalPending()
+    setStatus('ended, not recorded')
+    updateTransportControls()
   }
 
   function renderFrame(frame) {
@@ -3185,7 +3827,15 @@
       okText: 'Rename'
     })
     if (!name) return
-    await api.invoke('session.rename', { sessionId: state.selectedId, name })
+    const sessionId = state.selectedId
+    const profile = isProfileSession(current) && name !== current.name
+    const hidden = profile ? await hiddenCopiesNamed(name) : []
+    if (hidden.length && !(await confirmHiddenCopyName(name, hidden))) return
+    await api.invoke('session.rename', { sessionId, name })
+    await renameTemplateCopies(sessionId, name)
+    if (hidden.length && !(await triggersHeldBy(sessionId)).length) {
+      await claimHiddenCopies(sessionId, hidden, { ...current, name })
+    }
     await refreshSessions()
   }
 
@@ -3201,11 +3851,20 @@
       renderSessions()
       return
     }
-    if (options.confirm !== false) {
+    // A template is never deleted without the warning (U2), Shift or not.
+    const held = triggersOf(await triggersHeldBy(state.selectedId))
+    if (options.confirm !== false || held.length) {
+      const restoreName =
+        (held.length && state.templates[held[0].id] && state.templates[held[0].id].copy.name) ||
+        (current ? current.name : '')
+      const verbs = triggerVerbs(held)
       const confirmed = await askConfirm(`Delete "${current ? current.name : 'this session'}"?`, {
         okText: 'Delete',
         danger: true,
-        anchor: options.anchor
+        anchor: options.anchor,
+        note: held.length
+          ? `"${restoreName}" is the template for new sessions when you ${verbs}. It will be restored as "${restoreName}" the next time you ${verbs}.`
+          : ''
       })
       if (!confirmed) return
     }
@@ -3216,7 +3875,7 @@
     } finally {
       state.deletingSessionIds.delete(sessionId)
     }
-    if (sessionId === state.defaultSessionId) await setDefaultSession('').catch(() => {})
+    await releaseDeletedTemplate(sessionId).catch(() => {})
     if (state.pinnedIds.includes(sessionId)) {
       await setPinnedIds(state.pinnedIds.filter((id) => id !== sessionId)).catch(() => {})
     }
@@ -3383,6 +4042,7 @@
   async function shareSession() {
     if (!sharingAvailable()) return
     if (!state.selectedId || !state.currentSession || !state.currentSession.active) return
+    if (isUnrecordedSession(state.currentSession)) return
     const result = await showShareWizard(els.shareSession)
     await finishShare(result)
   }
@@ -3392,6 +4052,28 @@
   async function shareCreatedSession(sessionId, settings) {
     const result = await showShareWizard(els.shareSession, { sessionId, settings })
     await finishShare(result)
+  }
+
+  async function createShareLink(sessionId, settings, autoJoinOverride) {
+    const created = await api.invoke('share.createLink', {
+      sessionId,
+      type: settings.type,
+      maxViewers: settings.type === 'group' ? settings.maxViewers : 1,
+      autoJoin: autoJoinOverride === false ? false : !settings.requireApproval,
+      ...(settings.backend ? { backend: settings.backend } : {})
+    })
+    // The first share activates its backend for the life of the core.
+    const info = state.shareBackends
+    if (info && !info.active) info.active = settings.backend || info.default || null
+    return created
+  }
+
+  // A template that skips the dialog shares with its stored options and no
+  // wizard; the link is copied when they say so.
+  async function shareQuietly(sessionId, settings) {
+    const link = await createShareLink(sessionId, settings)
+    const copied = settings.autoCopy ? await copyShareLink(link.uri) : false
+    await finishShare({ copied, copyAttempted: !!settings.autoCopy })
   }
 
   async function finishShare(result) {
@@ -4022,6 +4704,7 @@
 
   async function enterPlaybackMode(sessionId) {
     if (state.mode === 'playback') return
+    if (isUnrecordedSession(sessionEntry(sessionId))) return
     const startTs = state.playbackStartTs
     const endTs = state.playbackEndTs
     stopPlaybackClock()
@@ -4344,11 +5027,12 @@
     const isRunningPlayback = isPlayback && state.playbackPlaying
     const canUsePlaybackControls = hasSession && isPlayback
     const canUseOpenPlayer = canUsePlaybackControls && state.playerReady
-    const canStepBack = canUseOpenPlayer || (hasSession && isLive && isActiveSession)
+    const unrecorded = isUnrecordedSession(current || state.currentSession)
+    const canStepBack = canUseOpenPlayer || (hasSession && isLive && isActiveSession && !unrecorded)
     const canGoLive = hasSession && isActiveSession && !isLive
     const joined = isJoinedSession()
     const canToggleHd = hasSession && isLive && isActiveSession && !joined
-    const canShare = hasSession && isActiveSession && !joined
+    const canShare = hasSession && isActiveSession && !joined && !unrecorded
     const devLogTerminalVisible = isDevLogTerminalVisible()
     const canShowInputMode = hasSession && !devLogTerminalVisible
     const canAdjustSessionFont = isLive && canResizeSelectedLiveSession()
@@ -4384,7 +5068,7 @@
     els.fontSizeDecrease.disabled = !canAdjustFont || state.liveFontSize <= MIN_LIVE_FONT_SIZE
     els.fontSizeIncrease.disabled = !canAdjustFont || state.liveFontSize >= MAX_LIVE_FONT_SIZE
     els.shareSession.disabled = !canShare
-    els.inputMode.disabled = !canShare
+    els.inputMode.disabled = !hasSession || !isActiveSession || joined || unrecorded
     els.goLive.hidden = hideSessionActions
     els.hdToggle.hidden = hideSessionActions
     const canOfferSharing = sharingAvailable()
@@ -4394,7 +5078,8 @@
     els.inputMode.hidden = !canShowInputMode || !canOfferSharing
     els.extendSession.hidden = hideSessionActions || !(canExtend || extending)
     els.hdToggle.disabled = !canToggleHd
-    els.scrubber.disabled = !hasSession
+    els.scrubber.disabled = !hasSession || unrecorded
+    els.scrubber.title = unrecorded ? 'Not recorded' : ''
 
     setIconOnly(
       els.playPause,
@@ -4406,15 +5091,17 @@
             ? 'fa-i-cursor'
             : 'fa-play'
     )
-    els.playPause.title = hasPendingLiveReveal
-      ? 'Show live stream'
-      : seekWaiting
-        ? 'Preparing playback'
-        : isRunningPlayback
-          ? 'Pause'
-          : selectionPausedMark
-            ? 'Paused for the selection: Play to resume'
-            : 'Play'
+    els.playPause.title = unrecorded
+      ? 'Not recorded'
+      : hasPendingLiveReveal
+        ? 'Show live stream'
+        : seekWaiting
+          ? 'Preparing playback'
+          : isRunningPlayback
+            ? 'Pause'
+            : selectionPausedMark
+              ? 'Paused for the selection: Play to resume'
+              : 'Play'
     els.playPause.classList.toggle('selection-paused', selectionPausedMark)
     els.playPause.classList.toggle('mode-live', isPausedPlayback && !seekWaiting)
     els.playPause.classList.toggle('mode-pause', isRunningPlayback && !seekWaiting)
@@ -4457,7 +5144,8 @@
     setButtonLabel(els.goLive, sessionLiveIcon(current, { keyboardShared: true }).icon, 'Live')
     els.goLive.title = canGoLive ? 'Show live session' : 'Live session'
     setButtonLabel(els.shareSession, 'fa-share-nodes', 'Share')
-    els.shareSession.title = 'Share session'
+    els.shareSession.title = unrecorded ? 'Not recorded' : 'Share session'
+    els.stepBack.title = unrecorded ? 'Not recorded' : 'Step back'
     renderScrubberIndicators()
     syncOfflineSessionView(hasSession && isPlayback && !!current && !current.active)
     // A live session scrolled back in time gets the same screen, fainter.
@@ -4537,6 +5225,12 @@
 
   function sessionHasHd() {
     return state.timeline.some((item) => item && item.hd)
+  }
+
+  // An unrecorded session (design *Refuses*): live only, nothing to play back,
+  // copy or share. A recorded entry carries no `record` key.
+  function isUnrecordedSession(session) {
+    return !!session && session.record === false
   }
 
   function isJoinedSession() {
@@ -5170,18 +5864,8 @@
       // choose step or from the New/Copy editor.
       const share = (sessionId) => {
         renderSharing()
-        api
-          .invoke('share.createLink', {
-            sessionId,
-            type: settings.type,
-            maxViewers: settings.type === 'group' ? settings.maxViewers : 1,
-            autoJoin: debugAutoJoin === false ? false : !settings.requireApproval,
-            ...(settings.backend ? { backend: settings.backend } : {})
-          })
+        createShareLink(sessionId, settings, debugAutoJoin)
           .then(async (created) => {
-            // The first share activates its backend for the life of the core.
-            const info = state.shareBackends
-            if (info && !info.active) info.active = settings.backend || info.default || null
             if (closed) return
             link = created
             const copied = settings.autoCopy ? await copyShareLink(link.uri) : false
@@ -6105,6 +6789,10 @@
     return new Promise((resolve) => {
       const overlay = document.createElement('div')
       overlay.className = 'modal-overlay'
+      // A question asked from the open session editor shows over it.
+      if (document.querySelector('.session-editor-overlay')) {
+        overlay.classList.add('modal-overlay-over-editor')
+      }
 
       const panel = document.createElement('form')
       panel.className = 'modal-panel'
@@ -8137,8 +8825,23 @@
     }
   }
 
+  // The `.modal-overlay` on top: a confirmation asked over a dialog while a
+  // Share key wizard is still open behind it is the one being asked.
+  function debugTopModalOverlay() {
+    let top = null
+    let topZ = -Infinity
+    for (const overlay of document.querySelectorAll('.modal-overlay')) {
+      const z = Number.parseInt(window.getComputedStyle(overlay).zIndex, 10) || 0
+      if (z >= topZ) {
+        top = overlay
+        topZ = z
+      }
+    }
+    return top
+  }
+
   function debugModalState() {
-    const overlay = document.querySelector('.modal-overlay')
+    const overlay = debugTopModalOverlay()
     if (!overlay) return null
     const panel = overlay.querySelector('.modal-panel')
     const title = overlay.querySelector('.modal-title')
@@ -8184,6 +8887,18 @@
   // animation frame, or 100 ms when none comes. Chromium sends no frames to a
   // window that is covered, so with several instances on one display a plain
   // requestAnimationFrame wait never ended and the debug request hung.
+  // Until an editor's OK checks (U2, U3) have asked their question or ended:
+  // a kit reads the state the click led to, not the IPC calls in between.
+  async function debugSettleEditorChecks() {
+    const end = Date.now() + 5000
+    while (Date.now() < end) {
+      const busy = document.querySelector('.session-editor-overlay[data-checking]')
+      if (!busy || document.querySelector('.modal-overlay-over-editor')) break
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    await debugSettle()
+  }
+
   function debugSettle() {
     return new Promise((resolve) => {
       const timer = setTimeout(resolve, 100)
@@ -8259,10 +8974,25 @@
     })
   }
 
+  // The overlay on top when several are open (a Share key behind a new
+  // dialog): the highest z-index, then the last one added.
+  function debugTopOverlay() {
+    let top = null
+    let topZ = -Infinity
+    for (const overlay of document.querySelectorAll('.session-editor-overlay, .modal-overlay')) {
+      const z = Number.parseInt(window.getComputedStyle(overlay).zIndex, 10) || 0
+      if (z >= topZ) {
+        top = overlay
+        topZ = z
+      }
+    }
+    return top
+  }
+
   // The open overlay: the session editor (New/Copy/Edit) or a `.modal-overlay`
   // (confirmations, Share, Join, the identity wizard).
   function debugOverlayState() {
-    const overlay = document.querySelector('.session-editor-overlay, .modal-overlay')
+    const overlay = debugTopOverlay()
     if (!overlay) return null
     const kind = overlay.classList.contains('session-editor-overlay') ? 'session-editor' : 'modal'
     const panel = overlay.querySelector('.session-editor, .modal-panel') || overlay
@@ -8751,7 +9481,7 @@
             )
           : matches[0]
       } else if (request.text) {
-        const overlay = document.querySelector('.session-editor-overlay, .modal-overlay')
+        const overlay = debugTopOverlay()
         target = debugButtonByText(overlay || document, request.text)
       }
       if (!target) return { clicked: false, selector: request.selector || null, ...debugUiState() }
@@ -8791,7 +9521,7 @@
       return { clicked: true, ...debugUiState() }
     }
     if (command === 'dialog-set') {
-      const overlay = document.querySelector('.session-editor-overlay, .modal-overlay')
+      const overlay = debugTopOverlay()
       if (!overlay) return { set: false, field: request.field || '', modal: null }
       const needle = String(request.field || '')
         .trim()
@@ -8828,7 +9558,7 @@
       return { set: true, field: request.field || '', modal: debugOverlayState() }
     }
     if (command === 'dialog-submit' || command === 'dialog-cancel') {
-      const overlay = document.querySelector('.session-editor-overlay, .modal-overlay')
+      const overlay = debugTopOverlay()
       if (!overlay) return { done: false, ...debugUiState() }
       const buttons = Array.from(overlay.querySelectorAll('.modal-actions button'))
       const button =
@@ -8837,12 +9567,12 @@
           : buttons.find((el) => el.type !== 'submit')
       if (!button) return { done: false, ...debugUiState() }
       button.click()
-      await debugSettle()
+      await debugSettleEditorChecks()
       return { done: true, ...debugUiState() }
     }
     if (command === 'confirm-state') return debugModalState()
     if (command === 'confirm-answer') {
-      const overlay = document.querySelector('.modal-overlay')
+      const overlay = debugTopModalOverlay()
       if (!overlay) return { answered: false, confirm: null }
       const buttons = Array.from(overlay.querySelectorAll('.modal-actions button'))
       const button =
@@ -8851,20 +9581,17 @@
           : buttons.find((el) => el.type === 'submit')
       if (!button) return { answered: false, confirm: debugModalState() }
       button.click()
-      await debugSettle()
+      await debugSettleEditorChecks()
       return { answered: true, confirm: debugModalState() }
     }
     if (command === 'templates') {
-      // No trigger table and no per-trigger templates exist yet
-      // (261110_session-templates P2); the old Shift+New default is reported.
       return {
-        triggers: [],
-        newSessionTemplates: {},
-        defaultSessionId: state.defaultSessionId || null
+        triggers: NEW_SESSION_TRIGGERS.map((trigger) => ({ ...trigger })),
+        newSessionTemplates: await readAllTemplates()
       }
     }
     if (command === 'triggers-add') {
-      throw new Error('no trigger table: triggers-add needs NEW_SESSION_TRIGGERS')
+      return { added: true, triggers: addNewSessionTrigger(request.entry) }
     }
     // The 261110_timeline-fixes kit's commands: pure reads and recorders.
     if (command === 'selection-state') return debugSelectionState()
