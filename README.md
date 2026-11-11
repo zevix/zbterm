@@ -42,7 +42,15 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Single-user invitation key (no approval required)
 - Multi-user invitation key (approval required; no real guarantee of viewer identity)
 - Keyboard sharing for all users — off by default, toggleable by the host
-- Time slider with activity indicators for going back in time
+- Time slider with activity indicators for going back in time; its bubble shows
+  the wall-clock time beside the elapsed time (`14:32:05` today, `Thu 14:32:05`
+  within the week, the full date otherwise)
+- Collapsible side pane: click the ZBTerm logo (a hamburger on hover) or press
+  Ctrl+Shift+B. While it is collapsed, the top bar holds the logo, New, Join
+  and Settings, and Identity and Dark theme move into the settings menu. The
+  choice survives a restart
+- A green dot on the identity button means an identity is set up, an orange one
+  that it is not; the app version is the last item of the settings menu
 - New viewers see the live view immediately; history downloads in the background with a visual indicator
 - Host can look back through history while viewers keep watching the live output
 - High-res mode for more frequent screen updates, togglable at any time
