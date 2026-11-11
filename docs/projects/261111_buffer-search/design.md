@@ -111,4 +111,4 @@ None hard to reverse.
 
 ## Approval
 
-> FILL: date and the user's words. No line → no build.
+Approved 2026-11-11 by the user ("I want one change - have a single search box on the bottom left - move our current search box to the bottom, and when collapsed keep it the same width as the top bar, go!", in chat, on the plan with Q-1/Q-2 as recommended; this revision applies that change), file at sha256 c646d0ce3e56 (the file before this line).
