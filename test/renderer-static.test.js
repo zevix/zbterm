@@ -621,3 +621,22 @@ test('debug renderer commands do not wait on a frame that never comes', (t) => {
   t.ok(handler.includes('await debugSettle()'), 'commands settle on a frame or a timeout')
   t.ok(/function debugSettle\(\)[\s\S]{0,200}setTimeout\(resolve, 100\)/.test(js))
 })
+
+test('ui-chrome: version is the last settings item, the bubble has a wall clock, icons and identity dot are coloured', async (t) => {
+  const rendererDir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')
+  const html = await fs.promises.readFile(path.join(rendererDir, 'index.html'), 'utf8')
+  t.absent(html.includes('id="version"'), 'the brand bar has no version')
+  t.ok(
+    js.includes("{ kind: 'separator' },\n      { kind: 'info', label: `ZBTerm v${state.appVersion"),
+    'the menu ends with a separator and the version as an info item'
+  )
+  t.ok(js.includes("if (kind === 'info' || item.disabled)"), 'info items are disabled')
+  t.ok(html.includes('<script src="wall-clock.js"></script>'), 'index.html loads the formatter')
+  t.ok(html.indexOf('wall-clock.js') < html.indexOf('<script src="app.js">'), 'before app.js')
+  t.ok(js.includes('const clock = formatWallClock(tsMs, Date.now())'), 'the bubble formats it')
+  t.ok(html.includes('#newSession .btn-icon {\n        color: var(--new-green);'), 'New icon')
+  t.ok(html.includes('#joinLink .btn-icon {\n        color: var(--join-blue);'), 'Join icon')
+  t.ok(html.includes("[data-identity='set']::after"), 'the identity dot')
+  t.ok(js.includes('updateIdentityDot()'), 'applyIdentity updates the dot')
+})

@@ -193,8 +193,15 @@ start_app() {
   echo "start_app: $ZBUI_SESSION port $ZBUI_PORT home $ZBUI_APP_HOME log $ZBUI_APP_LOG" >&2
   # uisolate keeps its sessions under the real HOME, so the scratch environment is
   # set inside the session, around the app only.
+  # Kit correction 2026-11-11 (builder P2): `uisolate run` does not hand the
+  # caller's environment to the app, so R2's `export TZ=Europe/Berlin` never
+  # reached it (the app formatted in the host's Asia/Jerusalem). A TZ the script
+  # set is now passed through explicitly.
+  local tz_env=()
+  if [ -n "${TZ:-}" ]; then tz_env=("TZ=$TZ"); fi
   uisolate run --name "$ZBUI_SESSION" -t 3600 -- \
     env -u SSH_AUTH_SOCK -u WAYLAND_DISPLAY -u ZBTERM_DEBUG_SERVER -u ZBTERM_DEBUG_SERVER_PORT \
+    ${tz_env[@]+"${tz_env[@]}"} \
     HOME="$ZBUI_APP_HOME" TMPDIR="$ZBUI_APP_TMP" \
     XDG_CONFIG_HOME="$ZBUI_APP_HOME/.config" XDG_DATA_HOME="$ZBUI_APP_HOME/.local/share" \
     XDG_CACHE_HOME="$ZBUI_APP_HOME/.cache" XDG_STATE_HOME="$ZBUI_APP_HOME/.local/state" \

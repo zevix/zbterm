@@ -32,7 +32,7 @@ The symbols served are listed in each `design.md` *Interface*.
 | The packaged build has no sidecar either | `find /tmp/claude-1000/zbui/out -name zxterm-core -type f` → nothing. The kit must export `ZXTERM_CORE_BIN` for the app (added to `acceptance/activate`). |
 | Test suite, file by file (62 files) | `p0_summary.txt` loop (`node_modules/.bin/brittle-node <file>`, one process per file): 520 `ok`, 2 `not ok`, 1 file crashed (below) |
 | Pre-existing failures, not caused by this project | `doctor.test.js` *not ok 8* "run() reports every check and exits 0 on this machine"; `native-linkage.test.js` *not ok 3* (expected `dirty/pty.node`, got `clean/clean.node`); `zxterm-seam.test.js` crashes with `no such seam method: test.echo` (the main checkout's sidecar is not a test build). Not diagnosed. |
-| Lint is clean (warnings only) | `npm run lint` → exit 0, 5 `require-await` warnings (`p0_lint.log`) |
+| Lint is clean (warnings only) | `npm run lint` → exit 0, 95 `require-await` warnings (`grep -c require-await p0_lint.log` → 95; corrected 2026-11-11, was "5") |
 
 ## Cost (mandatory)
 

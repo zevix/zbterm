@@ -69,12 +69,12 @@ row, so the goal page stays one screen. Not a spec; nothing here is approved or 
 - **R4** Tooltip: "Hide side pane (Ctrl+Shift+B)" or "Show side pane (Ctrl+Shift+B)". The hamburger is `fa-bars`. The state survives a restart (A-6).
 - **R5** "the box that is currently above and same width of the terminal" is `.topbar-title`, which holds the session title and meta. Expanding the pane puts every moved node back.
 - **R6** Green means `identity.self` returns `configured: true`. Orange means `configured: false` (the unknown provider). While collapsed, the dot is also on the Identity menu item and the settings button (A-7).
-- **U1** Without the change, Ctrl+Shift+B reaches the shell as `^B` (`\002`).
+- **U1** Measured in P1 (2026-11-11, `od -c`): today xterm.js sends no bytes for Ctrl+Shift+B or Ctrl+Shift+T, so U1 guards against a regression rather than fixing a leak. (The earlier claim that it reaches the shell as `^B` was wrong.)
 - **U2** The narrow layout is the `@media (max-width: 780px)` block in `renderer/index.html`.
 
 ## Soft changes
 
-None.
+- 2026-11-11 (builder P2), R2 detail: "in the future" means a *later calendar day*. `formatWallClock` compares local calendar dates only, so a timestamp later today (e.g. a joined host's clock a few seconds ahead) shows `14:32:05`, not the full date; a timestamp on a later day gets the full date (`design.md` Q-2 / scenario 12 said "a future timestamp gets the full date"). The kit's future case (the next day) is unchanged and passes.
 
 ## Superseded text
 

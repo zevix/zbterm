@@ -5,10 +5,22 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-in-progress, 2026-11-11: P1 is built (kit harness, debug commands, every script body of this kit and of `../261110_session-templates/`). Both kits run end to end and are red on their own assertion lines. The next phase is P2 (chrome).
+in-progress, 2026-11-11: P2 is built. R1, R2 and R3 are green. R6 is green up to its last two lines, which need the side-pane toggle (P3): it fails on `jq -e '.sideCollapsed == true and .identityDotSettings == "set"'`. R4, R5, U1 and U2 still fail on their P1 lines. The next phase is P3 (side pane); R6 goes green with it.
+
+## Next
+
+P3 (side pane): `toggleSidePane`/`applySidePane` (call `updateIdentityDot()` from it), the hamburger, Ctrl+Shift+B, the collapsed top bar, and the collapsed-only Identity and Theme menu items (give the Identity item `identity: identityDotState()`; place them before the separator). Then R4, R5, R6, U1, U2.
 
 ## Done
 
+- 2026-11-11 builder P2:
+  - Settings menu items carry a `kind` (`check`, `field`, `separator`, `info`): `renderer/app.js::settingsMenuItems` (= `settingsPreferenceItems()`, a separator, then `info` "ZBTerm v<version>"), `renderSettingsMenuItem`, `settingsMenuItemKind` (an item without `kind` still works: `field: true` → field, else check). Every rendered row has `data-kind`; info rows are disabled; separators are `<div role="separator" class="context-menu-separator">`. The sibling's template section goes into `settingsMenuItems` before the separator.
+  - `#version` is gone from the brand bar (span, `.version` CSS, `els.version`); the version is `state.appVersion` from `bridge.pkg()`.
+  - Bubble: `renderer/wall-clock.js` (new, a plain script before `app.js`; `window.zbtermFormatWallClock`, and `module.exports` for tests) holds `formatWallClock(tsMs, nowMs)`. `scrubberTipTextForTs` returns `<clock> · <elapsed>` (with collapsed gaps `<clock> · 0:42 (1:05)`). `bubble-format` answers `{ text }`.
+  - Colours: tokens `--new-green`, `--join-blue`, `--ok`, `--warn` for both themes; `#newSession .btn-icon` green, `#joinLink .btn-icon` blue.
+  - Identity dot: `applyIdentity` → `updateIdentityDot()` sets `data-identity="set|unset"` on `#identitySetup`, and on `#settingsToggle` only while `.app.side-collapsed` (P3 must call `updateIdentityDot()` from `applySidePane`). CSS `[data-identity]::after` draws the 8px dot. A menu item with `identity: 'set'|'unset'` gets the same attribute (for P3's collapsed Identity item).
+  - Tests: `test/wall-clock.test.js` (new, TZ=Europe/Berlin, the kit's cases plus midnight and padding), one new static test in `test/renderer-static.test.js`.
+  - Kit correction in `acceptance/lib.sh::start_app` (dated comment): the script's `TZ` is passed to the app; `uisolate run` does not forward the caller's environment, so R2's `TZ=Europe/Berlin` never reached it.
 - 2026-11-11 builder P1:
   - `renderer/app.js::window.__zbtermDebugCommand` gained `ui-state`, `bubble-format`, `click`, `settings-open`, `settings-click`, `dialog-set`, `dialog-submit`, `dialog-cancel`, `confirm-state`, `confirm-answer`, `templates` and `triggers-add` (helpers `debugUiState`, `debugOverlayState`, `debugSettingsMenuState`, `debugFields` just above it). Features not built yet read as absent: `bubble-format` answers `null`, `templates` answers `{ triggers: [], newSessionTemplates: {}, defaultSessionId }`, `triggers-add` throws "no trigger table". P2 replaces these three.
   - `docs/debug_server_howto.md` *Renderer commands*: a table of the new commands.
@@ -19,7 +31,13 @@ in-progress, 2026-11-11: P1 is built (kit harness, debug commands, every script 
 
 ## Measured
 
-Logs: `~/.claude/projects/-zp-zdata-zeev-github-zbterm/runs/261110_ui-chrome/` (`p1_kit_ui/`, `p1_kit_templates/`, `p1_renderer-static.log`, `p1_lint.log`, `p1_package.log`).
+P2 logs: same dir, `p2_kit_ui/`, `p2_kit_templates/`, `p2_kit_ui_r2/` (R2 alone after the TZ correction), `p2_wall-clock.log`, `p2_renderer-static.log`, `p2_lint.log`, `p2_package.log`.
+
+- Package → exit 0. `test/wall-clock.test.js` → `tests = 3/3 pass`, `asserts = 16/16 pass`, 0 skipped. `test/renderer-static.test.js` → `tests = 34/34 pass`, `asserts = 206/206 pass`, 0 skipped.
+- `npm run lint` → exit 0, 95 `require-await` warnings (`grep -c require-await p2_lint.log` → 95), as before.
+- This kit → PASS R1, R2, R3; FAIL R4, R5, R6, U1, U2 (56 s wall). Sibling kit → 11 FAIL, each on the same line as in P1 (63 s wall). Failing lines that changed from P1: R6 now fails on `jq -e '.sideCollapsed == true and .identityDotSettings == "set"'` (needs P3's toggle); every other failing line is the P1 one below.
+
+P1 logs: `p1_kit_ui/`, `p1_kit_templates/`, `p1_renderer-static.log`, `p1_lint.log`, `p1_package.log`.
 
 - Package: `ZBTERM_FORGE_OUT_DIR=/tmp/claude-1000/zbui/out npm run package` → exit 0, 5.3 s.
 - `HOME=/tmp/claude-1000/zbui/h TMPDIR=/tmp/zbui-t ZXTERM_CORE_BIN=… npx brittle-node test/renderer-static.test.js` → `tests = 33/33 pass`, `asserts = 196/196 pass`, 0 skipped.
@@ -67,8 +85,9 @@ None.
 
 ## Open
 
+- R6's last two lines click the logo and need the side pane collapsed: P2 cannot turn R6 green without building P3's toggle. Left red on that line for P3.
 - Sibling design's reference program says the U1 control is "found" by the on-disk grep; with encryption that cannot happen. The kit uses the header's wording ("in a recorded session's mirror") instead. Planner to confirm.
 
 ## Soft changes to read back
 
-None.
+- 2026-11-11 (P2), R2 detail: a timestamp later *today* shows the time only; only a later *day* gets the full date (`notes--context.md` *Soft changes*).

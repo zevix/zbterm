@@ -50,6 +50,10 @@
         --terminal-selection: #355a64;
         --offline-dot: rgba(0, 0, 0, 0.55);
         --history-dot: rgba(0, 0, 0, 0.25);
+        --new-green: #3cc56f;
+        --join-blue: #4a9dff;
+        --ok: #3cc56f;
+        --warn: #f08c2a;
       }
 
       :root[data-theme='light'] {
@@ -87,6 +91,10 @@
         --terminal-selection: #bdd7e4;
         --offline-dot: rgba(255, 255, 255, 0.6);
         --history-dot: rgba(255, 255, 255, 0.25);
+        --new-green: #1f9a4e;
+        --join-blue: #1677db;
+        --ok: #1f9a4e;
+        --warn: #d9720f;
       }
 
       html {
@@ -220,17 +228,6 @@
         object-fit: contain;
       }
 
-      /* Right after the name, on its baseline. */
-      .version {
-        align-self: flex-end;
-        margin: 0 0 3px -5px;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 400;
-        white-space: nowrap;
-        flex-shrink: 0;
-      }
-
       .brand-actions {
         display: flex;
         align-items: center;
@@ -340,6 +337,38 @@
 
       #shareSession .btn-icon {
         color: var(--pear-color);
+      }
+
+      /* Only the icons are coloured; the labels keep the button's colour. */
+      #newSession .btn-icon {
+        color: var(--new-green);
+      }
+
+      #joinLink .btn-icon {
+        color: var(--join-blue);
+      }
+
+      /* Identity set up (green) or not (orange): a dot on the button's corner
+         (applyIdentity sets data-identity). */
+      [data-identity] {
+        position: relative;
+      }
+
+      [data-identity]::after {
+        content: '';
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--warn);
+        box-shadow: 0 0 0 1.5px var(--bar-bg);
+        pointer-events: none;
+      }
+
+      [data-identity='set']::after {
+        background: var(--ok);
       }
 
       @container topbar (max-width: 760px) {
@@ -819,6 +848,24 @@
 
       .settings-menu {
         min-width: 226px;
+      }
+
+      .context-menu-separator {
+        height: 1px;
+        margin: 2px 4px;
+        background: var(--border);
+      }
+
+      /* An info row (the version): text, not an action. */
+      .context-menu-item.context-menu-info,
+      .context-menu-item.context-menu-info:hover {
+        color: var(--muted);
+        background: transparent;
+        cursor: default;
+      }
+
+      .context-menu-info .check-mark {
+        visibility: hidden;
       }
 
       .session-icon {
@@ -2041,7 +2088,6 @@
               ><img src="../build/icon/icon-64x64.png" alt=""
             /></span>
             <span class="brand-name">ZBTerm</span>
-            <span id="version" class="version"></span>
           </h1>
           <span class="brand-actions">
             <button
@@ -2192,6 +2238,7 @@
     <button id="extendSessionHidden" class="text-btn" hidden>Extend</button>
     <button id="delete" class="text-btn" hidden>Delete</button>
     <script src="logo-ascii.js"></script>
+    <script src="wall-clock.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

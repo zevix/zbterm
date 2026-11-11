@@ -155,6 +155,8 @@
   const STARTUP_LOGO_BLACK_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.black)
 
   const state = {
+    // package.json#version, shown as the settings menu's last item.
+    appVersion: '',
     sessions: [],
     pendingJoins: [],
     // defaultSessionId is the stored preference; defaultSession is its catalog
@@ -357,8 +359,7 @@
     stepBack: document.getElementById('stepBack'),
     stepForward: document.getElementById('stepForward'),
     speed: document.getElementById('speed'),
-    updateBtn: document.getElementById('update-btn'),
-    version: document.getElementById('version')
+    updateBtn: document.getElementById('update-btn')
   }
 
   applyTheme(state.theme)
@@ -382,7 +383,7 @@
   async function init() {
     state.startupPhase = 'initializing'
     if (!bridge || !api) throw new Error('Electron preload bridge did not load')
-    els.version.textContent = `v${bridge.pkg().version}`
+    state.appVersion = String(bridge.pkg().version || '')
     await loadAppInfo()
     applyTheme(await storedThemePreference(), false)
     applyDevb(await preferredDevb(), false)
@@ -2604,31 +2605,49 @@
   // The brand-bar cogwheel used to toggle developer mode directly.  It now
   // opens this menu, so every app-wide preference has one place to live and
   // the gear itself no longer carries hidden state.
+  //
+  // Each item has a `kind` (renderSettingsMenu):
+  //   check      a toggle with a tick: { label, checked, toggle }
+  //   field      an action that opens a dialog or acts: { label, toggle }
+  //   separator  a rule between groups: {}
+  //   info       a line of text, disabled: { label } (the version, last)
   function settingsMenuItems() {
     return [
+      ...settingsPreferenceItems(),
+      { kind: 'separator' },
+      { kind: 'info', label: `ZBTerm v${state.appVersion || '?'}` }
+    ]
+  }
+
+  function settingsPreferenceItems() {
+    return [
       {
+        kind: 'check',
         label: 'Developer Mode',
         checked: state.devb,
         toggle: toggleDevb
       },
       {
+        kind: 'check',
         label: 'Copy on select',
         checked: state.copyOnSelect,
         toggle: toggleCopyOnSelect
       },
       {
+        kind: 'check',
         label: 'Change font size with CTRL -/+',
         checked: state.ctrlZoom,
         toggle: toggleCtrlZoom
       },
       {
+        kind: 'check',
         label: 'Zoom whole app with CTRL -/+',
         checked: state.appZoom,
         toggle: toggleAppZoom
       },
       {
+        kind: 'field',
         label: 'STUN/TURN servers…',
-        field: true,
         toggle: editIceServers
       }
     ]
@@ -2675,26 +2694,51 @@
     if (saved) await pushIceServers(saved)
   }
 
+  function settingsMenuItemKind(item) {
+    if (item.kind) return item.kind
+    return item.field ? 'field' : 'check'
+  }
+
+  function renderSettingsMenuItem(item) {
+    const kind = settingsMenuItemKind(item)
+    if (kind === 'separator') {
+      const rule = document.createElement('div')
+      rule.className = 'context-menu-separator'
+      rule.setAttribute('role', 'separator')
+      rule.dataset.kind = kind
+      return rule
+    }
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.dataset.kind = kind
+    const extra = { field: ' context-menu-field', info: ' context-menu-info' }[kind] || ''
+    button.className = `context-menu-item context-menu-check label-btn${extra}`
+    if (kind === 'check') {
+      button.setAttribute('role', 'menuitemcheckbox')
+      button.setAttribute('aria-checked', item.checked ? 'true' : 'false')
+    } else {
+      button.setAttribute('role', 'menuitem')
+    }
+    if (item.identity) button.dataset.identity = item.identity
+    button.innerHTML =
+      '<i class="fa-solid fa-check btn-icon check-mark" aria-hidden="true"></i><span></span>'
+    button.querySelector('span:last-child').textContent = item.label
+    if (kind === 'info' || item.disabled) {
+      button.disabled = true
+      button.setAttribute('aria-disabled', 'true')
+      return button
+    }
+    button.addEventListener('click', () => {
+      Promise.resolve().then(item.toggle).then(renderSettingsMenu).catch(showError)
+    })
+    return button
+  }
+
   function renderSettingsMenu() {
     if (!els.settingsMenu) return
     els.settingsMenu.replaceChildren()
     for (const item of settingsMenuItems()) {
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.className = `context-menu-item context-menu-check label-btn${item.field ? ' context-menu-field' : ''}`
-      if (item.field) {
-        button.setAttribute('role', 'menuitem')
-      } else {
-        button.setAttribute('role', 'menuitemcheckbox')
-        button.setAttribute('aria-checked', item.checked ? 'true' : 'false')
-      }
-      button.innerHTML =
-        '<i class="fa-solid fa-check btn-icon check-mark" aria-hidden="true"></i><span></span>'
-      button.querySelector('span:last-child').textContent = item.label
-      button.addEventListener('click', () => {
-        Promise.resolve().then(item.toggle).then(renderSettingsMenu).catch(showError)
-      })
-      els.settingsMenu.append(button)
+      els.settingsMenu.append(renderSettingsMenuItem(item))
     }
   }
 
@@ -5183,6 +5227,27 @@
   function applyIdentity(self) {
     state.identity = self || null
     updateWindowTitle()
+    updateIdentityDot()
+  }
+
+  // The identity dot (R6): green once identity.self says configured, orange
+  // before. On the identity button always, and on the settings button while
+  // the side pane is collapsed (that button then stands in for it).
+  function identityDotState() {
+    return state.identity && state.identity.configured ? 'set' : 'unset'
+  }
+
+  function updateIdentityDot() {
+    const dot = identityDotState()
+    if (els.identitySetup) els.identitySetup.dataset.identity = dot
+    if (els.settingsToggle) {
+      const app = els.app || document.querySelector('.app')
+      if (app && app.classList.contains('side-collapsed')) {
+        els.settingsToggle.dataset.identity = dot
+      } else {
+        delete els.settingsToggle.dataset.identity
+      }
+    }
   }
 
   function showIdentityWizard(self, anchor) {
@@ -6051,18 +6116,28 @@
     els.scrubberTip.style.left = `${pct * 100}%`
   }
 
+  // The bubble: the wall-clock time of tsMs (renderer/wall-clock.js), then the
+  // elapsed time, e.g. "14:32:05 · 0:42" or, with gaps collapsed,
+  // "14:32:05 · 0:42 (1:05)".
   function scrubberTipTextForTs(tsMs) {
     const start = state.playbackStartTs
     const realElapsed = tsMs - start
+    let elapsed = formatDuration(realElapsed)
     if (state.timeCollapse.enabled) {
       const end = currentPlaybackEndTs()
       const collapseMap = getTimeCollapseMap(start, end)
       if (collapseMap && collapseMap.compressedSpan > 0) {
         const compElapsed = realToCompressed(collapseMap, tsMs)
-        return `${formatDuration(compElapsed)} (${formatDuration(realElapsed)})`
+        elapsed = `${formatDuration(compElapsed)} (${formatDuration(realElapsed)})`
       }
     }
-    return formatDuration(realElapsed)
+    const clock = formatWallClock(tsMs, Date.now())
+    return clock ? `${clock} · ${elapsed}` : elapsed
+  }
+
+  function formatWallClock(tsMs, nowMs) {
+    const format = window.zbtermFormatWallClock
+    return typeof format === 'function' ? format(tsMs, nowMs) : ''
   }
 
   function scrubberHoverTsFromEvent(event) {
@@ -7864,7 +7939,7 @@
         : [],
       menuOpen: !!(els.settingsMenu && !els.settingsMenu.hidden),
       menu: debugSettingsMenuState(),
-      brandVersion: els.version ? els.version.textContent : null,
+      brandVersion: (document.getElementById('version') || {}).textContent || null,
       brandMark: brandMark
         ? {
             key: debugNodeKey(brandMark),
@@ -8035,9 +8110,9 @@
     // The acceptance kits' commands (261110_ui-chrome, 261110_session-templates).
     if (command === 'ui-state') return debugUiState()
     if (command === 'bubble-format') {
-      // The wall-clock formatter is not built yet (261110_ui-chrome P2): there
-      // is nothing to format with, so the answer is null.
-      return null
+      // The bubble's wall-clock formatter on given instants (epoch ms).
+      const nowMs = request.nowMs === undefined ? Date.now() : Number(request.nowMs)
+      return { text: formatWallClock(Number(request.tsMs), nowMs) }
     }
     if (command === 'click') {
       // A real click on a real element; `text` picks a button by its label
