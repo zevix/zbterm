@@ -9132,6 +9132,189 @@
     }
   }
 
+  // The 261111_buffer-search kit's reads (its design, *Debug commands*). Every
+  // field is read off the DOM and the renderer state as they are: a feature not
+  // built yet reads as absent (null, false, 0, []), so a kit fails on its own
+  // assertion. The state it reads, when the feature exists:
+  //   state.bufferSearch        { query, count, matches: [{ row, col, len }], index
+  //                               (0-based into matches, -1 for none), marker, decorations: [] }
+  //   state.bufferSearchSeq     the current query's sequence number
+  //   state.bufferSearchPending the session.searchBuffer calls not answered yet (Set, Map or count)
+  //   state.bufferSearchCross   true while a cross-session search runs for the box's text
+  //   state.bufferSearchLog     the request/answer ring that buffer-search-log drains
+  function debugEffectiveBg(el) {
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      const bg = window.getComputedStyle(node).backgroundColor
+      if (bg && bg !== 'transparent' && !/^rgba\(.*,\s*0\)$/.test(bg)) return bg
+    }
+    return window.getComputedStyle(document.body).backgroundColor || null
+  }
+
+  function debugBufferLineText(buffer, row) {
+    const line = buffer && Number.isInteger(row) ? buffer.getLine(row) : null
+    return line ? line.translateToString(true) : null
+  }
+
+  function debugSearchSessions() {
+    const container = els.sessions
+    const children = container ? Array.from(container.children) : []
+    let heading = null
+    let headingIndex = -1
+    let searching = false
+    let empty = false
+    let nameEmpty = false
+    const rows = []
+    children.forEach((el, index) => {
+      if (el.classList.contains('session-section-title')) {
+        if (heading === null) {
+          heading = el.textContent.replace(/\s+/g, ' ').trim()
+          headingIndex = index
+        }
+        return
+      }
+      const text = el.textContent.replace(/\s+/g, ' ').trim()
+      if (!el.classList.contains('session-row')) {
+        if (headingIndex < 0 && text === 'No matching sessions') nameEmpty = true
+        if (headingIndex >= 0 && /^searching/i.test(text)) searching = true
+        if (headingIndex >= 0 && text === 'No matches in live sessions') empty = true
+        return
+      }
+      const sub = el.querySelector('.session-sub')
+      const name = el.querySelector('.session-name')
+      rows.push({
+        id: el.dataset.sessionId || null,
+        name: name ? name.textContent : null,
+        sub: sub ? sub.textContent.replace(/\s+/g, ' ').trim() : null,
+        subColor: debugColor(sub),
+        rowBg: debugEffectiveBg(el),
+        section: headingIndex >= 0 ? 'buffer' : 'name',
+        index
+      })
+    })
+    const pendingOf = (value) => {
+      if (!value) return 0
+      if (typeof value === 'number') return value
+      if (typeof value.size === 'number') return value.size
+      if (Array.isArray(value)) return value.length
+      return 0
+    }
+    return {
+      query: state.query || '',
+      seq: Number.isFinite(state.bufferSearchSeq) ? state.bufferSearchSeq : null,
+      pending: pendingOf(state.bufferSearchPending),
+      heading,
+      headingIndex,
+      searching,
+      empty,
+      nameEmpty,
+      rows
+    }
+  }
+
+  function debugInSessionSearch() {
+    const bs = state.bufferSearch || null
+    const term = state.term || null
+    const buffer = term ? term.buffer.active : null
+    const matches = bs && Array.isArray(bs.matches) ? bs.matches : []
+    const index = bs && Number.isInteger(bs.index) && bs.index >= 0 ? bs.index : -1
+    let current = null
+    if (index >= 0 && matches[index]) {
+      const match = matches[index]
+      const markerLine =
+        bs.marker && !bs.marker.isDisposed && bs.marker.line >= 0 ? bs.marker.line : null
+      const row = markerLine === null ? match.row : markerLine
+      current = { row, col: match.col, len: match.len, text: debugBufferLineText(buffer, row) }
+    }
+    return {
+      query: bs ? bs.query || '' : '',
+      total: bs && Number.isFinite(bs.count) ? bs.count : 0,
+      index: index >= 0 ? index + 1 : 0,
+      current,
+      viewportY: buffer ? buffer.viewportY : null,
+      baseY: buffer ? buffer.baseY : null,
+      length: buffer ? buffer.length : null,
+      rows: term ? term.rows : null,
+      decorations: bs && Array.isArray(bs.decorations) ? bs.decorations.length : 0,
+      mode: state.mode || null,
+      buffer: buffer ? buffer.type : null
+    }
+  }
+
+  function debugSearchState() {
+    const app = els.app || document.querySelector('.app')
+    const box = els.search || document.getElementById('search')
+    const count = document.getElementById('searchCount')
+    const topbarBrand = document.querySelector('.topbar-brand')
+    const bottom = els.bottom || document.querySelector('.bottom')
+    // A bar cell is named by the box or the status it holds, else by its own key.
+    const bottomCells = bottom
+      ? Array.from(bottom.children)
+          .filter((el) => el.getClientRects().length)
+          .map((el) => {
+            if (el.id === 'search' || el.querySelector('#search')) return 'search'
+            if (el.id === 'status' || el.querySelector('#status')) return 'status'
+            return debugNodeKey(el)
+          })
+      : []
+    const searchInputs = Array.from(document.querySelectorAll('input')).filter(
+      (el) => el.type === 'search' || /search/i.test(el.placeholder || '')
+    )
+    const tools = document.querySelector('.sidebar .tools')
+    return {
+      box: box
+        ? {
+            id: box.id || null,
+            rect: debugRect(box),
+            visible: !!box.getClientRects().length,
+            focused: document.activeElement === box,
+            value: box.value,
+            placeholder: box.placeholder || '',
+            selStart: box.selectionStart,
+            selEnd: box.selectionEnd,
+            countText: count ? count.textContent.trim() : null,
+            inSidebar: !!box.closest('.sidebar'),
+            inBottom: !!(bottom && bottom.contains(box))
+          }
+        : null,
+      searchInputs: searchInputs.map((el) => el.id || el.placeholder || ''),
+      toolsInputs: tools ? tools.querySelectorAll('input').length : 0,
+      activeOnlyInTools: !!(tools && tools.querySelector('#activeOnly')),
+      statusText: els.status ? els.status.textContent : null,
+      statusRect: debugRect(els.status),
+      bottomRect: debugRect(bottom),
+      bottomCells,
+      sidebarRect:
+        els.sidebar && els.sidebar.getClientRects().length ? debugRect(els.sidebar) : null,
+      topbarBrandRect:
+        topbarBrand && topbarBrand.getClientRects().length ? debugRect(topbarBrand) : null,
+      sideCollapsed: !!(app && app.classList.contains('side-collapsed')),
+      narrow: window.matchMedia('(max-width: 780px)').matches,
+      window: { innerWidth: window.innerWidth, innerHeight: window.innerHeight },
+      activeElement: document.activeElement ? debugNodeKey(document.activeElement) : null,
+      activeInModal: !!(
+        document.activeElement &&
+        document.activeElement.closest('.session-editor-overlay, .modal-overlay')
+      ),
+      terminalFocused: !!(
+        document.activeElement &&
+        els.terminal &&
+        els.terminal.contains(document.activeElement)
+      ),
+      selectedId: state.selectedId,
+      crossSession: state.bufferSearchCross === true,
+      inSession: debugInSessionSearch(),
+      sessions: debugSearchSessions()
+    }
+  }
+
+  // Since the last call: each session.searchBuffer request and its answer.
+  function debugTakeBufferSearchLog() {
+    if (!Array.isArray(state.bufferSearchLog)) return { logging: false, entries: [] }
+    const entries = state.bufferSearchLog.map((entry) => ({ ...entry }))
+    state.bufferSearchLog.length = 0
+    return { logging: true, entries }
+  }
+
   function debugFindField(root, name) {
     const needle = String(name || '')
       .trim()
@@ -9600,6 +9783,9 @@
     if (command === 'playback-state') return debugPlaybackState()
     if (command === 'popup-shows') return debugTakePopupShows()
     if (command === 'style-of') return debugStyleOf(request.selector)
+    // The 261111_buffer-search kit's commands: pure reads.
+    if (command === 'search-state') return debugSearchState()
+    if (command === 'buffer-search-log') return debugTakeBufferSearchLog()
     if (command === 'selection-log') {
       debugStartSelectionLog()
       const events = debugKit.log.slice()

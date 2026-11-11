@@ -4,6 +4,7 @@
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/activate"
 source "$ZBUI_LIB"
+source "$(cd "$(dirname "$0")" && pwd)/lib_bs.sh"
 need uisolate "the app runs only on a private display"
 need jq "asserts on debug-server JSON"
 need curl "talks to the debug server"
@@ -12,6 +13,45 @@ need xdotool "real key presses on the private display, not synthetic events"
 need setxkbmap "the non-Latin layout case"
 # A skip is a FAIL: a missing precondition exits 75 "cannot run here"; never `exit 0` around it.
 set -x
-# > FILL (P1): copy ../../261110_ui-chrome/acceptance/U1_hotkeys_not_typed.sh's od -c pattern; then open_dialog and press the chord again.
-echo "body not written yet (P1)" >&2
-exit 1
+start_app
+win_size 1280 800
+api POST /sessions '{"name":"u1 od","cols":80,"rows":24}' >/dev/null
+sleep 1.5
+# od_check <chord>: the shell runs `od -c`; a real x, then the chord; od must show x and no 006 (Ctrl+F).
+od_check() {
+  api POST /sessions/current/input '{"text":"clear; od -c","enter":true}' >/dev/null
+  sleep 1
+  focus_terminal
+  key x
+  key "$1"
+  s="$(sstate)"
+  api POST /sessions/current/input '{"data":"\r\u0004"}' >/dev/null
+  sleep 1
+  out="$(term_text)"
+  printf '%s\n' "$out"
+  grep -E '^0000000 +x ' <<<"$out"
+  jq -e -R -s 'contains(" 006") | not' <<<"$out"
+  jq '.box | {focused, inSidebar}' <<<"$s"
+  jq -e '.box.focused == true' <<<"$s"
+}
+od_check ctrl+shift+f
+# Collapsed.
+focus_terminal
+key ctrl+shift+b
+jq -e '.sideCollapsed == true' <<<"$(sstate)"
+od_check ctrl+shift+f
+key ctrl+shift+b
+# A Russian layout on the private display: the F key types Cyrillic_a, its code is still KeyF.
+uisolate run --name "$ZBUI_SESSION" -t 30 -- setxkbmap ru
+od_check ctrl+shift+Cyrillic_a
+uisolate run --name "$ZBUI_SESSION" -t 30 -- setxkbmap us
+# With a dialog open: nothing happens, and the dialog keeps the key.
+focus_terminal
+open_dialog '{"command":"click","selector":"#newSession"}' >/dev/null
+s="$(sstate)"
+jq -e '.activeInModal == true' <<<"$s"
+key ctrl+shift+f
+s="$(sstate)"
+jq '{box, activeElement, activeInModal}' <<<"$s"
+jq -e '.box.focused == false and .activeInModal == true' <<<"$s"
+jq -e '.modal != null' <<<"$(state)"

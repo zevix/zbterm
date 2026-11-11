@@ -48,7 +48,12 @@ Read by the planner (2026-11-11): "our current search box" is "Search sessions" 
 
 ## Soft changes
 
-None.
+Details behind hard rows, reworded to what the kit can measure (builder P1, 2026-11-11). None weakens a check.
+
+- **2026-11-11 (P1), U3 detail (the measure):** the echo is timed from `POST /sessions/current/input` to the typed text on the selected session's rows in `GET /renderer/terminal-display` (what the user sees), not in `GET /sessions/:id/stats`'s frame. `stats` also calls `player.open` (reads the recording from disk) and serialises the whole 5000-line mirror on every poll (`baseline.md`: 30 ms), so it would time the probe, not the echo, and would itself read history. To keep a search running through the ten samples, each round retypes the 1-character query (a new search over the five buffers) 250 ms before the key.
+- **2026-11-11 (P1), seeding (all scripts):** `lib_bs.sh::seed_session` waits on `GET /sessions/:id` (`opened.frame`, `session.open` only) instead of `GET /sessions/:id/stats`, for the same reason: `stats` opens the player, which U2 must not see while it searches.
+- **2026-11-11 (P1), R2 detail (the flood):** `yes NEEDLE | head -n 20000` finishes in milliseconds, before the first step. The kit runs the same 20 000 lines as 100 rounds of `yes NEEDLE | head -n 200; sleep 0.1` (~10 s), so the steps land while output scrolls the buffer.
+- **2026-11-11 (P1), R7 detail:** "all sent before the first answer" and "the big session's row after the small ones" are read from `buffer-search-log` (`sentAt`, `answeredAt`) as well as from `search-state` polled as fast as it answers; both are asserted.
 
 ## Superseded text
 

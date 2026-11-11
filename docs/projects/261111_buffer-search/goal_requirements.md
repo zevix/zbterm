@@ -35,3 +35,5 @@ ZBTerm searches the text live sessions hold in memory, never history on disk, fr
 ## Approval
 
 Approved 2026-11-11 by the user ("I want one change - have a single search box on the bottom left - move our current search box to the bottom, and when collapsed keep it the same width as the top bar, go!", in chat, on the plan with Q-1/Q-2 as recommended; this revision applies that change), file at sha256 02875b2c64f0 (the file before this line).
+
+2026-11-11 (builder P1): soft detail changes behind U3 (echo timed on the renderer's rows), R2 (the flood paced over ~10 s), R7 (log and reads both asserted) and the kit's seeding (no `stats` probe), recorded in `notes--context.md` *Soft changes*; no row or check weakened. To be read back to the user before done.

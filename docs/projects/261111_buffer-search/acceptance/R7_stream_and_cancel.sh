@@ -4,6 +4,7 @@
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/activate"
 source "$ZBUI_LIB"
+source "$(cd "$(dirname "$0")" && pwd)/lib_bs.sh"
 need uisolate "the app runs only on a private display"
 need jq "asserts on debug-server JSON"
 need curl "talks to the debug server"
@@ -11,6 +12,61 @@ need "$ZBUI_APP" "packaged build under test"
 need xdotool "real key presses on the private display, not synthetic events"
 # A skip is a FAIL: a missing precondition exits 75 "cannot run here"; never `exit 0` around it.
 set -x
-# > FILL (P1): start_app; create 4 sessions, one with 5000 x 200-col lines; click the box; xdo type --delay 40 a long query then change it; poll search-state every 50 ms; read buffer-search-log.
-echo "body not written yet (P1)" >&2
-exit 1
+start_app
+win_size 1280 800
+# One big session (5000 lines of 200 columns, QSEVEN on each 50th) and three small ones;
+# the command lines never hold the query (p=QSE … ${p}VEN).
+big="$(seed_session r7-big 'p=QSE; for i in $(seq 5000); do if [ $((i % 50)) = 0 ]; then printf "%s %0192d\n" "${p}VEN" $i; else printf "%0199d\n" $i; fi; done; echo R7""BIG' R7BIG)"
+s1="$(seed_session r7-s1 'p=QSE; for i in 1 2 3; do echo "${p}VEN $i"; done' 'QSEVEN 3')"
+s2="$(seed_session r7-s2 'p=QSE; for i in 1 2 3 4; do echo "${p}VEN $i"; done' 'QSEVEN 4')"
+s3="$(seed_session r7-s3 'p=QSE; for i in 1 2; do echo "${p}VEN $i"; echo "${p}VENX $i"; done' 'QSEVENX 2')"
+live=4
+bslog >/dev/null
+# Rows as their sessions finish: read search-state as fast as it answers while the search runs.
+type_box QSEVEN
+reads="$ACCEPT_LOG_DIR/R7.reads"
+: >"$reads"
+end=$((SECONDS + 6))
+while [ "$SECONDS" -lt "$end" ]; do
+  sstate | jq -c '[.sessions.rows[] | select(.section == "buffer") | .id]' >>"$reads"
+done
+wait_search
+s="$(sstate)"
+jq '.sessions' <<<"$s"
+log="$(bslog)"
+jq . <<<"$log"
+# One request per live session for the query, all sent before the first answer.
+jq -e --argjson n "$live" '.entries | length == $n' <<<"$log"
+jq -e '.entries | (map(.seq) | unique | length == 1) and (map(.sentAt) | max) <= (map(.answeredAt) | min)' <<<"$log"
+# The big session answered last; the small ones' rows were shown before its row.
+jq -e --arg b "$big" '.entries | (map(select(.sessionId == $b) | .answeredAt) | max) >= (map(.answeredAt) | max)' <<<"$log"
+jq -e -s --arg b "$big" 'any(.[]; length > 0 and index($b) == null)' "$reads"
+jq -e --arg b "$big" --arg a "$s1" --arg c "$s2" --arg d "$s3" '[.sessions.rows[] | select(.section == "buffer") | .id] | sort == ([$a, $b, $c, $d] | sort)' <<<"$s"
+# A second query while the first runs: stale answers are dropped.
+clear_box
+xdo type --delay 30 QSEVEN
+sleep 0.3
+xdo type X
+wait_search
+s="$(sstate)"
+log="$(bslog)"
+jq . <<<"$log"
+jq '.sessions' <<<"$s"
+seq_new="$(jq '.sessions.seq' <<<"$s")"
+# Both queries were sent (the first one was in flight); the new one's answers are not cancelled.
+jq -e '[.entries[].seq] | unique | length >= 2' <<<"$log"
+jq -e --argjson q "$seq_new" '[.entries[] | select(.seq == $q)] | length > 0 and all(.[]; (.cancelled | not))' <<<"$log"
+jq -e --arg d "$s3" '[.sessions.rows[] | select(.section == "buffer") | {id, sub}] == [{id: $d, sub: "2 matches"}]' <<<"$s"
+final="$(jq -c '[.sessions.rows[] | select(.section == "buffer") | {id, sub}]' <<<"$s")"
+# The same rows as a fresh search for the new query.
+clear_box
+xdo type --delay 30 QSEVENX
+wait_search
+jq -e --argjson f "$final" '[.sessions.rows[] | select(.section == "buffer") | {id, sub}] == $f' <<<"$(sstate)"
+# A session started while the query is in the box gets its row without retyping.
+late="$(seed_session r7-late 'p=QSE; echo "${p}VENX late"' 'QSEVENX late' false)"
+has_late() { sstate | jq -e --arg l "$late" 'any(.sessions.rows[]; .section == "buffer" and .id == $l)' >/dev/null; }
+wait_until 15 has_late || true
+s="$(sstate)"
+jq '.sessions' <<<"$s"
+jq -e --arg l "$late" 'any(.sessions.rows[]; .section == "buffer" and .id == $l and .sub == "1 match")' <<<"$s"
