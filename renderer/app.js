@@ -463,6 +463,7 @@
   // nor a collapsed pane at its expanded layout.
   restoreSidebarWidth()
   applySidePane(window.localStorage.getItem(SIDE_COLLAPSED_STORAGE_KEY) === '1')
+  watchBottomBarVars()
   init().catch(showError)
 
   async function init() {
@@ -858,9 +859,7 @@
     enablePausedTerminalSelection()
     // The app's own chords never reach the program in the terminal, whichever
     // listener sees the key first (U1); the document handler acts on them.
-    state.term.attachCustomKeyEventHandler(
-      (event) => !isSidePaneHotkey(event) && !keyTriggerFor(event)
-    )
+    state.term.attachCustomKeyEventHandler((event) => !isAppHotkey(event))
     state.term.parser.registerOscHandler(52, copyFromOsc52)
     els.terminal.addEventListener('keydown', noteTerminalGesture, true)
     els.terminal.addEventListener('click', () => {
@@ -1254,6 +1253,15 @@
     document.addEventListener(
       'keydown',
       (event) => {
+        if (isSearchHotkey(event)) {
+          // As the side-pane key: with a dialog open it is left alone, not
+          // acted on and not swallowed (261111_buffer-search U1).
+          if (sidePaneBlocked()) return
+          event.preventDefault()
+          event.stopPropagation()
+          focusSearch()
+          return
+        }
         if (isSidePaneHotkey(event)) {
           // While a dialog is open the key is left alone: not acted on, and not
           // swallowed either (U2).
@@ -8145,6 +8153,54 @@
     )
   }
 
+  // Ctrl+Shift+F: exact modifiers; the key's letter whatever its case, or the
+  // physical F key when the layout gives a non-Latin letter (a Russian layout's
+  // "а"), so the chord works in any layout.
+  function isSearchHotkey(event) {
+    if (!event || !event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return false
+    const key = String(event.key || '')
+    if (/^[a-z]$/i.test(key)) return key.toLowerCase() === 'f'
+    return event.code === 'KeyF'
+  }
+
+  // Every chord the app acts on itself: xterm never encodes these for the
+  // program, whether a dialog is open or not (U1).
+  function isAppHotkey(event) {
+    return isSearchHotkey(event) || isSidePaneHotkey(event) || !!keyTriggerFor(event)
+  }
+
+  // The search box at the bottom left: focused with its text selected, also
+  // when it already has the focus.
+  function focusSearch() {
+    if (!els.search) return
+    els.search.focus()
+    els.search.select()
+  }
+
+  // The bottom bar's height (the resizer ends above it) and, collapsed, the
+  // top bar's left group's width (the search box's width then, R9), as CSS
+  // variables on the document.
+  function syncBottomBarVars() {
+    const root = document.documentElement
+    if (els.bottom) {
+      const height = els.bottom.getBoundingClientRect().height
+      root.style.setProperty('--bottom-bar-height', `${height}px`)
+    }
+    if (els.topbarBrand && els.topbarBrand.getClientRects().length) {
+      const width = els.topbarBrand.getBoundingClientRect().width
+      if (width > 0) root.style.setProperty('--topbar-brand-width', `${width}px`)
+    }
+  }
+
+  function watchBottomBarVars() {
+    syncBottomBarVars()
+    if (!window.ResizeObserver) return
+    const observer = new window.ResizeObserver(() => syncBottomBarVars())
+    for (const el of [els.bottom, els.topbarBrand]) {
+      if (el) observer.observe(el)
+    }
+  }
+
   // A dialog (or the profile picker) owns the window: the toggle is refused.
   function sidePaneBlocked() {
     if (document.querySelector('.modal-overlay, .session-editor-overlay')) return true
@@ -8191,6 +8247,7 @@
       sidePaneHomes.clear()
     }
     els.app.classList.toggle('side-collapsed', collapsed)
+    syncBottomBarVars()
     if (els.brandMark) {
       const label = `${collapsed ? 'Show' : 'Hide'} side pane (Ctrl+Shift+B)`
       els.brandMark.title = label

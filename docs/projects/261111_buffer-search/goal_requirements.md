@@ -39,3 +39,5 @@ Approved 2026-11-11 by the user ("I want one change - have a single search box o
 2026-11-11 (builder P1): soft detail changes behind U3 (echo timed on the renderer's rows), R2 (the flood paced over ~10 s), R7 (log and reads both asserted) and the kit's seeding (no `stats` probe), recorded in `notes--context.md` *Soft changes*; no row or check weakened. To be read back to the user before done.
 
 2026-11-11 (builder P2): soft detail changes behind R2/R7 (the matcher's `lines`/`next` slicing and `len` over a pushed wide character), scenario 7 (trailing erased cells are not text) and U2/R8 (an ended join answers `gone`; trimmed rows followed by a marker), recorded in `notes--context.md` *Soft changes*; no row or check weakened. To be read back to the user before done.
+
+2026-11-11 (builder P3): soft detail changes behind R1/R9 (the box fills its bar cell, the pane's border drawn on it; the collapsed width kept in `--topbar-brand-width`, the resizer ending above the bar) and Q-6 (`#activeOnly` an ordinary button in `.tools`), recorded in `notes--context.md` *Soft changes*; no row or check weakened. To be read back to the user before done.

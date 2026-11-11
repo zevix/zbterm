@@ -130,6 +130,9 @@
         position: relative;
         display: grid;
         grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+        /* The bottom bar is the window's last row, under the pane and the
+           terminal (261111_buffer-search R1). */
+        grid-template-rows: minmax(0, 1fr) auto;
         height: 100vh;
         max-height: 100vh;
         min-height: 0;
@@ -139,7 +142,8 @@
       .sidebar-resizer {
         position: absolute;
         top: 0;
-        bottom: 0;
+        /* Ends above the bottom bar (set from its height by app.js). */
+        bottom: var(--bottom-bar-height, 0px);
         left: var(--sidebar-width);
         width: 8px;
         /* Sits mostly on the terminal side so it does not swallow clicks on
@@ -271,7 +275,7 @@
 
       .app.side-collapsed {
         grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) auto;
       }
 
       .app.side-collapsed .sidebar,
@@ -337,41 +341,18 @@
         place-items: center;
       }
 
+      /* New, Join, then the All/Active list filter (the search box itself
+         is in the bottom bar). */
       .tools {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
         gap: 8px;
         padding: 12px;
         border-bottom: 1px solid var(--border);
       }
 
-      .tools input {
-        width: 100%;
-        min-width: 0;
-        background: var(--input-bg);
-        border: 1px solid var(--control-border);
-        color: var(--text);
-        padding: 8px 78px 8px 9px;
-        border-radius: 6px;
-      }
-
-      .search-wrap {
-        grid-column: 1 / -1;
-        position: relative;
-        min-width: 0;
-      }
-
       .search-toggle {
-        position: absolute;
-        right: 5px;
-        top: 50%;
-        transform: translateY(-50%);
         min-width: 62px;
-        height: 26px;
-        padding: 0 8px;
-        border: 1px solid transparent;
-        border-radius: 5px;
-        background: transparent;
         color: var(--muted);
         cursor: pointer;
       }
@@ -1114,10 +1095,8 @@
 
       .main {
         display: grid;
-        grid-template-rows: auto minmax(0, 1fr) auto;
+        grid-template-rows: auto minmax(0, 1fr);
         min-width: 0;
-        height: 100vh;
-        max-height: 100vh;
         min-height: 0;
         overflow: hidden;
         background: var(--terminal-bg);
@@ -1236,16 +1215,59 @@
         overflow: hidden;
       }
 
+      /* Box, status, playback. The box's cell is as wide as the side pane
+         (--sidebar-width, which the resizer sets) or, collapsed, as the top
+         bar's left group (--topbar-brand-width, measured by app.js), and has
+         no outer padding, so its edges meet the pane's (R9). */
       .bottom {
+        --search-col: var(--sidebar-width);
+        grid-column: 1 / -1;
         display: grid;
-        grid-template-columns: 1fr auto;
+        grid-template-columns: var(--search-col) minmax(0, 1fr) auto;
         gap: 12px;
         align-items: center;
         min-height: var(--bottom-height);
-        padding: 8px 10px;
+        padding: 0 10px 0 0;
         border-top: 1px solid var(--border);
         background: var(--bar-bg);
         box-shadow: 0 -1px 0 var(--terminal-bg);
+      }
+
+      .app.side-collapsed .bottom {
+        --search-col: var(--topbar-brand-width, var(--sidebar-width));
+      }
+
+      .search-cell {
+        position: relative;
+        align-self: stretch;
+        display: flex;
+        min-width: 0;
+        background: var(--panel-bg);
+      }
+
+      /* The pane's right border continues down the box, inside its width. */
+      .search-cell input {
+        flex: 1 1 auto;
+        width: 100%;
+        min-width: 0;
+        margin: 0;
+        border: 0;
+        border-right: 1px solid var(--border);
+        border-radius: 0;
+        background: var(--panel-bg);
+        color: var(--text);
+        padding: 8px 12px;
+        outline: none;
+      }
+
+      .search-cell input:focus-visible,
+      .search-cell input:focus {
+        box-shadow: inset 0 0 0 1px var(--accent-blue-border);
+      }
+
+      .bottom > .status,
+      .bottom > .playback {
+        padding: 8px 0;
       }
 
       .status {
@@ -2158,7 +2180,7 @@
 
         .app {
           grid-template-columns: 1fr;
-          grid-template-rows: auto minmax(0, 1fr);
+          grid-template-rows: auto minmax(0, 1fr) auto;
         }
 
         .sidebar-resizer {
@@ -2175,11 +2197,6 @@
           display: block;
         }
 
-        .main {
-          height: 100%;
-          max-height: none;
-        }
-
         .sessions {
           display: none;
         }
@@ -2188,10 +2205,28 @@
           min-width: 0;
         }
 
-        .bottom {
+        /* The box is the bar's first row, at full width. */
+        .bottom,
+        .app.side-collapsed .bottom {
           grid-template-columns: minmax(0, 1fr);
           gap: 6px;
           padding: 6px 8px;
+        }
+
+        .search-cell {
+          background: transparent;
+        }
+
+        .search-cell input {
+          background: var(--input-bg);
+          border: 1px solid var(--control-border);
+          border-radius: 6px;
+          padding: 7px 9px;
+        }
+
+        .bottom > .status,
+        .bottom > .playback {
+          padding: 0;
         }
 
         .status {
@@ -2295,18 +2330,15 @@
             <i class="fa-solid fa-right-to-bracket btn-icon" aria-hidden="true"></i
             ><span>Join</span>
           </button>
-          <div class="search-wrap">
-            <input id="search" type="search" placeholder="Search sessions" />
-            <button
-              id="activeOnly"
-              class="search-toggle"
-              type="button"
-              aria-pressed="false"
-              title="Filter active sessions"
-            >
-              All
-            </button>
-          </div>
+          <button
+            id="activeOnly"
+            class="text-btn search-toggle"
+            type="button"
+            aria-pressed="false"
+            title="Filter active sessions"
+          >
+            All
+          </button>
         </div>
         <div class="session-select-wrap">
           <select id="sessionSelect" class="session-select" aria-label="Select session"></select>
@@ -2365,41 +2397,44 @@
             </div>
           </div>
         </section>
-        <footer class="bottom">
-          <div id="status" class="status">ready - initial</div>
-          <div id="playback" class="playback" hidden>
-            <button id="stepBack" class="text-btn icon-only" title="Step back">
-              <i class="fa-solid fa-backward-step" aria-hidden="true"></i>
-            </button>
-            <button id="playPause" class="text-btn icon-only" title="Play">
-              <i class="fa-solid fa-play" aria-hidden="true"></i>
-            </button>
-            <button id="stepForward" class="text-btn icon-only" title="Step forward">
-              <i class="fa-solid fa-forward-step" aria-hidden="true"></i>
-            </button>
-            <button id="collapseGaps" class="text-btn icon-only" title="Collapse empty time">
-              <i class="fa-solid fa-compress" aria-hidden="true"></i>
-            </button>
-            <div class="scrubber-wrap">
-              <span id="scrubberTip" class="scrubber-tip" hidden>0:00</span>
-              <div id="scrubberIndicators" class="scrubber-indicators"></div>
-              <input id="scrubber" type="range" min="0" max="1000" value="0" />
-            </div>
-            <span id="timeLabel" class="time-label">
-              <span id="currentTime">0:00</span>
-              <span> / </span>
-              <span id="totalTime" class="total-time">0:00</span>
-            </span>
-            <select id="speed">
-              <option value="0.5">0.5x</option>
-              <option value="1" selected>1x</option>
-              <option value="2">2x</option>
-              <option value="4">4x</option>
-              <option value="8">8x</option>
-            </select>
-          </div>
-        </footer>
       </main>
+      <footer class="bottom">
+        <div class="search-cell">
+          <input id="search" type="search" placeholder="Search (Ctrl+Shift+F)" />
+        </div>
+        <div id="status" class="status">ready - initial</div>
+        <div id="playback" class="playback" hidden>
+          <button id="stepBack" class="text-btn icon-only" title="Step back">
+            <i class="fa-solid fa-backward-step" aria-hidden="true"></i>
+          </button>
+          <button id="playPause" class="text-btn icon-only" title="Play">
+            <i class="fa-solid fa-play" aria-hidden="true"></i>
+          </button>
+          <button id="stepForward" class="text-btn icon-only" title="Step forward">
+            <i class="fa-solid fa-forward-step" aria-hidden="true"></i>
+          </button>
+          <button id="collapseGaps" class="text-btn icon-only" title="Collapse empty time">
+            <i class="fa-solid fa-compress" aria-hidden="true"></i>
+          </button>
+          <div class="scrubber-wrap">
+            <span id="scrubberTip" class="scrubber-tip" hidden>0:00</span>
+            <div id="scrubberIndicators" class="scrubber-indicators"></div>
+            <input id="scrubber" type="range" min="0" max="1000" value="0" />
+          </div>
+          <span id="timeLabel" class="time-label">
+            <span id="currentTime">0:00</span>
+            <span> / </span>
+            <span id="totalTime" class="total-time">0:00</span>
+          </span>
+          <select id="speed">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+            <option value="8">8x</option>
+          </select>
+        </div>
+      </footer>
       <div
         id="sidebarResizer"
         class="sidebar-resizer"

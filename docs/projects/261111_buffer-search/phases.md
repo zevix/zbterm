@@ -122,6 +122,9 @@ Line numbers below are at 3682f01 (ui-chrome, timeline-fixes and session-templat
 
 Dated entries for done-project kit rows this project's layout change affects (`design.md` scenario 21). None yet; at planning time (2026-11-11) no done kit references `#search`.
 
+- 2026-11-11 (builder P3): after the box and footer move, against the P3 package (`/tmp/claude-1000/zbbs/out`), `../261110_ui-chrome/acceptance/run_all.sh` 8/8 PASS (116 s) and `../261110_timeline-fixes/acceptance/run_all.sh` 9/9 PASS (526 s); no red, nothing to record. Logs `runs/261111_buffer-search/p3/kit_uichrome.txt`, `kit_tf.txt`.
+- 2026-11-11 (builder P3), for P4/P5: `R9_box_width.sh` cannot pass in P3 as written, and not because of its no-request line only: its collapsed block asserts `.inSession.total > 0` (P4) before the no-request check, and its last block the heading (P5). P3 ran every width/placement line (expanded, after the drag, collapsed, collapsed at 1000x700: all true) and a scratch copy with the search lines replaced by expand-and-compare (`p3/r9_widths_p3.txt`, 16/16 true); the kit itself is unchanged and fails on `.inSession.total > 0`.
+
 ## Do not
 
 - Never lower a tolerance, weaken an assertion or re-bless a count to get green.
