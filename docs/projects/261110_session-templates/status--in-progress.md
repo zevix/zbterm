@@ -28,7 +28,7 @@ None. One `D-nn` is pending (design *Decisions*), to be taken at landing time fr
 
 ## User owes
 
-- Commit: nothing is committed yet (`docs/projects/` is untracked on `ui-chrome`).
+None.
 
 ## Open
 
