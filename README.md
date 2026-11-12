@@ -237,6 +237,14 @@ first and offer to run `./install_deps.sh` when something is missing.
 `npm start` passes `--no-updates`; the flag is kept for compatibility and has
 no effect.
 
+On Linux, `npm start` first checks that Chromium's sandbox can start. When
+unprivileged user namespaces are restricted (Ubuntu 23.10 and later, through
+AppArmor) and `node_modules/electron/dist/chrome-sandbox` is not setuid root,
+Electron would abort with "The SUID sandbox helper binary was found, but is not
+configured correctly". `npm start` stops before that and tells you to run
+`npm start -- --no-sandbox` (`./run.sh` adds the flag itself). Set
+`ZBTERM_SKIP_SANDBOX_CHECK=1` to skip the check.
+
 If your headless Linux environment has GPU issues:
 
 ```sh

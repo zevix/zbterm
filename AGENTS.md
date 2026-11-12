@@ -28,7 +28,7 @@ HOME=<scratch> TMPDIR=<short-dir> npm test         # isolated run (see Process s
 npm run lint                                       # prettier + lunte on package.json, forge.config.js, electron/, engine/, renderer/, test/  (= CI)
 npm run format                                     # the same files, --write / --fix
 npm run vendor:assets                              # regenerates vendored renderer assets (pretest/prepack/prestart)
-npm start                                          # dev (electron-forge start -- --no-updates)
+npm start                                          # dev (scripts/start.js → electron-forge start -- --no-updates; on Linux refuses with a hint when Chromium's sandbox can't start: npm start -- --no-sandbox)
 npm run package                                    # → out/<ProductName>-<platform>-<arch>/
 ZBTERM_FORGE_OUT_DIR=<dir> npm run package         # package into a scratch dir instead of out/
 npm run make                                       # → installers in out/make/

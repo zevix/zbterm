@@ -66,7 +66,7 @@
     "pack:check": "bash scripts/npm-pack-check.sh",
     "smoke:install": "bash scripts/npm-smoke-install.sh",
     "release:npm": "bash scripts/release-npm.sh",
-    "start": "electron-forge start -- --no-updates",
+    "start": "node scripts/start.js",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "build:relay": "node scripts/build-relay.js",
