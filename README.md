@@ -57,6 +57,21 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   Ctrl+Shift+B. While it is collapsed, the top bar holds the logo, New, Join
   and Settings, and Identity and Dark theme move into the settings menu. The
   choice survives a restart
+- One search box, at the bottom left of the window, the status text to its
+  right; Ctrl+Shift+F focuses it (it is never sent to the program in the
+  terminal, and does nothing while a dialog is open). Its text filters the
+  session list by name and highlights every match in the selected session's
+  buffer, scrollback and full-screen programs included, with the count in the
+  box; Enter and Shift+Enter step to the next and previous match and scroll it
+  into view, and Esc clears the box, the highlights and the filter and returns
+  to the terminal. In playback it searches the frame on screen and follows
+  each seek. While the side pane is shown, the box is as wide as the pane and,
+  under the name matches, a "Session buffer matches" section lists every live
+  session (own or joined) whose buffer holds the text, most matches first,
+  with "N matches" in cyan; rows appear as each session's search finishes.
+  With the pane collapsed, the box is as wide as the top bar's left group and
+  searches the selected session only. Only what live sessions hold in memory
+  is searched, never history on disk
 - A green dot on the identity button means an identity is set up, an orange one
   that it is not; the app version is the last item of the settings menu
 - New viewers see the live view immediately; history downloads in the background with a visual indicator
