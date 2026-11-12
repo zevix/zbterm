@@ -14,16 +14,27 @@ need xdotool "real key presses on the private display, not synthetic events"
 set -x
 start_app
 win_size 1280 800
-# One big session (5000 lines of 200 columns, QSEVEN on each 50th) and three small ones;
+# One big session (5000 lines of 499 columns on a 500-column screen, not selected so the
+# renderer never refits it; QSEVEN on each 50th) and three small ones;
 # the command lines never hold the query (p=QSE … ${p}VEN).
-big="$(seed_session r7-big 'p=QSE; for i in $(seq 5000); do if [ $((i % 50)) = 0 ]; then printf "%s %0192d\n" "${p}VEN" $i; else printf "%0199d\n" $i; fi; done; echo R7""BIG' R7BIG)"
+# Kit correction 2026-11-12 (builder P6), user decision 2026-11-12 ("Fix the check's
+# timing"): the reads line below could never see the order. The big session was 200-column
+# lines on a 100-column screen, i.e. the mirror's 5000-row cap of 100 cells: answered ~9 ms
+# after the small ones, and the reads began after type_box's 0.3 s sleep, after the 200 ms
+# debounce and every answer. Now the big buffer is 5000 rows of 500 cells (5x the cells; the
+# row cap is the product's LIVE_SCROLLBACK, so the width grows instead), and the read loop
+# starts right after the last keystroke. The reads assertion is unchanged; no product change.
+big="$(seed_session r7-big 'p=QSE; for i in $(seq 5000); do if [ $((i % 50)) = 0 ]; then printf "%s %0492d\n" "${p}VEN" $i; else printf "%0499d\n" $i; fi; done; echo R7""BIG' R7BIG false 500)"
 s1="$(seed_session r7-s1 'p=QSE; for i in 1 2 3; do echo "${p}VEN $i"; done' 'QSEVEN 3')"
 s2="$(seed_session r7-s2 'p=QSE; for i in 1 2 3 4; do echo "${p}VEN $i"; done' 'QSEVEN 4')"
 s3="$(seed_session r7-s3 'p=QSE; for i in 1 2; do echo "${p}VEN $i"; echo "${p}VENX $i"; done' 'QSEVENX 2')"
 live=4
 bslog >/dev/null
 # Rows as their sessions finish: read search-state as fast as it answers while the search runs.
-type_box QSEVEN
+# (Kit correction 2026-11-12, above: type_box without its 0.3 s sleep, so the reads start
+# before the 200 ms debounce sends the requests.)
+click_box
+xdo type --delay 30 -- QSEVEN
 reads="$ACCEPT_LOG_DIR/R7.reads"
 : >"$reads"
 end=$((SECONDS + 6))

@@ -5,7 +5,7 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-in-progress, 2026-11-12: P1–P5 built and merged into `main`; **P6 (close) run** (builder; for the verifier) on `main` at 4a45280 plus the P6 edits (README, `phases.md`, this file). P6's acceptance is **not met**: the kit is 11/12 (R7 red on line 43 only, *Open*) and the kit's run time 1067 s is over the *Cost* target (≤ 10 min). Everything else in the acceptance holds: the three done kits are green, the packaged app boots (every kit script drives it), the other *Cost* targets are met (*Measured*). Kept as `status--in-progress.md`, not renamed to verifying. **Next:** the user/verifier decides R7 line 43 and the kit-time target (*Open*); then rename to `status--verifying.md`.
+verifying, 2026-11-12: P1–P5 built and merged into `main`; **P6 (close) run** (builder; for the verifier) on `main` at 05a3cda plus the P6 edits. After the user's two decisions of 2026-11-12 (`notes--context.md` *The user's words*): R7's timing fixed in the kit (*Soft changes to read back*, P6b; the reads assertion unchanged, no product change), and the kit-run target raised to ≤ 20 min (`baseline.md` *Cost*, dated note). The kit is 12/12 PASS in 1132 s; the three done kits are green (P6); the packaged app boots (every kit script drives it). **Next:** the verifier writes `acceptance/report--<date>.md`.
 
 ## Done
 
@@ -21,6 +21,11 @@ in-progress, 2026-11-12: P1–P5 built and merged into `main`; **P6 (close) run*
 - P6 (builder, 2026-11-12): repackaged (`ZBTERM_FORGE_OUT_DIR=/tmp/claude-1000/zbbs/out npm run package`, rc 0) and ran the kit, the three done kits, every test file and lint (*Measured*). `README.md`: one *Implemented* bullet for the search box (bottom left, Ctrl+Shift+F, name filter, in-session highlights/count/Enter/Shift+Enter/Esc, playback, the "Session buffer matches" section, the collapsed width, live sessions only). `docs/debug_server_howto.md` checked against `window.__zbtermDebugCommand` (`renderer/app.js`): every command in its tables is handled there, and `search-state`'s documented fields match `debugSearchState`/`debugInSessionSearch`/`debugSearchSessions`; no edit. `AGENTS.md`/`agent_docs/`: no statement about the search box, the bottom bar, hotkeys or engine methods; nothing false, no edit. `phases.md`: step 6's grep spelled `FILL[:]` (dated note) and a dated P6 *Regression notes* entry.
 
 ## Measured
+
+- P6b, 2026-11-12 on `zr`, the same package as P6 (`/tmp/claude-1000/zbbs/out`, built from 4a45280; `git diff 4a45280 HEAD --stat -- electron engine renderer` empty, so not rebuilt). Logs `runs/261111_buffer-search/p6b/`.
+  - R7 alone, 3 runs (`ZBUI_TMP=/tmp/zbbs7`, `r7_run1..3/`): rc 0, 0, 0 (153 s, 153 s, 157 s). Answers after the requests (ms, count): run 1 small +3/+10/+10, big +44 (100); run 2 +2/+10/+10, big +44; run 3 +35/+38/+38, big +126. Reads showing small rows without the big one: 6, 7, 5 (of 1146, 1069, 396).
+  - Kit (`source acceptance/activate && ZBUI_TMP=/tmp/zbbs7 ACCEPT_LOG_DIR=…/p6b/kit_logs acceptance/run_all.sh`): 12 run, 12 PASS, 0 FAIL, 0 CANNOT RUN, rc 0, 1132 s (`kit_bs.txt`; target ≤ 20 min). Per script (from log mtimes, s): R1 61, R2 198, R3 86, R4 34, R5 152, R6 108, R7 153, R8 37, R9 57, U1 57, U2 65, U3 124. R7: small +2/+9/+9 ms, big +42 ms; 7 of 1165 reads without the big row. U3 echo median 22 ms during the search, 17 ms without.
+  - `test/no-updater.test.js` at 05a3cda (`HOME=/tmp/claude-1000/zbbs/h6b TMPDIR=/tmp/zbbs7t`): rc 0, 57 ok, 0 not ok, 0 skip (`p6b/no-updater.log`).
 
 - P6, 2026-11-12 on `zr`, packaged build of `main` at 4a45280 + P6 edits (`/tmp/claude-1000/zbbs/out`; `package.log`). Logs `runs/261111_buffer-search/p6/`.
   - Kit (`ZBUI_TMP=/tmp/zbbs6 ACCEPT_LOG_DIR=…/p6/kit_logs acceptance/run_all.sh`): 12 run, 11 PASS (R1, R2, R3, R4, R5, R6, R8, R9, U1, U2, U3), 1 FAIL (R7: every line true up to line 43, the reads line, `false`), 0 CANNOT RUN, rc 1, 1067 s (`kit_bs.txt`). U3 echo median 27 ms during the search, 16 ms without (target ≤ 150 ms).
@@ -72,16 +77,13 @@ None.
 
 ## Open
 
-- **P6 acceptance not met** (2026-11-12): kit red on R7 line 43 (below), and the kit run takes 1067 s against the *Cost* target ≤ 10 min (`baseline.md`; P5 also 1067 s). Neither is changed here; the target and the line are the user's/verifier's call.
-- **`test/no-updater.test.js` fails, 2 not ok** (2026-11-12, not this project's): "npm start still passes it" checks `package.json`'s `scripts.start` for `--no-updates`; since 4a45280 ("npm start: say to use --no-sandbox…") `start` is `node scripts/start.js`, which passes `--no-updates` itself (`scripts/start.js:82`). The test was not updated with that commit. Left for the maintainer.
-- Lint takes 3.9 s against the *Cost* "same" as P0's 3.1 s (95 warnings, unchanged).
-- **R7 line 43 cannot be observed** (`jq -e -s … 'any(.[]; length > 0 and index($b) == null)' "$reads"`: some read shows a small session's row before the big one's). It fails in every run, for timing, not a product fault: the requests go out 200 ms after the last keystroke (`design.md`: 200 ms debounce), but `type_box` sleeps 0.3 s after typing before the read loop starts, and the whole search takes ~16 ms, the big session answering ~9 ms after the small ones. So every read comes after the last answer. The order itself is proven by the log lines that pass (all sent before the first answer; the big session answered last). Making the line pass would need a slower search or a longer debounce than the design's, neither a product reason; the check is left as written (not weakened). A decision for the verifier/user: e.g. start the read loop before typing the last character, or accept the log-based lines as the evidence.
-- In-session highlights on the alternate screen: done in P5 (overlay; R2 strengthened).
-
+- Resolved 2026-11-12 (P6b): R7's reads line (kit timing fixed per the user's decision; *Soft changes to read back*), the kit-run target (now ≤ 20 min, user 2026-11-12; 1132 s), lint 3.9 s vs 3.1 s (recorded as noise-level per the user, `baseline.md` *Cost* note), and `test/no-updater.test.js` (fixed by the maintainer's 05a3cda; 57 ok, 0 not ok).
 - `engine/package.json` version: a new method is a minor contract change (`docs/CORE-CONTRACT.md` *Versioning*). Bumping the core's version is release work, left to the maintainer.
 - `design.md` rows 17–22 (the single-box revision) were added by the planner and not seen by the reviewer.
 
 ## Soft changes to read back
+
+- 2026-11-12 (P6b): R7 kit correction (user decision 2026-11-12, "Fix the check's timing"): the big session seeded on a 500-column screen, not selected (5000 rows of 500 cells), and the read loop started right after the last keystroke instead of after `type_box`'s 0.3 s sleep; `lib_bs.sh::seed_session` gained an optional `cols` argument. The reads assertion and every other line unchanged; no product change (`notes--context.md` *Soft changes*).
 
 - 2026-11-12 (P6): none (README and doc checks only; no row detail changed).
 

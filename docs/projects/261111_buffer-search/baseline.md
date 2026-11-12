@@ -61,6 +61,8 @@ The symbols served are listed in `design.md` *Interface*.
 | Echo latency during a cross-session search | not measurable yet | ≤ 150 ms median of 10 | `acceptance/U3_responsive.sh` |
 | Kit run | not runnable yet (bodies in P1) | ≤ 10 min | `time acceptance/run_all.sh` |
 
+> 2026-11-12 (builder P6): the kit-run target is now **≤ 20 min**, approved by the user 2026-11-12 in chat ("the user accepts ~18 min"); measured 1067 s on 2026-11-12 (P6, `runs/261111_buffer-search/p6/kit_bs.txt`; P5 also 1067 s). The row above is kept as written. Lint: measured 3.9 s at P6 (3909 ms idle, 3977 ms under a kit run) against 3.1 s at P0; recorded as noise-level, per the user 2026-11-12. P6b kit run after the R7 kit correction: 1132 s, 12/12 PASS (`runs/261111_buffer-search/p6b/kit_bs.txt`).
+
 ## Working tree
 
 Worktree `buffer-search` (`git status --porcelain`): `?? docs/projects/261111_buffer-search/`. These are the planning files only; no code has changed.

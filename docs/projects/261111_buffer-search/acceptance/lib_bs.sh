@@ -3,10 +3,11 @@
 #
 #   sstate                  cmd search-state (the box, the in-session search, the list)
 #   bslog                   cmd buffer-search-log (drains it: requests/answers since the last call)
-#   seed_session <name> <shell text> [wait text] [select true|false]
-#                           POST /sessions, types <shell text> + Enter, waits (60 s) until
-#                           <wait text> (default: <shell text>) is in the session's mirror
-#                           (GET /sessions/:id → opened.frame); prints the session id
+#   seed_session <name> <shell text> [wait text] [select true|false] [cols]
+#                           POST /sessions (cols default 100), types <shell text> + Enter,
+#                           waits (60 s) until <wait text> (default: <shell text>) is in the
+#                           session's mirror (GET /sessions/:id → opened.frame); prints the
+#                           session id
 #   mirror_has <sid> <text> true when that session's mirror holds <text>
 #   sinput <sid> <text>     types <text> + Enter into that session
 #   select_session <sid>    POST /sessions/:id/switch, waits until the renderer shows it
@@ -39,11 +40,13 @@ sinput() {
   api POST "/sessions/$1/input" "$(jq -nc --arg t "$2" '{text: $t, enter: true}')" >/dev/null
 }
 
+# Kit correction 2026-11-12 (builder P6): optional 5th argument `cols` (default 100, as
+# before) so R7 can seed a wider, larger big session; every other caller is unchanged.
 seed_session() {
-  local name="$1" text="$2" want="${3:-$2}" select="${4:-true}" r sid
+  local name="$1" text="$2" want="${3:-$2}" select="${4:-true}" cols="${5:-100}" r sid
   _zbui_quiet
-  r="$(api POST /sessions "$(jq -nc --arg n "$name" --argjson s "$select" \
-    '{name: $n, cols: 100, rows: 30, select: $s}')")"
+  r="$(api POST /sessions "$(jq -nc --arg n "$name" --argjson s "$select" --argjson c "$cols" \
+    '{name: $n, cols: $c, rows: 30, select: $s}')")"
   sid="$(jq -r '.sessionId // empty' <<<"$r")"
   [ -n "$sid" ] || sid="$(sid_of "$name")"
   if [ -z "$sid" ]; then
