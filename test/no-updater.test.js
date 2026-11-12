@@ -34,8 +34,12 @@ test('--no-updates is still accepted, and does nothing', (t) => {
   t.ok(/compatibility/.test(entry[1]) && /no effect/.test(entry[1]), 'described as a no-op')
   t.absent(/cmd\.flags\.updates\b/.test(main), 'nothing reads the flag')
   t.ok(main.includes('cmd.flags.updateCheck'), '--no-update-check is still read (V-3)')
+  // `npm start` runs scripts/start.js, which passes it to electron-forge.
+  const start = require('../package.json').scripts.start
   t.ok(
-    require('../package.json').scripts.start.includes('--no-updates'),
+    start.includes('--no-updates') ||
+      (start.includes('scripts/start.js') &&
+        /'start', '--', '--no-updates'/.test(read('scripts/start.js'))),
     'npm start still passes it'
   )
 })
