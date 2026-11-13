@@ -1,0 +1,16 @@
+trial 1: {"inflightBytes":0,"xtermPendingAtReset":0,"queued":0,"snapBytes":22171,"answerBytes":22171,"afterSnap":0}"
+trial 1: engine 4001 renderer 4001 
+trial 2: {"inflightBytes":0,"xtermPendingAtReset":0,"queued":0,"snapBytes":64840,"answerBytes":64840,"afterSnap":0}"
+trial 2: engine 4001 renderer 4001 
+trial 3: {"inflightBytes":4364,"xtermPendingAtReset":0,"queued":0,"snapBytes":120599,"answerBytes":124963,"afterSnap":4364}"
+trial 3: engine 4001 renderer 3638 MISMATCH
+trial 4: {"inflightBytes":4364,"xtermPendingAtReset":0,"queued":0,"snapBytes":176358,"answerBytes":180722,"afterSnap":4364}"
+trial 4: engine 4001 renderer 3637 MISMATCH
+trial 5: {"inflightBytes":4364,"xtermPendingAtReset":0,"queued":0,"snapBytes":223390,"answerBytes":227754,"afterSnap":4364}"
+trial 5: engine 4001 renderer 3637 MISMATCH
+trial 6: {"inflightBytes":4364,"xtermPendingAtReset":0,"queued":0,"snapBytes":274786,"answerBytes":279150,"afterSnap":4364}"
+trial 6: engine 4001 renderer 3637 MISMATCH
+trial 7: {"inflightBytes":0,"xtermPendingAtReset":0,"queued":0,"snapBytes":326182,"answerBytes":326182,"afterSnap":0}"
+trial 7: engine 4001 renderer 4001 
+trial 8: {"inflightBytes":4364,"xtermPendingAtReset":0,"queued":0,"snapBytes":364486,"answerBytes":368850,"afterSnap":4364}"
+trial 8: engine 4001 renderer 3637 MISMATCH
