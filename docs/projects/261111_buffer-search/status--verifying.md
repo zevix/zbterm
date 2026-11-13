@@ -5,7 +5,7 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-verifying, 2026-11-13: **F2 built** on `main` (builder; for a fresh verifier): R11 as the user laid it out (sections "Current session", "Session name matches", "Session buffer matches"; R5 reworded), and the test tiers (`docs/acceptance/`: sanity 73 s, nine topics, full 905 s with `-j 4`, all green). The user answered F1's two questions on 2026-11-13 (R11's layout; ~25 min for the complete set). **Next:** a fresh verifier runs `docs/acceptance/run.sh --full --package` (or `acceptance/run_all.sh`) and writes `acceptance/report--<date>.md`.
+verifying, 2026-11-13: **F3 built** on `main` (builder; report 2026-11-13's six findings, for a fresh verifier). Every check that the report found indirect is now direct: R2 (drawn highlights and a screenshot), U3 (real key, overlap per sample, throughput), R11 (colour and order read from the plain list), R8 (no search on host A), plus the stale headers and the tiers' `--changed` gaps. U3's new throughput check found an app bug, now fixed: a large flood during a search stalled main→renderer IPC (e99cdf0). **Next:** a fresh verifier runs `docs/acceptance/run.sh --full --package` (or `acceptance/run_all.sh`) and writes `acceptance/report--<date>.md`.
 
 ## Done
 
@@ -21,8 +21,18 @@ verifying, 2026-11-13: **F2 built** on `main` (builder; for a fresh verifier): R
 - P6 (builder, 2026-11-12): repackaged (`ZBTERM_FORGE_OUT_DIR=/tmp/claude-1000/zbbs/out npm run package`, rc 0) and ran the kit, the three done kits, every test file and lint (*Measured*). `README.md`: one *Implemented* bullet for the search box (bottom left, Ctrl+Shift+F, name filter, in-session highlights/count/Enter/Shift+Enter/Esc, playback, the "Session buffer matches" section, the collapsed width, live sessions only). `docs/debug_server_howto.md` checked against `window.__zbtermDebugCommand` (`renderer/app.js`): every command in its tables is handled there, and `search-state`'s documented fields match `debugSearchState`/`debugInSessionSearch`/`debugSearchSessions`; no edit. `AGENTS.md`/`agent_docs/`: no statement about the search box, the bottom bar, hotkeys or engine methods; nothing false, no edit. `phases.md`: step 6's grep spelled `FILL[:]` (dated note) and a dated P6 *Regression notes* entry.
 - F1 (builder, 2026-11-13): commits 23d8180 (renderer: `selectedSessionEntry`, terminal click ends search / restore on focus, `selectedFirst`, debug fields, `key-probe`), a7f157a (engine `debug.historyReads`, contract row, unit test), 8cfa490 (kit: R10, R11, dated corrections in R6/R7/U1/U2/U3/activate/run_all), then the docs commit. Details: `phases.md` *Phase F1*, `notes--context.md` *Requirement notes* R10/R11 and *Soft changes* (fix round).
 - F2 (builder, 2026-11-13): commits 513a113 (renderer: the three search sections, `search-state` `headings`/section `current`), fa23e4c (kit: R11 rewritten; R3, R5, R6, R10 corrected), 71ff3d6 (test tiers: `docs/acceptance/index.json`, `run.sh`, `README.md`), then the docs commit. Details: `phases.md` *Phase F2*, `notes--context.md` *Soft changes* (F2).
+- F3 (builder, 2026-11-13): commits 320ed71 (debug reads: engine `debug.bufferSearches`, renderer `inSession.drawn`/`colors`, key-probe `scope: "document"`), 820495d and 6114e68 (tiers), 9a9bf36 (kit: R2, R8, R5/R7 headers, README), 826f38f (R11), e99cdf0 (app: main batches session output, lighter renderer re-scans), c8e845c (U3, notes), then the docs commit. Details: `notes--context.md` *Soft changes* (F3).
 
 ## Measured
+
+- F3, 2026-11-13 on `zr`, package of the F3 code (`ZBTERM_FORGE_OUT_DIR=/tmp/claude-1000/zbf3/out npm run package`, rc 0; `npm run lint` rc 0, 95 warnings). Logs `/tmp/claude-1000/zbf3/probe/`.
+  - `test/buffer-search.test.js` 19/19 (459 asserts). `docs/acceptance/run.sh --self-check`: 36 ok, 0 not ok, 2 s. `run.sh --sanity --package`: 50 PASS, 0 FAIL, 91 s.
+  - Kit (`ZBUI_OUT=/tmp/claude-1000/zbf3/out … timeout 1800 acceptance/run_all.sh`, state dir `/tmp/claude-1000/zbf3/accept/A9bB6qHR`, logs beside it): 14 run, 14 PASS, rc 0, **1504 s**. `U3 summary: echo median 31 ms during a search (18 without); output median 28 ms during a search (15 without); flood 7444 ms during (5537 without); bound 150`; `throughput: 600000 lines in 5537 ms without a search, 7444 ms during (26 searches sent, requests in flight 23% of the time)`; `R7 reads: 1091 in all, 20 with small rows and no big row`.
+  - On the fixed package: R2 216 s, R5 153 s, R6 109 s, R10 61 s (in parallel), R11 215 s alone; all rc 0. R2 and R11 now need ~215 s (R11 has four more theme toggles).
+  - R2 rc 0 (215 s, 4 in parallel): drawn highlights == visible matches at the newest, `line 497` and `line 0`; screenshot `row 3 col 7: drawn #F3C969, highlight #f3c969`, the others `#5C4A12`, the control row `#111316`. R5 rc 0 (153 s). R8 rc 0 (43 s): A `{"calls":0}` before and after B's search, B `{"calls":1,…}`, A's log `entries: []`, A's own search `calls: 1`. R11: every check passed, both themes (`current row rgb(51, 65, 74), selected in the plain list rgb(51, 65, 74)`); the script needs ~210 s.
+  - U3 after the fix (e99cdf0's package, `timeout 600`): rc 0. `U3 summary: echo median 36 ms during a search (20 without); output median 27 ms during a search (15 without); flood 6925 ms during (6935 without); bound 150`, with 10 of 11 echo tries in flight, 45 output lines printed in flight, 25 searches and requests in flight 23 % of the flood (bound 20 %: a thin margin).
+  - Before the fix: U3's flood step lost the renderer (rc 28).
+  - The renderer exit, scratch repro (`probe/repro.sh retype 5`, timeout 300): HEAD's package (`/tmp/claude-1000/zbbs/out`) hung in 4 of 6 runs, `hold` (no retyping) 0 of 1, 1 session 0 of 2. Main (`/window/bounds`) and engine (`/sessions`) answer in 6–8 ms meanwhile. An instrumented copy logs nothing after `write 4221` (its 500 ms heartbeat stops) and main logs `render-process-gone`, `clean-exit`, code 0. No JS error or rejection was caught; no kernel OOM or segfault.
 
 - F2, 2026-11-13 on `zr`, package of `main` at 71ff3d6's code (`/tmp/claude-1000/zbtiers/out`, `run.sh --package`). Logs `/tmp/claude-1000/zbtiers/runs/` and `runs/261111_buffer-search/fix2/`.
   - `docs/acceptance/run.sh --sanity --package`: 50 PASS, 0 FAIL, **73 s** (package 4 s, lint 4 s, 45 test files 9 s, GUI 56 s).
@@ -93,6 +103,8 @@ None.
 
 ## Open
 
+- Resolved 2026-11-13 (F3): the renderer stall under a flood during a search (U3). Main sent 1 700–2 400 `session:data` IPC messages a second; they are now batched (8 ms / 64 KB). The repro hung in 4 of 6 runs before (HEAD) and 0 of 3 after; U3 passes.
+
 - Resolved 2026-11-13 (F2): R11's reading (the user's layout, built) and the kit time (the user accepts ~25 min for the complete set; `--full` 905 s).
 - (F1) `docs/CORE-CONTRACT.md` gains `debug.historyReads` (additive); the `engine/package.json` version bump stays release work for the maintainer, as for `session.searchBuffer`.
 
@@ -101,6 +113,8 @@ None.
 - `design.md` rows 17–22 (the single-box revision) were added by the planner and not seen by the reviewer.
 
 ## Soft changes to read back
+
+- 2026-11-13 (F3): new figures behind U3 (a flood keeps at least half its rate; requests in flight at least a fifth of it; only samples taken with a request in flight count; a real key, timed from its event), R2's screenshot colour tolerance (8 per channel), R11 compares to the plain list read at run time (r11-five after the box is emptied), R8's host-side counter; the app fix (main batches session output every 8 ms or 64 KB; one renderer re-scan in flight; highlight redraws at most every 100 ms; the same text typed again restarts nothing) (`notes--context.md` *Soft changes*).
 
 - 2026-11-13 (F2): the current session not repeated among the name matches, kept with its count among the buffer matches; no "Current session" section without a selection; "No matching sessions" only when nothing at all is listed; R6 selects r6-one first and asserts the original order again; the test tiers' design (sanity contents, nine topics, 4 jobs with U3/R7 alone, one test file per process, known failures as KNOWN, changed-line rules for `renderer/app.js`) (`notes--context.md` *Soft changes*). F1's "selected row first" and "above user pins" items are withdrawn.
 
