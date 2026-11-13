@@ -5,7 +5,7 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-verifying, 2026-11-13: **F3 built** on `main` (builder; report 2026-11-13's six findings, for a fresh verifier). Every check that the report found indirect is now direct: R2 (drawn highlights and a screenshot), U3 (real key, overlap per sample, throughput), R11 (colour and order read from the plain list), R8 (no search on host A), plus the stale headers and the tiers' `--changed` gaps. U3's new throughput check found an app bug, now fixed: a large flood during a search stalled main→renderer IPC (e99cdf0). **Next:** a fresh verifier runs `docs/acceptance/run.sh --full --package` (or `acceptance/run_all.sh`) and writes `acceptance/report--<date>.md`.
+done, 2026-11-13: the user approved everything ("Done, approve all"). Final kit 14/14 (`acceptance/report--2026-11-13-F3.md`); F4 `bceccbb` flushes before invoke answers. The leftover output-delivery design problem is the last task of `261113_ui-polish`.
 
 ## Done
 
@@ -97,6 +97,9 @@ verifying, 2026-11-13: **F3 built** on `main` (builder; report 2026-11-13's six 
 None.
 
 ## User owes
+
+- Nothing: paid 2026-11-13 (approval lines written, Q-3 to Q-7 accepted as built).
+- Superseded below:
 
 - The approval line on `goal_requirements.md` (and `design.md`'s *Approval*).
 - A look at the planner's single-box decisions, `design.md` Q-3 to Q-7, especially Q-5 (collapsed width read as the top bar's left group).
