@@ -30,6 +30,7 @@ P3  one box: move #search to the bottom bar, width rule, Ctrl+Shift+F   needs: P
 P4  in-session search in the box: highlights, count, Enter, Esc         needs: P3
 P5  cross-session section in the session list                           needs: P2, P3
 P6  kit at HEAD, done kits as regression, packaged boot, tests, docs    needs: all
+F1  fix round: R10, R11 (user, 2026-11-13); report 2026-11-12 gaps      needs: P6
 ```
 
 Line numbers below are at 3682f01 (ui-chrome, timeline-fixes and session-templates merged), re-checked by the planner on 2026-11-11.
@@ -120,6 +121,17 @@ Line numbers below are at 3682f01 (ui-chrome, timeline-fixes and session-templat
 
 **Acceptance.** The kit is green, the done kits are green or every red is a dated regression note, the Cost targets in `baseline.md` are met, and the packaged app boots.
 
+## Phase F1: fix round (2026-11-13)
+
+**Goal.** The user's two findings of 2026-11-13 as hard rows R10, R11, and the gaps of `acceptance/report--2026-11-12.md` closed: U2 proved directly, U3's output measured, R7's margin, U1's header made true, the kit's logs kept.
+**Covers.** `notes--context.md` *The user's words* (2026-11-13), *Requirement notes* R10/R11, *Soft changes* (fix round).
+**Code map.**
+- `renderer/app.js`: `selectedSessionEntry` (used by `canInputToTerminal`, `isJoinedSession`, `updateTransportControls`, `isOfflineResumable`); `searchTextChanged`, `searchIsOn`, `leaveSearchForTerminal`, `restoreRememberedSearch`, `clearSearch({ remember })`; the box's `focus`/`mouseup`/`blur` listeners; `handleTerminalMouseDown` (primary button ends the search); `selectedFirst` in `renderSessions`/`renderSessionBufferSection`; `state.searchRemembered`, `searchRestoreSelect`, `inputBlockedFlashes`; debug: `search-state` `remembered`/`inputBlockedFlashes`/rows' `selected`, `key-probe`.
+- `engine/history-reads.js` (new), counted in `engine/session-store.js` (`open`, `openJoined`, `readRange`) and `engine/snapshot-cache.js` (`read`); `engine/index.js` `debug.historyReads`; `docs/CORE-CONTRACT.md` row.
+- Kit: `R10_click_terminal.sh`, `R11_selected_on_top.sh` (new); dated *Kit corrections* in `R6`, `R7`, `U1`, `U2`, `U3`, `activate`, `run_all.sh`.
+
+**Acceptance.** The whole kit (R1–R11, U1–U3) green against a scratch package, wall time reported against the ≤ 20 min budget; the three done kits green; `npm test` with only the known failures; lint exit 0.
+
 ## Regression notes
 
 Dated entries for done-project kit rows this project's layout change affects (`design.md` scenario 21). None yet; at planning time (2026-11-11) no done kit references `#search`.
@@ -129,6 +141,8 @@ Dated entries for done-project kit rows this project's layout change affects (`d
 - 2026-11-11 (builder P4): `R3_escape.sh` cannot pass in P4: its line 36 asserts the buffer-match row for alpha (P5). P4 ran a scratch copy with only that line replaced (`runs/…/p4/r3_p4_scratch.sh`, `.log`): every other line true. `R9_box_width.sh` now passes `.inSession.total > 0` and the collapsed no-request line, and fails on the P5 heading (`.sessions.heading == "Session buffer matches"`).
 - 2026-11-11 (builder P5): `R7_stream_and_cancel.sh` line 43 (the reads line) fails at this design's timing: requests leave 200 ms after the last key, the read loop starts after `type_box`'s 0.3 s sleep, and the search takes ~16 ms; every other line passes (`runs/…/p5/r7_p5_scratch.log`). Left unchanged; see the status file *Open*. `R2_in_session_matches.sh` gained a dated alternate-screen block (a strengthening).
 - 2026-11-12 (builder P6): against the P6 package (`/tmp/claude-1000/zbbs/out`, HEAD 4a45280 plus the P6 README edit), `../261110_ui-chrome/acceptance/run_all.sh` 8/8 PASS (118 s), `../261110_timeline-fixes/acceptance/run_all.sh` 9/9 PASS (523 s), `../261110_session-templates/acceptance/run_all.sh` 11/11 PASS (131 s); no red, nothing to record. Logs `runs/261111_buffer-search/p6/kit_uichrome.txt`, `kit_timeline-fixes.txt`, `kit_session-templates.txt`.
+
+- 2026-11-13 (builder F1): against the F1 package (`/tmp/claude-1000/zbbs/out`), `../261110_ui-chrome/acceptance/run_all.sh` 8/8 PASS (117 s), `../261110_timeline-fixes/acceptance/run_all.sh` 9/9 PASS (524 s), `../261110_session-templates/acceptance/run_all.sh` 11/11 PASS (131 s); no red. Logs `runs/261111_buffer-search/fix1/kit_261110_*.txt`.
 
 ## Do not
 
