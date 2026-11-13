@@ -100,7 +100,11 @@ Each with a proposed default, marked *proposed*; none is decided.
 
 ## Soft changes
 
-None yet.
+No row reworded. Design detail behind R13 (hard), 2026-11-13: the guard armed on any list item
+whose key changed, including a heading's or note's text ("searching…" → "No matches in live sessions"),
+so clicks were blocked although no row moved (reviewer F5, `design.md`). Now: only a row that sits at
+another place among the list's items arms it. The row's outcome is unchanged; `R13_reorder_guard.sh`
+unchanged.
 
 ## Superseded text
 

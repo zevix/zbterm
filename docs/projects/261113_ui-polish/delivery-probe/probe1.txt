@@ -1,0 +1,24 @@
+trial 1: {"inflightBytes":20,"xtermPendingAtReset":20,"queued":0,"snapBytes":534,"answerBytes":534,"afterSnap":0}"
+trial 1: engine 1200 renderer 1200 
+trial 2: {"inflightBytes":11,"xtermPendingAtReset":11,"queued":0,"snapBytes":15848,"answerBytes":15848,"afterSnap":0}"
+trial 2: engine 1200 renderer 1200 
+trial 3: {"inflightBytes":22,"xtermPendingAtReset":0,"queued":0,"snapBytes":28562,"answerBytes":28562,"afterSnap":0}"
+trial 3: engine 1200 renderer 1200 
+trial 4: {"inflightBytes":20,"xtermPendingAtReset":0,"queued":0,"snapBytes":40950,"answerBytes":40950,"afterSnap":0}"
+trial 4: engine 1200 renderer 1200 
+trial 5: {"inflightBytes":22,"xtermPendingAtReset":0,"queued":0,"snapBytes":55508,"answerBytes":55508,"afterSnap":0}"
+trial 5: engine 1200 renderer 1200 
+trial 6: {"inflightBytes":11,"xtermPendingAtReset":0,"queued":0,"snapBytes":69443,"answerBytes":69443,"afterSnap":0}"
+trial 6: engine 1200 renderer 1200 
+trial 7: {"inflightBytes":11,"xtermPendingAtReset":0,"queued":0,"snapBytes":83158,"answerBytes":83158,"afterSnap":0}"
+trial 7: engine 1200 renderer 1200 
+trial 8: {"inflightBytes":11,"xtermPendingAtReset":0,"queued":0,"snapBytes":95663,"answerBytes":95663,"afterSnap":0}"
+trial 8: engine 1200 renderer 1200 
+trial 9: {"inflightBytes":11,"xtermPendingAtReset":0,"queued":0,"snapBytes":109356,"answerBytes":109356,"afterSnap":0}"
+trial 9: engine 1200 renderer 1200 
+trial 10: {"inflightBytes":24,"xtermPendingAtReset":0,"queued":0,"snapBytes":123759,"answerBytes":123759,"afterSnap":0}"
+trial 10: engine 1200 renderer 1200 
+trial 11: {"inflightBytes":11,"xtermPendingAtReset":0,"queued":0,"snapBytes":136902,"answerBytes":136902,"afterSnap":0}"
+trial 11: engine 1200 renderer 1200 
+trial 12: {"inflightBytes":11,"xtermPendingAtReset":0,"queued":0,"snapBytes":151061,"answerBytes":151061,"afterSnap":0}"
+trial 12: engine 1200 renderer 1200 

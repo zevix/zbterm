@@ -2690,25 +2690,30 @@
   // R13 (261113_ui-polish): whenever the rows change position, clicks on them
   // are blocked (pointer-events off, the not-allowed cursor on the list) until
   // the list has been still for SESSION_REORDER_GUARD_MS; each change restarts
-  // the wait. A change is any item of the list (row, heading, note) that now
-  // sits where another one was; items only added or dropped at the end move
-  // nothing.
-  function sessionListLayoutKeys() {
-    return Array.from(els.sessions.children).map((el) =>
-      el.classList.contains('session-row')
-        ? `row:${el.dataset.sessionId}`
-        : `${el.className}:${el.textContent.trim()}`
-    )
+  // the wait. A row moved when it is in the list before and after and now sits
+  // at another place among the list's items (a row, heading or note inserted or
+  // removed above it moves it too). A heading or note whose text changes, and
+  // rows only added or dropped, move nothing (design.md F5).
+  function sessionRowPositions() {
+    const positions = new Map()
+    Array.from(els.sessions.children).forEach((el, index) => {
+      if (!el.classList.contains('session-row')) return
+      const id = el.dataset.sessionId
+      positions.set(id, positions.has(id) ? `${positions.get(id)},${index}` : String(index))
+    })
+    return positions
   }
 
   function noteSessionRowOrder() {
-    const next = sessionListLayoutKeys()
-    const prev = state.sessionListKeys || []
-    state.sessionListKeys = next
-    const n = Math.min(prev.length, next.length)
-    let moved = false
-    for (let i = 0; i < n && !moved; i++) moved = prev[i] !== next[i]
-    if (moved) armSessionReorderGuard()
+    const next = sessionRowPositions()
+    const prev = state.sessionRowPositions || new Map()
+    state.sessionRowPositions = next
+    for (const [id, at] of next) {
+      if (prev.has(id) && prev.get(id) !== at) {
+        armSessionReorderGuard()
+        return
+      }
+    }
   }
 
   // A click while the guard is on lands on the list itself (its rows take no
