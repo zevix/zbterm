@@ -5,11 +5,9 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-in-progress, 2026-11-13 (session from ~19:00): P1–P3 built and green on the builder's run; P4
-(output delivery) written, waiting for the user's choice. Next: the regression run
-(`docs/acceptance/run.sh --changed c578251..HEAD --out /tmp/claude-1000/zbui-polish/out`), then a fresh
-verifier runs `acceptance/run_all.sh` on the repackaged build and writes `acceptance/report--<date>.md`;
-then `status--verifying`.
+verifying, 2026-11-13: the verifier's report is GREEN (`acceptance/report--2026-11-13.md`, 15 of 15 rows,
+tree b365b0b). "Done" is the user's word, after the soft-change read-back below. Separately, P4 waits for
+the user's choice of design in `delivery-design.md` (A recommended); no delivery code until then.
 
 ## Plan
 
@@ -27,6 +25,13 @@ delivery design (investigation only).
   (`/tmp/claude-1000/accept/5oJ78hXc.logs`). R7's screenshot read: the Advanced controls are spaced and
   indented (closes the old *Open* item).
 - Repackaged after F5 (`renderer/app.js` identical to the package's, `cmp`).
+- Regression (2026-11-13, `docs/acceptance/run.sh --changed c578251..HEAD --out /tmp/claude-1000/zbui-polish/out`):
+  118 PASS, 2 KNOWN (`native-linkage`, `zxterm-seam`, their known reasons), 1 FAIL: `st/U2_template_warnings`
+  (the delete confirmation lacked the template warning; the script deletes right after the session
+  appears). Rerun alone: PASS on this package and PASS on the pre-polish `zbbs` package, so a timing flake
+  in that kit, not this change. Logs `/tmp/claude-1000/zbtiers/runs/uipolish-1921`.
+- Committed b365b0b. Verifier (fresh context, Sonnet): GREEN, report saved verbatim. Its findings 1-7 are
+  notes on check strength (R7 measures >= 6 px; the screenshot supplies "like the rest"); none asks for a change.
 - P4: `delivery-design.md` + `delivery-probe/`: two mechanisms proven (drop: output between the snapshot
   and the answer, 5/8 trials with an injected 50 ms window, lost lines = bytes after the snapshot;
   duplicate: xterm's write queue survives `term.reset()`, headless test). Candidates A/B/C; A recommended.
@@ -34,7 +39,6 @@ delivery design (investigation only).
 ## Open
 
 - **The user:** choose a design in `delivery-design.md` (A recommended). No code until then.
-- The verifier's report is not written yet (the builder never grades its own work).
 - `docs/projects/README.md`, `docs/register.md`, `docs/decisions.md` are named by AGENTS.md but absent
   (removed in b9a1c7b); no ledger id was taken.
 
