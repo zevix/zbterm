@@ -343,6 +343,12 @@ const lifecycle = new EngineLifecycle({
     if ((name === 'engine:restarting' || name === 'engine:error') && debugServer) {
       debugServer.recordEvent(name, data)
     }
+    if (name === 'session:data') {
+      queueSessionData(data)
+      return
+    }
+    // Keep the order: output queued before this event goes first.
+    flushSessionData()
     sendToAll('zbterm:event', { name, data })
   },
   onProfileSelected: async ({ userData, profileId, profilePath, identity }) => {
@@ -395,6 +401,52 @@ ipcMain.on('renderer:log', (evt, level, msg) => {
 ipcMain.on('renderer:fileLog', (evt, msg) => {
   debugLog('[Renderer]', msg)
 })
+
+// Session output is sent to the renderer in batches (261111_buffer-search F3,
+// U3): a flood arrives as thousands of ~1 KB chunks a second, and one IPC
+// message each backed the main-to-renderer channel up until nothing else
+// (invoke answers, the debug server's scripts) got through. Chunks of the same
+// session, source and HD state are joined and sent every SESSION_DATA_FLUSH_MS,
+// or at once past SESSION_DATA_FLUSH_BYTES; any other event flushes first, so
+// the order the renderer sees is unchanged. The bytes are the same, so the
+// renderer's acks count the same.
+const SESSION_DATA_FLUSH_MS = 8
+const SESSION_DATA_FLUSH_BYTES = 64 * 1024
+let sessionDataQueue = []
+let sessionDataBytes = 0
+let sessionDataTimer = null
+
+function queueSessionData(data) {
+  const last = sessionDataQueue[sessionDataQueue.length - 1]
+  if (
+    last &&
+    (last.sessionId !== data.sessionId || last.source !== data.source || last.hd !== data.hd)
+  ) {
+    flushSessionData()
+  }
+  sessionDataQueue.push(data)
+  sessionDataBytes += data.data ? data.data.byteLength || data.data.length || 0 : 0
+  if (sessionDataBytes >= SESSION_DATA_FLUSH_BYTES) {
+    flushSessionData()
+  } else if (!sessionDataTimer) {
+    sessionDataTimer = setTimeout(flushSessionData, SESSION_DATA_FLUSH_MS)
+  }
+}
+
+function flushSessionData() {
+  if (sessionDataTimer) clearTimeout(sessionDataTimer)
+  sessionDataTimer = null
+  const queue = sessionDataQueue
+  sessionDataQueue = []
+  sessionDataBytes = 0
+  if (!queue.length) return
+  const first = queue[0]
+  const data =
+    queue.length === 1
+      ? first.data
+      : Buffer.concat(queue.map((item) => Buffer.from(item.data || [])))
+  sendToAll('zbterm:event', { name: 'session:data', data: { ...first, data } })
+}
 
 function sendToAll(name, data) {
   for (const win of BrowserWindow.getAllWindows()) {

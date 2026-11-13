@@ -76,6 +76,7 @@
   const IN_SESSION_RESCAN_PLAYBACK_MS = 150
   const IN_SESSION_SEARCH_SLICE = 2000
   const IN_SESSION_SEARCH_LIMIT = 50000
+  const SEARCH_DECORATIONS_MIN_MS = 100
   // Cross-session search (261111_buffer-search R5-R9): the typing debounce,
   // the re-search of a session that became live as its output arrives, the
   // debug log's ring, and the layout under which the list is hidden.
@@ -266,6 +267,10 @@
     inSessionSearchDirty: false,
     inSessionSearchWired: null,
     searchDecorationFrame: 0,
+    searchDecorationTimer: null,
+    searchDecorationsAt: 0,
+    inSessionRescanRunning: false,
+    inSessionRescanAgain: false,
     term: null,
     fit: null,
     webgl: null,
@@ -8328,15 +8333,31 @@
   // After the terminal parsed a write: mark the matches stale and re-scan once
   // the burst has had its delay (a timer that is not pushed back by every
   // write, so a flood still gets re-scanned).
+  // At most one re-scan runs at a time (F3, U3): output that arrives while
+  // one runs asks for one more after it, instead of starting over.
   function noteInSessionBufferChanged() {
     state.inSessionSearchDirty = true
     if (!inSessionQuery() || state.inSessionRescanTimer) return
+    if (state.inSessionRescanRunning) {
+      state.inSessionRescanAgain = true
+      return
+    }
     const delay =
       state.mode === 'playback' ? IN_SESSION_RESCAN_PLAYBACK_MS : IN_SESSION_RESCAN_LIVE_MS
     state.inSessionRescanTimer = setTimeout(() => {
       state.inSessionRescanTimer = null
       if (!inSessionQuery() || !state.inSessionSearchDirty) return
-      runInSessionSearch().catch((err) => console.warn('in-session search failed', err))
+      state.inSessionRescanRunning = true
+      state.inSessionRescanAgain = false
+      runInSessionSearch()
+        .catch((err) => console.warn('in-session search failed', err))
+        .finally(() => {
+          state.inSessionRescanRunning = false
+          if (state.inSessionRescanAgain) {
+            state.inSessionRescanAgain = false
+            noteInSessionBufferChanged()
+          }
+        })
     }, delay)
   }
 
@@ -8526,6 +8547,8 @@
   // The box's text changed (typed, or restored): the list's name filter, the
   // selected session's search and the live sessions' search follow it.
   async function searchTextChanged() {
+    // The same text again (typed over its own selection): nothing to redo (F3).
+    if (els.search.value === state.query && (state.bufferSearch || state.bufferMatches)) return
     state.query = els.search.value
     if (inSessionQuery()) {
       scheduleInSessionSearch(IN_SESSION_SEARCH_DELAY_MS, { reveal: true })
@@ -8950,12 +8973,27 @@
     }
   }
 
+  // On scroll and resize: redrawn on the next frame, but not more often than
+  // every SEARCH_DECORATIONS_MIN_MS while output scrolls the screen (F3, U3:
+  // a flood scrolls every frame, and each redraw replaces every highlight).
   function scheduleSearchDecorations() {
-    if (!state.bufferSearch || state.searchDecorationFrame) return
-    state.searchDecorationFrame = window.requestAnimationFrame(() => {
-      state.searchDecorationFrame = 0
-      drawSearchDecorations()
-    })
+    if (!state.bufferSearch || state.searchDecorationFrame || state.searchDecorationTimer) return
+    const wait = state.searchDecorationsAt + SEARCH_DECORATIONS_MIN_MS - Date.now()
+    const draw = () => {
+      state.searchDecorationFrame = window.requestAnimationFrame(() => {
+        state.searchDecorationFrame = 0
+        state.searchDecorationsAt = Date.now()
+        drawSearchDecorations()
+      })
+    }
+    if (wait <= 0) {
+      draw()
+      return
+    }
+    state.searchDecorationTimer = setTimeout(() => {
+      state.searchDecorationTimer = null
+      draw()
+    }, wait)
   }
 
   function wireInSessionSearch() {
