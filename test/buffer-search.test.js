@@ -281,6 +281,21 @@ test('searchBuffer never opens the recording', async (t) => {
   t.is(engine.players.size, 0, 'no player was made')
 })
 
+test('debug.historyReads: a buffer search reads no history, a playback does', async (t) => {
+  const { engine, pty } = await engineWith(t)
+  const { sessionId } = await engine.invoke('session.create', { name: 'one', cols: 80, rows: 24 })
+  await push(engine, pty, sessionId, 'secret-word\r\n')
+  const before = await engine.invoke('debug.historyReads')
+  t.alike(Object.keys(before).sort(), ['packets', 'snapshots', 'storeOpens'])
+  const answer = await engine.invoke('session.searchBuffer', { sessionId, query: 'secret-word' })
+  t.is(answer.count, 1)
+  t.alike(await engine.invoke('debug.historyReads'), before, 'no store, packet or snapshot read')
+  // The positive control: opening the recording for playback is counted.
+  await engine.invoke('player.open', { sessionId })
+  const after = await engine.invoke('debug.historyReads')
+  t.ok(after.packets > before.packets, 'playback read packets of the recording')
+})
+
 test('searchBuffer: ended, pending and unknown sessions answer gone', async (t) => {
   const { engine, pty } = await engineWith(t)
   const { sessionId } = await engine.invoke('session.create', { name: 'one', cols: 80, rows: 24 })

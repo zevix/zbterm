@@ -3,6 +3,7 @@ const path = require('path')
 const Hypercore = require('hypercore')
 const Hyperbee = require('hyperbee')
 const b4a = require('b4a')
+const { noteHistoryRead } = require('./history-reads')
 
 const {
   VERSION,
@@ -98,6 +99,7 @@ class SessionStore {
   // `opts.timeline: false` skips loading the timeline, for a short-lived open
   // that only reads packets (a history copy reopens its source once per slice).
   static async open(root, sessionId, localDevice, opts = {}) {
+    noteHistoryRead('storeOpens')
     const store = new SessionStore({ root, sessionId, localDevice })
     try {
       await store.ready()
@@ -110,6 +112,7 @@ class SessionStore {
   }
 
   static async openJoined(root, sessionId, localDevice) {
+    noteHistoryRead('storeOpens')
     const manifest = await readRemoteManifest(root, sessionId)
     const store = new SessionStore({
       root,
@@ -832,6 +835,7 @@ class SessionStore {
       let stored
       try {
         if (opts.wait === false && !(await this.log.has(seq - 1))) break
+        noteHistoryRead('packets')
         stored = decode(StoredPacket, await this.log.get(seq - 1, { wait: opts.wait !== false }))
         if (stored.seq !== seq) throw new Error('Packet sequence mismatch')
         const cached = this.historyCache

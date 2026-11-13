@@ -10,6 +10,7 @@ const { Player, seqForTime, scanAltScreenRanges } = require('./player')
 const { PacketKind } = require('./schema')
 const { TerminalFrame, LIVE_SCROLLBACK } = require('./terminal-frame')
 const { scanBuffer } = require('./buffer-search')
+const { historyReads } = require('./history-reads')
 const { loadOrCreateLocalDevice } = require('./crypto')
 const { EngineError, CODES } = require('./errors')
 const ShareManager = require('./share-manager')
@@ -334,6 +335,7 @@ class SessionEngine extends EventEmitter {
         return await this.profileManager.deleteEmptyProfile(args.profileId)
       }
       if (method === 'debug.currentSelection') return null
+      if (method === 'debug.historyReads') return historyReads()
       if (method === 'preference.get') return await this.getPreference(args.key)
       if (method === 'preference.set') {
         return await this.setPreference(args.key, args.value)

@@ -5,6 +5,7 @@ const sodium = require('sodium-native')
 
 const { deriveSnapshotKey } = require('./crypto')
 const { EngineError, CODES } = require('./errors')
+const { noteHistoryRead } = require('./history-reads')
 
 const SNAPSHOT_CACHE_VERSION = 2
 
@@ -57,6 +58,7 @@ class SnapshotCache {
   }
 
   async read(seq) {
+    noteHistoryRead('snapshots')
     const file = path.join(this.dir, `${String(seq).padStart(16, '0')}.snap`)
     const data = await fs.promises.readFile(file)
     const plain = b4a.alloc(data.byteLength - sodium.crypto_aead_xchacha20poly1305_ietf_ABYTES)
