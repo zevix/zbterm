@@ -69,7 +69,16 @@ Read by the planner (2026-11-13): "sow" is "show"; "Nd h:m:ss" with the example 
 - **U1** The engine refuses a `record` change on `session.update` (`E_INVALID`, `261110_session-templates` design *Refuses*), and `editNewSessionTemplate()` sends `session.update` without `record` today. The check: a template backed by a recorded live session, ticked off in the editor and saved; the session stays recorded (Share enabled, `player.open` works), and the next session from that template is unrecorded.
 - **U2** `canResizeSelectedLiveSession()` already excludes joined and ended sessions. While a live session is scrolled back (`state.mode === 'playback'`) the Font buttons hide; the lock button follows them (proposed). A joined viewer never sends `session.resize` for the host's session.
 
-## Open questions
+## Decisions (user, 2026-11-13)
+
+- **Q-1:** bottom *right*, not left (the user corrected it): the duration takes the right end of the `#playback` cell and nothing else of `#playback` shows; ended sessions show `endedAt − startedAt`, frozen; plain "2:41".
+- **Q-2:** accepted: icon at the far right, "3/17" just left of it.
+- **Q-3:** accepted as proposed (rows move up when a late buffer match arrives), plus a new requirement **R13**: whenever the session rows in the left pane change position (any cause: R3 promotions, refreshes, pinning, sorting), the list blocks clicks on the rows (`pointer-events` guard or click swallow) and shows the `not-allowed` cursor; after 500 ms without another change, clicks and the normal cursor return. Each new change restarts the 500 ms.
+- **Q-4:** the bubble's content is exactly today's, only split in two centred lines: the clock part on line 1, the rest ("0:42" or "0:42 (1:05)") on line 2. The "Uncompressed" popup is untouched.
+- **Q-5:** accepted: "1d 0:00:00" at exactly 24 h, hours unpadded.
+- **Q-6 – Q-11:** the user asked for no further questions (2026-11-13): every proposed default below is adopted as decided.
+
+## Open questions (resolved: see *Decisions*)
 
 Each with a proposed default, marked *proposed*; none is decided.
 
