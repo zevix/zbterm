@@ -3,6 +3,7 @@
 Run as the user would, on the target host:
 `source acceptance/activate && acceptance/run_all.sh`.
 `activate` sets a private state dir (scratch HOME and storage), so no real store is touched.
+Per-script logs go beside it, `<state dir>.logs` (kept after a passing run too; `run_all.sh` prints the path).
 One script per requirement: `R<n>_<slug>.sh` / `U<n>_<slug>.sh`; it prints what it runs; exit 0 is pass.
 A script exits 75 "cannot run here" when this host lacks a `need`; `run_all.sh` lists it as CANNOT RUN, a FAIL.
 `run_all.sh --needs` says whether this host can run the kit at all (phase 0 checks it).
@@ -35,6 +36,8 @@ this build; those kits are never edited here (`../phases.md` *Regression notes*)
 | `R7_stream_and_cancel.sh` | concurrent per-session searches, rows as they finish, stale results dropped |
 | `R8_joined_session.sh` | a joined live session is searched and listed |
 | `R9_box_width.sh` | the box is as wide as the side pane and under it (also after a resize drag); collapsed, as wide as the top bar's left group, searching the selected session only |
+| `R10_click_terminal.sh` | a click in the terminal ends the search (as Esc), typing reaches the program at once with no "input blocked" flash; the box's next focus (click or Ctrl+Shift+F) brings the text back selected; Esc forgets it |
+| `R11_selected_on_top.sh` | while searching, the selected session's row, in its selected colour, leads each section it is in; the other rows keep their order |
 | `U1_hotkey_not_typed.sh` | Ctrl+Shift+F never reaches the program (also collapsed, and under a Russian layout); nothing happens with a dialog open |
-| `U2_live_only.sh` | text only in an ended session or in recorded history is never listed; no history is opened |
-| `U3_responsive.sh` | typing echoes within 150 ms while five full buffers are searched |
+| `U2_live_only.sh` | text only in an ended session or in recorded history is never listed; no history is opened (the engine's `debug.historyReads` count does not move; a positive control moves it) |
+| `U3_responsive.sh` | typing echoes, and output reaches the screen, within 150 ms (medians) while five full buffers are searched |

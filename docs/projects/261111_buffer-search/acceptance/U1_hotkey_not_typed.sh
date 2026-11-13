@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # U1 hotkey_not_typed — proves U1: Ctrl+Shift+F never reaches the program, and does nothing while a dialog is open.
-# Asserts: with the shell running od -c: key x, key ctrl+shift+f → od shows x and no 006 (Ctrl+F) byte, and the box (#search, bottom left) is focused; the same with the side pane collapsed (Ctrl+Shift+B first); the same under 'setxkbmap ru' on the private display (od shows no 006 and the box is focused); with a dialog open (click #newSession, wait for the modal): key ctrl+shift+f leaves .box.focused == false and the modal open, and the key is not swallowed (the dialog's focused input still receives the event: a keydown counter in modal-state, or the dialog stays focused).
+# Asserts: with the shell running od -c: key x, key ctrl+shift+f → od shows x and no 006 (Ctrl+F) byte, and the box (#search, bottom left) is focused; the same with the side pane collapsed (Ctrl+Shift+B first); the same under 'setxkbmap ru' on the private display (od shows no 006 and the box is focused); with a dialog open (click #newSession, wait for the modal): key ctrl+shift+f leaves .box.focused == false and the modal open, and the key is not swallowed: key-probe, listening on the dialog's focused element, records the Ctrl+Shift+F keydown (code KeyF) with defaultPrevented false.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/activate"
 source "$ZBUI_LIB"
@@ -50,7 +50,16 @@ focus_terminal
 open_dialog '{"command":"click","selector":"#newSession"}' >/dev/null
 s="$(sstate)"
 jq -e '.activeInModal == true' <<<"$s"
+# Kit correction 2026-11-13 (builder fix round; report 2026-11-12, finding 4): the header
+# promised that the dialog's focused element still receives the key; the script did not check
+# it. key-probe listens for keydown on the element focused now (the dialog's), observing only.
+probe="$(cmd '{"command":"key-probe","action":"start"}')"
+jq . <<<"$probe"
+jq -e --arg a "$(jq -r '.activeElement' <<<"$s")" '.listening == $a' <<<"$probe"
 key ctrl+shift+f
+got="$(cmd '{"command":"key-probe","action":"take"}')"
+jq . <<<"$got"
+jq -e '.listening != null and any(.events[]; .code == "KeyF" and .ctrl and .shift and (.defaultPrevented | not))' <<<"$got"
 s="$(sstate)"
 jq '{box, activeElement, activeInModal}' <<<"$s"
 jq -e '.box.focused == false and .activeInModal == true' <<<"$s"

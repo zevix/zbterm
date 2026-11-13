@@ -17,12 +17,16 @@ if [ -z "${UBITRON_TEST_STATE_DIR:-}" ]; then
       declare -F stop_app >/dev/null && stop_app || true
       if [ "$rc" = 0 ]; then "$UB_PY" -m ubitron.envs.safe_delete "$UBITRON_TEST_STATE_DIR" >/dev/null
       else echo "kept state dir (exit $rc): $UBITRON_TEST_STATE_DIR" >&2; fi
+      [ -d "$ACCEPT_LOG_DIR" ] && echo "logs kept: $ACCEPT_LOG_DIR" >&2
       return "$rc"
     }
     trap _ub_state_cleanup EXIT ;;
   esac
 fi
-export ACCEPT_LOG_DIR="${ACCEPT_LOG_DIR:-$UBITRON_TEST_STATE_DIR/logs}"; mkdir -p "$ACCEPT_LOG_DIR"
+# Kit correction 2026-11-13 (builder fix round): the logs lived in the state dir, so a
+# clean exit deleted them with it and a passing run lost its figures (report 2026-11-12,
+# finding 6). They now sit beside it, "<state dir>.logs", and are never deleted here.
+export ACCEPT_LOG_DIR="${ACCEPT_LOG_DIR:-$UBITRON_TEST_STATE_DIR.logs}"; mkdir -p "$ACCEPT_LOG_DIR"
 # need <path-or-command> "<why>": a precondition of this host. Missing → exit 75
 # "cannot run here", which run_all.sh reports as CANNOT RUN (a FAIL, never a skip).
 # Use it at the top of a check script, never in this file (it is sourced by shells).

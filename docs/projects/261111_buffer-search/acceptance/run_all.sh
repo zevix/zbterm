@@ -28,5 +28,6 @@ for s in "$here"/R*.sh "$here"/U*.sh; do
   fi
 done
 [ "$n_run" -gt 0 ] || { echo "FAIL: no R*.sh / U*.sh in $here"; rc=1; }
-echo "host: $(hostname)  state dir: $UBITRON_TEST_STATE_DIR"
+# Kit correction 2026-11-13 (builder fix round): say where the per-script logs are (kept).
+echo "host: $(hostname)  state dir: $UBITRON_TEST_STATE_DIR  logs: $ACCEPT_LOG_DIR"
 exit $rc
