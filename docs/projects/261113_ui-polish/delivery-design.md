@@ -1,8 +1,10 @@
 # Output delivery: switching to a session while it prints — design note
 
-**Status:** investigation only, no fix (the user, 2026-11-13, via the coordinator). Waits for the user's
-choice of design. Written 2026-11-13 against the tree at `03c396e` (+ this project's R13 edit, which
-does not touch this path).
+**Status:** investigation only, no fix (the user, 2026-11-13, via the coordinator). **The user chose A
+(byte offsets, here "stream positions"), 2026-11-13, as its own follow-up project** (`notes--context.md`
+*Added task*). Written 2026-11-13 against the tree at `03c396e` (+ this project's R13 edit, which
+does not touch this path); merged 2026-11-14 with the parallel run's note (`zr-todo` at fcf4534,
+`design--output-delivery.md` there), whose probe found a third mechanism (3 below).
 
 ## Symptom
 
@@ -16,20 +18,30 @@ The terminal on screen is built from two sources that share no position: a **fra
 headless mirror serialised, the answer to `session.open`; also `session.extend` and the repaint after
 `session:restored`) and the **stream** (`session:data` events). Nothing says which stream bytes a frame
 already contains, so the renderer guesses "everything that arrived before the answer is in the frame,
-everything after is not". Two places break that guess:
+everything after is not". Three places break that guess:
 
 1. **Drop: the frame is cut before the answer is sent.** `engine/index.js::_sessionState` snapshots the
    mirror, then `await availabilitySummary(runtime.store)`. Output that arrives during that await is
-   emitted as `session:data`, reaches the renderer *before* the answer (worker pipe and main's batcher
-   keep order), is queued or written by `selectSession` (which already set `mode = 'live'` and
+   emitted as `session:data`, reaches the renderer *before* the answer (when the transport keeps order;
+   see 3), is queued or written by `selectSession` (which already set `mode = 'live'` and
    `selectedId`), and is then wiped by `renderLiveFrame` (`clearLiveWrites` + `term.reset()`) and painted
-   over with a frame that does not contain it. Lost.
+   over with a frame that does not contain it. Lost. The snapshot also leaves out
+   `runtime.mirrorPending` (`engine/index.js:2259-2260`), which `buildLiveBootstrap` folds in (`:2516`).
 2. **Duplicate: `term.reset()` does not cancel queued writes.** xterm.js 6 `CoreTerminal.reset()`
    resets the buffers and parser but not the `WriteBuffer`
    (`node_modules/@xterm/xterm/src/common/CoreTerminal.ts:244`). A chunk the renderer handed to
    `term.write` before the answer (output already in the frame) is still unparsed at the reset; it is
    parsed onto the blank screen first, then the frame (SerializeAddon output, which does not clear the
    screen) is written below it and pushes those lines into scrollback. Shown twice.
+3. **Duplicate: a chunk the frame already contains arrives after the frame.** The parallel run's probe
+   (`delivery-probe/dup2.sh`, `seam.txt`, trial 1 of 18): the frame ended at line 129, and the first
+   chunk written 3 ms after it began at line 129 again, with nothing queued in xterm (`inFlight: false`);
+   renderer 1201 lines, engine 1200. Draining xterm cannot remove this one. Where the order breaks is
+   read from the code, not separated by a probe: the answer travels as an `ipcMain.handle` reply and the
+   output as `webContents.send` events, which Electron does not order against each other (bceccbb's
+   flush before the reply cannot either); and `engine/client.js::_onFrame` resolves a reply's promise, so
+   the handler and its flush run a few microtasks later, while data frames decoded in the same tick
+   still go out first.
 
 F3's batcher flush (`bceccbb`) fixed a third, main-side reordering; it cannot fix either of these,
 which sit in the engine and the renderer.
@@ -50,11 +62,13 @@ the session's `session:data` that arrived while `session.open` was in flight and
 | 2 | flood 4000 lines through `pv -qL 40000`, 12 trials | 12 × equal (4001); nothing arrived inside the open window: the window is a few ms, which is why the bug is rare |
 | 3 | run 2 with a 50 ms delay injected after the snapshot (`DELIV_DELAY_MS`, standing in for a slow `availabilitySummary` under load), 8 trials | **5 of 8 short**: each had 4364 bytes after the snapshot, all 4364 arrived before the answer (`inflightBytes`), and the renderer had 3637–3638 lines instead of 4001: 364 lost lines × 12 bytes = 4368 ≈ 4364. The 3 trials with nothing after the snapshot were equal. Mechanism 1, exactly. |
 | 4 | `xterm_reset.js`: `@xterm/headless` 6.0.0, a 5-row terminal; write stale output, `reset()`, `VISIBLE_TERMINAL_RESET`, then the serialised frame of lines 1–8 | stale `line 7, line 8` → buffer correct (`?1049l` puts the cursor home, the frame paints over); stale `line 2`…`line 8` (more than a screen) → `line 2, line 3, line 4` **twice** in scrollback; stale `line 8 with a longer tail` → row 1 reads `line 1 with a longer tail`. A write before `reset()` is still parsed after it. Mechanism 2, exactly. |
+| 5 | parallel run, `dup2.sh` (the verifier's `dup.sh` plus the frame's last line and the next three chunks' first lines), 14 + 18 trials (`as-is.txt`, `seam.txt`) | 1 duplicate in each run (1201). In `seam.txt` trial 1 the first chunk after the frame repeats the frame's last line with no write in flight; in the 17 clean trials the first chunk starts at frame end + 1. Mechanism 3. |
 
-So: drops come from output emitted between the snapshot and the answer (mechanism 1, timing-dependent,
-widened by any load on the worker); duplicates and garbled rows come from output still queued in
-xterm at the reset (mechanism 2), visible when the queued chunk is longer than a screen or than the
-row it lands on.
+So the mechanisms coexist: drops come from output emitted between the snapshot and the answer
+(mechanism 1, timing-dependent, widened by any load on the worker); duplicates come from output still
+queued in xterm at the reset (mechanism 2, visible when the queued chunk is longer than a screen or than
+the row it lands on, also garbling rows) and from a chunk the frame contains arriving after it
+(mechanism 3, the one the parallel probe caught).
 
 ## Candidate designs
 
@@ -78,7 +92,8 @@ session's chunks while the call is in flight and discards them all at the answer
 before the reset. *Cost:* ~10 engine and ~30 renderer lines, no contract change. *But* it stays correct
 only while every event emitted before the answer also arrives before it: worker pipe, main's batcher
 and Electron's ordering of `webContents.send` against `ipcMain.handle` replies. The batcher already broke
-that once (F3), and Electron does not document the order between the two.
+that once (F3), Electron does not document the order between the two, and mechanism 3 is a case of it
+breaking today.
 
 **C. Frames through the stream.** `session.open` answers without a frame and the engine emits
 `session:frame {requestId}` on the same event channel as the data, in the same synchronous step as the
@@ -91,5 +106,8 @@ again (sound today), and a big frame now travels as an event to every window.
 ## Recommendation
 
 **A.** It makes the screen correct by construction rather than by transport order, covers every
-frame-returning call, and turns today's silent drops into a detectable gap. The xterm drain before a
-reset is needed in every design and is the cheapest first step: it alone removes the duplicates.
+frame-returning call, and turns today's silent drops into a detectable gap; "only past the last `end`
+written" removes mechanism 3's late duplicate. The xterm drain before a reset is needed in every design;
+it removes mechanism 2 only, not 3. Build with the fix to `_sessionState` (snapshot and its position in
+one synchronous step, with `mirrorPending`), and a kit that reuses `dup2.sh`'s seam check as an assertion:
+zero overlaps and zero gaps in N trials.

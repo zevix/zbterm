@@ -98,13 +98,32 @@ Each with a proposed default, marked *proposed*; none is decided.
 
 - **Output delivery design** (relayed by the coordinator, 2026-11-13; from `261111_buffer-search` F3/F4, the user: "this bug sounds like a bad design"): investigation only, no fix. Switching to a session while it prints can show 1-2 lines twice or drop one; main forwards `session:data` as IPC events and answers `session.open`/`extend`/`resync` frames through `ipcMain.handle`, and Electron does not order the two. `renderLiveFrame` (`renderer/app.js`) clears live writes and paints `buildLiveBootstrap`'s screen (`engine/index.js`). Deliverable: a short design note in this folder (root cause proved with the probe `/tmp/claude-1000/zbv4/probe/dup.sh`, 2-3 candidate designs, one recommendation), then the user approves. Evidence: `261111_buffer-search/acceptance/report--2026-11-13-F3.md`, commit bceccbb.
 
+- **Decision (user, 2026-11-13):** design A, byte offsets ("stream positions" in `delivery-design.md`),
+  as its own follow-up project; nothing is fixed in ui-polish. The user chose it reading the parallel
+  run's note (`zr-todo` at fcf4534, design letters A/B/C there; its B is C here). Riders from that note:
+  the new project's kit reuses the seam check of `delivery-probe/dup2.sh` as an assertion (zero overlaps,
+  zero gaps in N trials), and the snapshot fix (`_sessionState` takes the snapshot and its position
+  together, with `mirrorPending`) lands in the same change.
+
 ## Soft changes
 
-No row reworded. Design detail behind R13 (hard), 2026-11-13: the guard armed on any list item
-whose key changed, including a heading's or note's text ("searching…" → "No matches in live sessions"),
-so clicks were blocked although no row moved (reviewer F5, `design.md`). Now: only a row that sits at
-another place among the list's items arms it. The row's outcome is unchanged; `R13_reorder_guard.sh`
-unchanged.
+2026-11-13 (builder). Each rewords or fixes a detail; no outcome dropped, no check weakened. Merged
+2026-11-14 from the parallel run (`zr-todo`, fcf4534), which listed the build's details; the R13 entry
+is this line's (after F5).
+
+- **R1** "the duration" is a new element, `#sessionDuration`, at the right end of `#playback` (the rest of `#playback` hidden by the class `unrecorded`), not `#totalTime`; it ticks once a second while live (the live clock only moved on output).
+- **R5** The check reads the one formatter (`renderer/wall-clock.js::formatDuration`, debug command `duration-format`) on fixed values, plus live labels under 24 h; no session of 24 h or more is made in the GUI.
+- **R6** The note under the box reads "Applies to new sessions" and sits beside the label, not in it (the box's label stays "Record session" for the kits' `dialog-set`).
+- **R11** A lock chosen from a preset ticks that preset; one chosen as "Current size" ticks "Current size". The "Current size" line shows the locked size while locked (Q-9).
+- **R12** While locked, CTRL -/+ (font mode) is taken and does nothing but say "Terminal size is locked" in the status line, so the chord is not typed into the shell either.
+- **R13** The guard is CSS (`pointer-events: none` on the rows, `cursor: not-allowed` on the list), so it blocks real pointer clicks; the debug server's synthetic `click` command still reaches a row (the other kits' row actions use it). Design detail (reviewer F5, `design.md`): the guard first armed on any list item whose key changed, including a heading's or note's text ("searching…" → "No matches in live sessions"); now only a row that sits at another place among the list's items arms it. Rows only added or dropped do not.
+- **U2** "not resize the host" for an ended session is checked as the lock no longer applying (`size-lock-state .active == false`): an ended session has no grid to read.
+- **Tiers** `test/session-data-batcher.test.js` (from bceccbb, not this project) was in no topic, so `run.sh --self-check` failed; it is now in sanity, engine, search and keyboard.
+
+Checks narrower than their row's words (verifier, `acceptance/report--2026-11-13.md` findings 1, 3, 4):
+**R7** measured as gaps ≥ 6 px (the screenshot read supplies "like the rest"); **R12** "whatever the
+window or font does" sampled (three window sizes, one Ctrl+= and one Ctrl+−, a restart); **R3** "dimmed"
+checked as opacity 0.4–0.6.
 
 ## Superseded text
 

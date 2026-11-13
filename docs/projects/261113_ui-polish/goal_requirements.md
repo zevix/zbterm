@@ -38,3 +38,4 @@ Small fixes from use, and a terminal size lock, checked on a scratch packaged ap
 ## Approval
 
 Approved by the user, 2026-11-13 (relayed by the orchestrator to the builder, 2026-11-13; the decisions are final): R1 at the bottom right, R13 added (session rows that move block clicks with the not-allowed cursor until 500 ms without a change), R4's bubble keeps today's content in two centred lines, Q-1–Q-11 resolved as recorded in `notes--context.md` *Decisions* (Q-6–Q-11: the proposed defaults). File at 8b601de plus this edit.
+Soft changes (2026-11-13, recorded 2026-11-14 in `notes--context.md` *Soft changes*): R1, R5, R6, R11, R12, R13 (detail), U2.

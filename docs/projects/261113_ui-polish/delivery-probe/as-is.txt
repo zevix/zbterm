@@ -1,0 +1,17 @@
+start_app: zbui-V4-445551 port 36441 home /tmp/claude-1000/zbui-polish/accept/Wv5xAZXL/home/V4 log /tmp/claude-1000/zbui-polish/accept/Wv5xAZXL.logs/V4_dup.app.log
+{"variant":"as-is"}app /tmp/claude-1000/zbui-polish/probe-out/ZBTerm-linux-x64/ZBTerm variant as-is a=08bc9cc40a2671e7ff6d5ca7a64c6cd6c55baf5b6758da0fd27e6ca72d0eff75 b=d3894b5c60e9baaa36c1baf9b202eb7ce219894803793ada6af2268bf8932c67
+trial 1: engine 1200 renderer 1201 frame {"at":1794589158062,"inFlight":false,"queued":0,"variant":"as-is"} MISMATCH
+trial 2: engine 1200 renderer 1200 frame {"at":1794589168031,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 3: engine 1200 renderer 1200 frame {"at":1794589193140,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 4: engine 1200 renderer 1200 frame {"at":1794589218213,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 5: engine 1200 renderer 1200 frame {"at":1794589242939,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 6: engine 1200 renderer 1200 frame {"at":1794589268308,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 7: engine 1200 renderer 1200 frame {"at":1794589293065,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 8: engine 1200 renderer 1200 frame {"at":1794589318249,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 9: engine 1200 renderer 1200 frame {"at":1794589343518,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 10: engine 1200 renderer 1200 frame {"at":1794589367958,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 11: engine 1200 renderer 1200 frame {"at":1794589392697,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 12: engine 1200 renderer 1200 frame {"at":1794589417290,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 13: engine 1200 renderer 1200 frame {"at":1794589442375,"inFlight":false,"queued":0,"variant":"as-is"} 
+trial 14: engine 1200 renderer 1200 frame {"at":1794589467769,"inFlight":false,"queued":0,"variant":"as-is"} 
+logs kept: /tmp/claude-1000/zbui-polish/accept/Wv5xAZXL.logs
