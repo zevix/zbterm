@@ -115,7 +115,8 @@
         "renderer/app.js": "[Ss]earch|bufferMatches|renderSessions|sessionSectionTitle|selectedSessionEntry|SessionBuffer",
         "renderer/index.html": "search|match-cyan|session-section",
         "engine/index.js": "searchBuffer|historyReads|BUFFER_SEARCH",
-        "engine/terminal-frame.js": "."
+        "engine/terminal-frame.js": ".",
+        "electron/main.js": "session:data|sendToAll|queueSessionData|flushSessionData|SESSION_DATA_FLUSH"
       }
     },
     "chrome": {
@@ -155,7 +156,8 @@
       ],
       "paths": ["electron/pty-*.js"],
       "content": {
-        "renderer/app.js": "keydown|[Hh]otkey|attachCustomKeyEventHandler|isTerminalInputKey|onData|onKey|canInputToTerminal|keyTriggerFor|trapDialogTab"
+        "renderer/app.js": "keydown|[Hh]otkey|attachCustomKeyEventHandler|isTerminalInputKey|onData|onKey|canInputToTerminal|keyTriggerFor|trapDialogTab",
+        "electron/main.js": "session:data|sendToAll|queueSessionData|flushSessionData|SESSION_DATA_FLUSH"
       }
     },
     "timeline": {
@@ -183,7 +185,8 @@
       "paths": ["engine/player.js", "renderer/time-collapse.js", "renderer/wall-clock.js"],
       "content": {
         "renderer/app.js": "[Pp]layback|[Ss]crub|timeLabel|TimeLabel|[Ss]eek|[Aa]lt.?[Ww]heel|[Ss]election|bubble|[Cc]ollapse[A-Z]|timeline|clockTs",
-        "engine/index.js": "player|seek|timeline"
+        "engine/index.js": "player|seek|timeline",
+        "electron/main.js": "session:data|sendToAll|queueSessionData|flushSessionData|SESSION_DATA_FLUSH"
       }
     },
     "templates": {
