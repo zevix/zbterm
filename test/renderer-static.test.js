@@ -701,3 +701,23 @@ test('buffer-search: the buffer-match section, its cyan in both themes, alternat
   )
   t.ok(html.includes('.search-mark.current {'), 'the overlay boxes are styled')
 })
+
+test('buffer-search: a terminal click ends the search and keeps its text; the selected row leads', async (t) => {
+  const rendererDir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')
+  const body = (name) => {
+    const at = js.indexOf(`  function ${name}(`)
+    return at < 0 ? '' : js.slice(at, js.indexOf('\n  }\n', at))
+  }
+  // R10's cause: the selected session looked up in the list as shown, which
+  // the box's name filter narrows.
+  t.ok(body('canInputToTerminal').includes('selectedSessionEntry()'), 'input: the kept entry')
+  t.ok(body('selectedSessionEntry').includes('state.currentSession'), 'falls back to it')
+  t.ok(body('handleTerminalMouseDown').includes('leaveSearchForTerminal()'), 'click ends search')
+  t.ok(body('leaveSearchForTerminal').includes('clearSearch({ remember: true })'), 'kept text')
+  t.ok(js.includes('function clearSearch({ remember = false } = {})'), 'Esc forgets')
+  t.ok(js.includes("els.search.addEventListener('focus', restoreRememberedSearch)"), 'restore')
+  // R11: the selected row first in each section while searching.
+  t.ok(body('renderSessions').includes('selectedFirst(state.sessions'), 'name rows')
+  t.ok(body('renderSessionBufferSection').includes('selectedFirst(bm.rows'), 'buffer rows')
+})

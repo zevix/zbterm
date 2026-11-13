@@ -253,6 +253,12 @@
     bufferSearchCross: false,
     bufferSearchLog: [],
     bufferSearchKey: `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    // The text a terminal click took out of the box, put back on its next
+    // focus (R10); the click that focused it must not drop the selection.
+    searchRemembered: '',
+    searchRestoreSelect: false,
+    // "Input blocked" flashes so far (the debug server's search-state).
+    inputBlockedFlashes: 0,
     sessionBufferSearchTimer: null,
     inSessionSearchToken: 0,
     inSessionSearchTimer: null,
@@ -1203,20 +1209,28 @@
   }
 
   function wireEvents() {
-    els.search.addEventListener('input', async () => {
-      state.query = els.search.value
-      if (inSessionQuery()) {
-        scheduleInSessionSearch(IN_SESSION_SEARCH_DELAY_MS, { reveal: true })
-      } else {
-        clearInSessionSearch()
-      }
-      scheduleSessionBufferSearch()
-      await refreshSessions()
+    els.search.addEventListener('input', () => {
+      searchTextChanged().catch(showError)
+    })
+    // Focusing the empty box again after a click in the terminal ended a
+    // search brings that search back, its text selected so typing replaces
+    // it (R10).
+    els.search.addEventListener('focus', restoreRememberedSearch)
+    els.search.addEventListener('mouseup', (event) => {
+      if (!state.searchRestoreSelect) return
+      state.searchRestoreSelect = false
+      // The click that focused the box would put the caret where it landed.
+      event.preventDefault()
+      els.search.select()
+    })
+    els.search.addEventListener('blur', () => {
+      state.searchRestoreSelect = false
     })
     // The box's keys (R2, R3), left alone while an IME composes: Enter and
     // Shift+Enter step through the matches, Esc clears (instead of
     // type=search's own clear, so it happens in one place).
     els.search.addEventListener('keydown', (event) => {
+      state.searchRestoreSelect = false
       if (event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return
       if (event.key === 'Enter') {
         event.preventDefault()
@@ -2593,8 +2607,17 @@
         state.query || state.activeOnly ? 'No matching sessions' : 'No sessions yet'
       els.sessions.append(empty)
     }
-    for (const session of state.sessions) els.sessions.append(buildSessionRow(session))
+    const rows = searchIsOn() ? selectedFirst(state.sessions, (s) => s.sessionId) : state.sessions
+    for (const session of rows) els.sessions.append(buildSessionRow(session))
     renderSessionBufferSection()
+  }
+
+  // While searching, the selected session's row leads each section it is in
+  // (R11); the other rows keep their order.
+  function selectedFirst(items, idOf) {
+    const at = state.selectedId ? items.findIndex((item) => idOf(item) === state.selectedId) : -1
+    if (at <= 0) return items
+    return [items[at], ...items.slice(0, at), ...items.slice(at + 1)]
   }
 
   // One row of the session list: icon, name, subtitle, marks, identity
@@ -5097,7 +5120,7 @@
   }
 
   function updateTransportControls() {
-    const current = state.sessions.find((session) => session.sessionId === state.selectedId)
+    const current = selectedSessionEntry()
     const isPending = !!(current && current.pending)
     const hasSession = !!state.selectedId && !isPending
     const hasPendingLiveReveal = !!state.pendingLiveRevealSession
@@ -5261,8 +5284,7 @@
 
   function isOfflineResumable() {
     if (state.mode !== 'playback' || !state.selectedId) return false
-    const current = state.sessions.find((session) => session.sessionId === state.selectedId)
-    return canExtendSession(current)
+    return canExtendSession(selectedSessionEntry())
   }
 
   function showResumeHint() {
@@ -5314,7 +5336,7 @@
   }
 
   function isJoinedSession() {
-    const current = state.sessions.find((session) => session.sessionId === state.selectedId)
+    const current = selectedSessionEntry()
     return !!(current && (current.isJoined || current.owner === 'joined'))
   }
 
@@ -5322,8 +5344,21 @@
     return canInputToTerminal()
   }
 
+  // The selected session's entry. `state.sessions` is the list as shown, so
+  // the box's name filter can leave the selected session out of it; the
+  // entry selectSession() kept is used then (261111_buffer-search R10: typing
+  // after a search was dropped, and "Local" flashed, because the selected
+  // session's name did not match the box's text).
+  function selectedSessionEntry() {
+    if (!state.selectedId) return null
+    const listed = state.sessions.find((session) => session.sessionId === state.selectedId)
+    if (listed) return listed
+    const kept = state.currentSession
+    return kept && kept.sessionId === state.selectedId ? kept : null
+  }
+
   function canInputToTerminal() {
-    const current = state.sessions.find((session) => session.sessionId === state.selectedId)
+    const current = selectedSessionEntry()
     if (!current || current.pending || !current.active || state.mode !== 'live') return false
     return !(current.isJoined || current.owner === 'joined') || current.inputMode === 'all'
   }
@@ -5406,6 +5441,8 @@
   }
 
   function flashInputBlockedButton(button) {
+    // Counted for the debug server's search-state (R10).
+    state.inputBlockedFlashes = (state.inputBlockedFlashes || 0) + 1
     flashButton(button, 'input-blocked-flash', INPUT_BLOCKED_FLASH_MS)
   }
 
@@ -8022,6 +8059,7 @@
   // handlers, so what it reads and clears is the state before xterm acts.
   function handleTerminalMouseDown(event) {
     noteTerminalGesture()
+    if (event.button === 0) leaveSearchForTerminal()
     if (event.button === 2) {
       saveRightClickSelection()
       return
@@ -8472,11 +8510,51 @@
     updateSearchCount()
   }
 
-  // Esc in the box (R3): empties it, which drops the list filter, the
+  // The box's text changed (typed, or restored): the list's name filter, the
+  // selected session's search and the live sessions' search follow it.
+  async function searchTextChanged() {
+    state.query = els.search.value
+    if (inSessionQuery()) {
+      scheduleInSessionSearch(IN_SESSION_SEARCH_DELAY_MS, { reveal: true })
+    } else {
+      clearInSessionSearch()
+    }
+    scheduleSessionBufferSearch()
+    await refreshSessions()
+  }
+
+  function searchIsOn() {
+    return !!(els.search && els.search.value)
+  }
+
+  // Search is on while the box holds text. A primary click in the terminal
+  // ends it as Esc does (R10), but the text is kept for the box's next focus.
+  function leaveSearchForTerminal() {
+    if (!searchIsOn()) return
+    clearSearch({ remember: true })
+  }
+
+  // The box got the focus (a click, Ctrl+Shift+F) while empty: the text a
+  // terminal click left is put back, selected, and searched again.
+  function restoreRememberedSearch() {
+    const text = state.searchRemembered
+    if (!els.search || els.search.value || !text) return
+    // Used once: the next terminal click remembers whatever the box holds then.
+    state.searchRemembered = ''
+    els.search.value = text
+    els.search.select()
+    state.searchRestoreSelect = true
+    searchTextChanged().catch(showError)
+  }
+
+  // Ends a search (R3, R10): empties the box, which drops the list filter, the
   // highlights and the cross-session results, and gives the terminal the
-  // focus. On an empty box only the focus moves.
-  function clearSearch() {
+  // focus. On an empty box only the focus moves. `remember` keeps the text
+  // for the box's next focus (a terminal click); Esc forgets it.
+  function clearSearch({ remember = false } = {}) {
     const hadText = !!(els.search && els.search.value)
+    state.searchRemembered = remember && hadText ? els.search.value : ''
+    state.searchRestoreSelect = false
     if (els.search) els.search.value = ''
     clearInSessionSearch()
     const hadSection = !!state.bufferMatches
@@ -8713,7 +8791,7 @@
     title.className = 'session-section-title'
     title.textContent = 'Session buffer matches'
     els.sessions.append(title)
-    for (const row of bm.rows) {
+    for (const row of selectedFirst(bm.rows, (item) => item.id)) {
       const session = bm.sessions.get(row.id)
       if (session) els.sessions.append(buildSessionRow(session, { matchCount: row.count }))
     }
@@ -9945,6 +10023,7 @@
         sub: sub ? sub.textContent.replace(/\s+/g, ' ').trim() : null,
         subColor: debugColor(sub),
         rowBg: debugEffectiveBg(el),
+        selected: el.classList.contains('selected'),
         section: headingIndex >= 0 ? 'buffer' : 'name',
         index
       })
@@ -10059,10 +10138,48 @@
         els.terminal.contains(document.activeElement)
       ),
       selectedId: state.selectedId,
+      remembered: state.searchRemembered || '',
+      inputBlockedFlashes: state.inputBlockedFlashes || 0,
       crossSession: state.bufferSearchCross === true,
       inSession: debugInSessionSearch(),
       sessions: debugSearchSessions()
     }
+  }
+
+  // key-probe (261111_buffer-search U1): "start" listens for keydown on the
+  // element that has the focus now (observing only, never preventing); "take"
+  // returns what reached it since, and the element, and stops listening.
+  const debugKeys = { target: null, listener: null, events: [] }
+  function debugKeyProbe(action) {
+    if (action === 'start') {
+      debugKeyProbe('stop')
+      const target = document.activeElement || document.body
+      debugKeys.events = []
+      debugKeys.target = target
+      debugKeys.listener = (event) => {
+        debugKeys.events.push({
+          key: event.key,
+          code: event.code,
+          ctrl: event.ctrlKey,
+          shift: event.shiftKey,
+          target: debugNodeKey(event.target),
+          defaultPrevented: event.defaultPrevented
+        })
+      }
+      target.addEventListener('keydown', debugKeys.listener)
+      return { listening: debugNodeKey(target) }
+    }
+    const answer = {
+      listening: debugKeys.target ? debugNodeKey(debugKeys.target) : null,
+      events: debugKeys.events
+    }
+    if (debugKeys.target && debugKeys.listener) {
+      debugKeys.target.removeEventListener('keydown', debugKeys.listener)
+    }
+    debugKeys.target = null
+    debugKeys.listener = null
+    debugKeys.events = []
+    return answer
   }
 
   // Since the last call: each session.searchBuffer request and its answer.
@@ -10544,6 +10661,7 @@
     // The 261111_buffer-search kit's commands: pure reads.
     if (command === 'search-state') return debugSearchState()
     if (command === 'buffer-search-log') return debugTakeBufferSearchLog()
+    if (command === 'key-probe') return debugKeyProbe(request.action)
     if (command === 'selection-log') {
       debugStartSelectionLog()
       const events = debugKit.log.slice()
