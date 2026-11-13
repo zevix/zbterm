@@ -30,6 +30,11 @@ jq '.sessions' <<<"$s"
 names name <<<"$s"
 jq -e --arg n "$sn" '[.sessions.rows[] | select(.section == "name") | .id] == [$n]' <<<"$s"
 jq -e '.sessions.heading == "Session buffer matches"' <<<"$s"
+# Kit correction 2026-11-13 (builder fix round F2), R5/R11 as the user laid them out on
+# 2026-11-13: the sections are "Current session" (r5-pager, selected), "Session name matches"
+# (zqx-named), "Session buffer matches", in that order; every check below is unchanged.
+jq -e '[.sessions.headings[].text] == ["Current session", "Session name matches", "Session buffer matches"]' <<<"$s"
+jq -e --arg p "$sp" '[.sessions.rows[] | select(.section == "current") | .id] == [$p]' <<<"$s"
 # The heading comes after every name row.
 jq -e '.sessions.headingIndex > ([.sessions.rows[] | select(.section == "name") | .index] | max)' <<<"$s"
 jq -e --arg a "$sa" --arg n "$sn" --arg p "$sp" '[.sessions.rows[] | select(.section == "buffer") | .id] | sort == ([$a, $n, $p] | sort)' <<<"$s"
@@ -42,6 +47,9 @@ wait_search
 s="$(sstate)"
 jq '.sessions' <<<"$s"
 jq -e '.sessions.nameEmpty == true and .sessions.heading == "Session buffer matches"' <<<"$s"
+# Kit correction 2026-11-13 (F2): no name match, so no "Session name matches" heading.
+jq -e '[.sessions.headings[].text] == ["Current session", "Session buffer matches"]' <<<"$s"
+jq -e '[.sessions.rows[] | select(.section == "name")] == []' <<<"$s"
 jq -e --arg a "$sa" '[.sessions.rows[] | select(.section == "buffer") | .id] == [$a]' <<<"$s"
 # An ended zqx-old: "All" lists it by name; Active only drops it, the buffer rows stay.
 so="$(seed_session zqx-old 'echo R5O""READY' R5OREADY false)"
@@ -65,3 +73,5 @@ clear_box
 sleep 1
 s="$(sstate)"
 jq -e '.sessions.heading == null and ([.sessions.rows[] | select(.section == "buffer")] == [])' <<<"$s"
+# Kit correction 2026-11-13 (F2): and the plain list is back, no heading at all.
+jq -e '.sessions.headings == [] and ([.sessions.rows[] | select(.section != "name")] == [])' <<<"$s"

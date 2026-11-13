@@ -19,6 +19,9 @@ applog_errors() { grep -c -E 'Uncaught|TypeError|ReferenceError' "$ZBUI_APP_LOG"
 jq -e '.selectedId == null' <<<"$(sstate)"
 e0="$(applog_errors)"
 type_box xyz
+# Kit correction 2026-11-13 (builder fix round F2), R11: with no session selected there is no
+# "Current session" section.
+jq -e '[.sessions.headings[].text] | index("Current session") == null' <<<"$(sstate)"
 key Escape
 s="$(sstate)"
 jq '.box' <<<"$s"
@@ -42,6 +45,8 @@ jq '{box, inSession, sessions, terminalFocused, activeElement}' <<<"$s"
 jq -e '.box.value == ""' <<<"$s"
 jq -e '.inSession.total == 0 and .inSession.decorations == 0' <<<"$s"
 jq -e '.sessions.heading == null' <<<"$s"
+# Kit correction 2026-11-13 (F2), R11: Esc gives back the plain list (no section heading).
+jq -e '.sessions.headings == []' <<<"$s"
 jq -e --arg a "$sa" --arg b "$sb" '[.sessions.rows[] | .id] | (index($a) != null and index($b) != null)' <<<"$s"
 jq -e '.box.focused == false and .terminalFocused == true' <<<"$s"
 jq -e '.box.visible == true' <<<"$s"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # R6 order_and_count — proves R6: buffer-match rows are ordered by match count, most first, and show 'N matches' in cyan instead of 'live · …'.
-# Asserts: sessions with 2, 9 and 5 occurrences of the query: rows in order 9, 5, 2; each .sub == "<n> matches" ("1 match" for one, checked with a fourth session); .subColor is_cyan (jq colour helper; hue 170–200°, saturation > 0.4) in both the dark and the light theme, and its contrast ratio against .rowBg is >= 4.5; the same session's row in the name section (if any) still reads 'live · …'. Kit correction 2026-11-13 (builder fix round): the selected session (qrsix-named) leads the buffer rows (R11); the others stay in count order 9, 5, 2, 1.
+# Asserts: sessions with 2, 9 and 5 occurrences of the query: rows in order 9, 5, 2; each .sub == "<n> matches" ("1 match" for one, checked with a fourth session); .subColor is_cyan (jq colour helper; hue 170–200°, saturation > 0.4) in both the dark and the light theme, and its contrast ratio against .rowBg is >= 4.5; the same session's row in the name section (if any) still reads 'live · …'. Kit correction 2026-11-13 (F2): r6-one is selected first, so the current session is not the name-matching one; the buffer rows keep the original order 9, 5, 3, 2, 1.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/activate"
 source "$ZBUI_LIB"
@@ -20,24 +20,25 @@ s9="$(seed_n r6-nine 9)"
 s5="$(seed_n r6-five 5)"
 s1="$(seed_n r6-one 1)"
 sq="$(seed_n qrsix-named 3)"
-# Kit correction 2026-11-13 (builder fix round), R11 (user request 2026-11-13: the selected
-# session stays on top while searching): qrsix-named, the last one seeded, is the selected
-# session, so its row now leads the section; it was third by count. Every other row keeps the
-# strict count order (9, 5, 2, 1), asserted as an exact list as before, and the selected row
-# is checked to be qrsix-named and selected.
+# Kit correction 2026-11-13 (builder fix round F2), R11 as the user laid it out on 2026-11-13
+# (supersedes the F1 correction that put the selected row first): the buffer rows are in pure
+# count order again, so the original exact list [9, 5, 3, 2, 1] is asserted unchanged. The
+# selected session is now listed under its own "Current session" heading and not repeated
+# among the name matches, so r6-one (1 match, no name match) is selected before typing; it
+# keeps its place (last) in the buffer rows, and qrsix-named stays a name row.
 check_rows() {
   local s="$1"
   jq '.sessions' <<<"$s"
-  jq -e --arg c "$sq" '.selectedId == $c' <<<"$s"
+  jq -e --arg e "$s1" '.selectedId == $e and ([.sessions.rows[] | select(.section == "current") | .id] == [$e])' <<<"$s"
   jq -e --arg a "$s9" --arg b "$s5" --arg c "$sq" --arg d "$s2" --arg e "$s1" \
-    '[.sessions.rows[] | select(.section == "buffer") | .id] == [$c, $a, $b, $d, $e]' <<<"$s"
-  jq -e '[.sessions.rows[] | select(.section == "buffer") | .sub] == ["3 matches", "9 matches", "5 matches", "2 matches", "1 match"]' <<<"$s"
-  jq -e '[.sessions.rows[] | select(.section == "buffer") | .selected] == [true, false, false, false, false]' <<<"$s"
+    '[.sessions.rows[] | select(.section == "buffer") | .id] == [$a, $b, $c, $d, $e]' <<<"$s"
+  jq -e '[.sessions.rows[] | select(.section == "buffer") | .sub] == ["9 matches", "5 matches", "3 matches", "2 matches", "1 match"]' <<<"$s"
   jq -e -L "$BS_JQ_LIB" "$JQ_BS"'all(.sessions.rows[] | select(.section == "buffer"); .subColor | is_cyan)' <<<"$s"
   jq -e -L "$BS_JQ_LIB" "$JQ_BS"'all(.sessions.rows[] | select(.section == "buffer"); contrast(.subColor; .rowBg) >= 4.5)' <<<"$s"
   # The same session's name row still reads "live · …".
   jq -e --arg c "$sq" '[.sessions.rows[] | select(.section == "name" and .id == $c) | .sub | startswith("live")] == [true]' <<<"$s"
 }
+select_session "$s1"
 type_box QRSIX
 wait_search
 check_rows "$(sstate)"

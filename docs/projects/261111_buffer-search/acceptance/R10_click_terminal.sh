@@ -38,6 +38,8 @@ ended() {
   jq -e '.box.value == ""' <<<"$s"
   jq -e '.inSession.total == 0 and .inSession.decorations == 0' <<<"$s"
   jq -e '.sessions.heading == null' <<<"$s"
+  # Kit correction 2026-11-13 (builder fix round F2), R11: the plain list, no section heading.
+  jq -e '.sessions.headings == []' <<<"$s"
   jq -e --arg a "$sa" --arg b "$sb" '[.sessions.rows[] | .id] | (index($a) != null and index($b) != null)' <<<"$s"
   jq -e '.box.focused == false and .terminalFocused == true' <<<"$s"
   jq -e --arg r "$1" '.remembered == $r' <<<"$s"

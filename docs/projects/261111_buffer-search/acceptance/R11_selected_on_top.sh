@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# R11 selected_on_top — proves R11: while searching with the side pane shown, the selected session's row, in its selected colour, leads each section it is in (the name rows, the buffer-match rows); the other rows keep their order.
+# R11 selected_on_top — proves R11 (the user's layout of 2026-11-13): while the box holds text the list shows, in order, a "Current session" heading and the selected session's row (in its selected colour, whether it matches or not), a "Session name matches" heading and the other name matches in the list's own order (only when there are some), and the "Session buffer matches" section as before; with the box empty, after Esc and after a click in the terminal, the plain list.
 # Asserts: sessions qelv-a (2 matches of QELV), qelv-b (3), r11-nine (9), r11-five (5), r11-one (1), r11-none (0); the query QELV.
-#   qelv-a selected: name rows == [qelv-a, qelv-b] (qelv-b, the newer, leads without the rule); buffer rows == [qelv-a, nine, five, qelv-b, one] with subs ["2 matches","9 matches","5 matches","3 matches","1 match"]; the first row of each section has .selected == true and a .rowBg unlike the other rows', no other row is selected.
-#   r11-five selected by a real click on its buffer row: name rows == [qelv-b, qelv-a]; buffer rows == [five, nine, qelv-b, qelv-a, one]; five's row selected.
-#   r11-none selected (matches nothing): name rows == [qelv-b, qelv-a]; buffer rows == [nine, five, qelv-b, qelv-a, one] (by count, R6), none selected.
-#   Both themes for the colour check.
+#   qelv-a selected: headings == ["Current session", "Session name matches", "Session buffer matches"] in that DOM order; current rows == [qelv-a], selected, its .rowBg unlike every other row's; name rows == [qelv-b] (the current session is not repeated there); buffer rows == [nine, five, qelv-b, qelv-a, one] with subs 9, 5, 3, 2, 1 (count order, the current session in its place); no row of another session selected. Both themes.
+#   r11-five selected by a real click on its buffer row: current == [five]; name rows == [qelv-b, qelv-a] (the plain list's order); buffer rows unchanged.
+#   r11-none selected (matches nothing): current == [none]; name rows == [qelv-b, qelv-a]; buffer rows unchanged.
+#   query "QELV 9" (no name matches): headings == ["Current session", "Session buffer matches"], no name rows, current == [none], buffer == [nine].
+#   Esc: headings == [], all six sessions in the plain list; a click in the terminal after retyping: the same.
+# Kit correction 2026-11-13 (builder fix round F2): rewritten for the user's layout, replacing F1's "selected row first in each section"; the row's id stays R11.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/activate"
 source "$ZBUI_LIB"
@@ -26,41 +28,37 @@ s5="$(seed_n r11-five 5)"
 s9="$(seed_n r11-nine 9)"
 qa="$(seed_n qelv-a 2)"
 qb="$(seed_n qelv-b 3)"
-ids() { jq -c --arg sec "$1" '[.sessions.rows[] | select(.section == $sec) | .id]'; }
-# check <selected id or ""> <name ids json> <buffer ids json> <buffer subs json>
+buffer="[\"$s9\",\"$s5\",\"$qb\",\"$qa\",\"$s1\"]"
+subs='["9 matches","5 matches","3 matches","2 matches","1 match"]'
+three='["Current session","Session name matches","Session buffer matches"]'
+# check <state> <current id> <headings json> <name ids json> <buffer ids json> <buffer subs json>
 check() {
-  local s="$1" sel="$2"
+  local s="$1" cur="$2"
   jq '.sessions' <<<"$s"
-  jq -e --argjson n "$3" '[.sessions.rows[] | select(.section == "name") | .id] == $n' <<<"$s"
-  jq -e --argjson b "$4" '[.sessions.rows[] | select(.section == "buffer") | .id] == $b' <<<"$s"
-  jq -e --argjson u "$5" '[.sessions.rows[] | select(.section == "buffer") | .sub] == $u' <<<"$s"
-  if [ -z "$sel" ]; then
-    jq -e '[.sessions.rows[] | select(.selected)] == []' <<<"$s"
-    return 0
-  fi
-  jq -e --arg x "$sel" '.selectedId == $x' <<<"$s"
-  # In each section it is in, the selected row comes first, in its own colour; no other row is selected.
-  jq -e --arg x "$sel" '
-    [.sessions.rows[] | select(.selected) | .id] | unique == [$x]' <<<"$s"
-  for sec in name buffer; do
-    jq -e --arg x "$sel" --arg sec "$sec" '
-      [.sessions.rows[] | select(.section == $sec)] as $r
-      | ($r | map(.id) | index($x)) as $i
-      | $i == null or ($i == 0 and $r[0].selected and all($r[1:][]; .rowBg != $r[0].rowBg and (.selected | not)))' <<<"$s"
-  done
+  jq -e --arg c "$cur" '.selectedId == $c' <<<"$s"
+  jq -e --argjson h "$3" '[.sessions.headings[].text] == $h and ([.sessions.headings[].index] | . == sort)' <<<"$s"
+  # Rows sit under their own heading, in DOM order.
+  jq -e '[.sessions.rows[] | .section] as $s | ($s | map({current: 0, name: 1, buffer: 2}[.])) | . == sort' <<<"$s"
+  jq -e --arg c "$cur" '[.sessions.rows[] | select(.section == "current") | .id] == [$c]' <<<"$s"
+  jq -e --argjson n "$4" '[.sessions.rows[] | select(.section == "name") | .id] == $n' <<<"$s"
+  jq -e --argjson b "$5" '[.sessions.rows[] | select(.section == "buffer") | .id] == $b' <<<"$s"
+  jq -e --argjson u "$6" '[.sessions.rows[] | select(.section == "buffer") | .sub] == $u' <<<"$s"
+  # The current row is selected and drawn in the selected colour; no other session's row is.
+  jq -e --arg c "$cur" '[.sessions.rows[] | select(.selected) | .id] | unique == [$c]' <<<"$s"
+  jq -e '[.sessions.rows[] | select(.section == "current")][0] as $c
+    | all(.sessions.rows[] | select(.selected | not); .rowBg != $c.rowBg)' <<<"$s"
 }
-select_session "$qa"
-type_box QELV
-wait_search
 both_themes() {
   check "$(sstate)" "$@"
   cmd '{"command":"click","selector":"#themeToggle"}' >/dev/null
   sleep 1
   check "$(sstate)" "$@"
 }
-both_themes "$qa" "[\"$qa\",\"$qb\"]" "[\"$qa\",\"$s9\",\"$s5\",\"$qb\",\"$s1\"]" \
-  '["2 matches","9 matches","5 matches","3 matches","1 match"]'
-# A real click on r11-five's buffer row selects it; it moves to the top, the box keeps its text.
+select_session "$qa"
+type_box QELV
+wait_search
+both_themes "$qa" "$three" "[\"$qb\"]" "$buffer" "$subs"
+# A real click on r11-five's buffer row makes it the current session; the box keeps its text.
 r="$(cmd "{\"command\":\"style-of\",\"selector\":\".session-row[data-session-id=\\\"$s5\\\"]\"}")"
 jq -c '.rect' <<<"$r"
 click_at "$(jq '(.rect.left + 40) | floor' <<<"$r")" "$(jq '(.rect.top + .rect.height / 2) | floor' <<<"$r")"
@@ -69,13 +67,31 @@ wait_until 15 _bs_shows "$s5"
 mouse_to 700 300
 wait_search
 jq -e '.box.value == "QELV"' <<<"$(sstate)"
-both_themes "$s5" "[\"$qb\",\"$qa\"]" "[\"$s5\",\"$s9\",\"$qb\",\"$qa\",\"$s1\"]" \
-  '["5 matches","9 matches","3 matches","2 matches","1 match"]'
-# A selected session that matches nothing: every row in its R6 order. (The debug server's
-# switch picks from the list as shown, which the name filter narrows: switch with the box empty.)
+both_themes "$s5" "$three" "[\"$qb\",\"$qa\"]" "$buffer" "$subs"
+# A current session that matches nothing is still shown under its heading. (The debug
+# server's switch picks from the list as shown, which the name filter narrows: switch with
+# the box empty.)
 clear_box
 select_session "$s0"
 type_box QELV
 wait_search
-check "$(sstate)" "" "[\"$qb\",\"$qa\"]" "[\"$s9\",\"$s5\",\"$qb\",\"$qa\",\"$s1\"]" \
-  '["9 matches","5 matches","3 matches","2 matches","1 match"]'
+check "$(sstate)" "$s0" "$three" "[\"$qb\",\"$qa\"]" "$buffer" "$subs"
+# No name match: no "Session name matches" heading.
+clear_box
+xdo type --delay 30 'QELV 9'
+wait_search
+check "$(sstate)" "$s0" '["Current session","Session buffer matches"]' '[]' "[\"$s9\"]" '["1 match"]'
+# Esc: the plain list.
+key Escape
+s="$(sstate)"
+jq '.sessions' <<<"$s"
+jq -e '.sessions.headings == []' <<<"$s"
+jq -e --argjson all "[\"$s0\",\"$s1\",\"$s5\",\"$s9\",\"$qa\",\"$qb\"]" '[.sessions.rows[] | select(.section == "name") | .id] | sort == ($all | sort)' <<<"$s"
+# A click in the terminal: the plain list too.
+type_box QELV
+wait_search
+jq -e '.sessions.headings | length == 3' <<<"$(sstate)"
+focus_terminal
+s="$(sstate)"
+jq -e '.box.value == "" and .sessions.headings == []' <<<"$s"
+jq -e '[.sessions.rows[] | select(.section == "name")] | length == 6' <<<"$s"
