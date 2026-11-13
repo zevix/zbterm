@@ -5,7 +5,8 @@
     "bs": "docs/projects/261111_buffer-search/acceptance",
     "uc": "docs/projects/261110_ui-chrome/acceptance",
     "tf": "docs/projects/261110_timeline-fixes/acceptance",
-    "st": "docs/projects/261110_session-templates/acceptance"
+    "st": "docs/projects/261110_session-templates/acceptance",
+    "up": "docs/projects/261113_ui-polish/acceptance"
   },
   "serial": ["bs/U3_responsive", "bs/R7_stream_and_cancel"],
   "known_failures": {
@@ -34,7 +35,7 @@
   },
   "harness": {
     "about": "Shared kit files and the kits whose scripts use them: a change selects every topic that lists a script of those kits. Any other non-script file in a kit's directory (activate, run_all.sh, its own helpers) does the same for its own kit; a changed R*/U* script selects the topics that list it. (F3)",
-    "docs/projects/261110_ui-chrome/acceptance/lib.sh": ["uc", "tf", "st", "bs"],
+    "docs/projects/261110_ui-chrome/acceptance/lib.sh": ["uc", "tf", "st", "bs", "up"],
     "docs/projects/261110_ui-chrome/acceptance/color.jq": ["uc", "tf", "st", "bs"]
   },
   "sanity": {
@@ -75,6 +76,7 @@
       "test/renderer-static.test.js",
       "test/rpc-schema.test.js",
       "test/schema.test.js",
+      "test/session-data-batcher.test.js",
       "test/share-manager-seam.test.js",
       "test/share-manager.test.js",
       "test/spawn-worker.test.js",
@@ -107,12 +109,19 @@
         "bs/R11_selected_on_top",
         "bs/U1_hotkey_not_typed",
         "bs/U2_live_only",
-        "bs/U3_responsive"
+        "bs/U3_responsive",
+        "up/R2_icon",
+        "up/R3_unmatched",
+        "up/R13_reorder_guard"
       ],
-      "tests": ["test/buffer-search.test.js", "test/renderer-static.test.js"],
+      "tests": [
+        "test/buffer-search.test.js",
+        "test/renderer-static.test.js",
+        "test/session-data-batcher.test.js"
+      ],
       "paths": ["engine/buffer-search.js", "renderer/buffer-search.js"],
       "content": {
-        "renderer/app.js": "[Ss]earch|bufferMatches|renderSessions|sessionSectionTitle|selectedSessionEntry|SessionBuffer",
+        "renderer/app.js": "[Ss]earch|bufferMatches|renderSessions|sessionSectionTitle|selectedSessionEntry|SessionBuffer|[Uu]nmatched|[Rr]eorder[Gg]uard|noteSessionRowOrder|unfilteredSessions",
         "renderer/index.html": "search|match-cyan|session-section",
         "engine/index.js": "searchBuffer|historyReads|BUFFER_SEARCH",
         "engine/terminal-frame.js": ".",
@@ -130,12 +139,18 @@
         "uc/R6_identity_dot",
         "uc/U2_narrow_and_modal",
         "bs/R1_box_and_hotkey",
-        "bs/R9_box_width"
+        "bs/R9_box_width",
+        "up/R2_icon",
+        "up/R8_menu",
+        "up/R10_items",
+        "up/R11_lock_menu",
+        "up/R12_lock_holds",
+        "up/U2_lock"
       ],
       "tests": ["test/renderer-static.test.js"],
       "paths": ["renderer/vendor/*", "scripts/vendor-assets.js"],
       "content": {
-        "renderer/app.js": "[Ss]idePane|[Tt]opbar|sidebar|[Ss]ettings[A-Z]|settingsMenu|[Tt]heme|bottomBar|BottomBar|[Bb]rand|syncTerminalLayout|NARROW",
+        "renderer/app.js": "[Ss]idePane|[Tt]opbar|sidebar|[Ss]ettings[A-Z]|settingsMenu|[Tt]heme|bottomBar|BottomBar|[Bb]rand|syncTerminalLayout|NARROW|[Ss]izeLock|SIZE_LOCK|fitLockedTerminal|collapsedPaneItems|stunTurnMenuItem",
         "renderer/index.html": "."
       }
     },
@@ -152,7 +167,8 @@
       "tests": [
         "test/renderer-static.test.js",
         "test/engine-client-pty.test.js",
-        "test/pty-scope.test.js"
+        "test/pty-scope.test.js",
+        "test/session-data-batcher.test.js"
       ],
       "paths": ["electron/pty-*.js"],
       "content": {
@@ -174,7 +190,10 @@
         "tf/U1_click_no_pause",
         "tf/U2_altwheel_edges",
         "uc/R2_bubble_clock",
-        "bs/R4_playback"
+        "bs/R4_playback",
+        "up/R1_unrecorded",
+        "up/R4_bubble",
+        "up/R5_days"
       ],
       "tests": [
         "test/player.test.js",
@@ -184,7 +203,7 @@
       ],
       "paths": ["engine/player.js", "renderer/time-collapse.js", "renderer/wall-clock.js"],
       "content": {
-        "renderer/app.js": "[Pp]layback|[Ss]crub|timeLabel|TimeLabel|[Ss]eek|[Aa]lt.?[Ww]heel|[Ss]election|bubble|[Cc]ollapse[A-Z]|timeline|clockTs",
+        "renderer/app.js": "[Pp]layback|[Ss]crub|timeLabel|TimeLabel|[Ss]eek|[Aa]lt.?[Ww]heel|[Ss]election|bubble|[Cc]ollapse[A-Z]|timeline|clockTs|setScrubberTip|scrubberTipLines|formatDuration|[Uu]nrecordedDuration",
         "engine/index.js": "player|seek|timeline",
         "electron/main.js": "session:data|sendToAll|queueSessionData|flushSessionData|SESSION_DATA_FLUSH"
       }
@@ -203,19 +222,23 @@
         "st/U1_unrecorded_nothing_on_disk",
         "st/U2_template_warnings",
         "st/U3_template_takeover",
-        "st/U4_new_hotkey_not_typed"
+        "st/U4_new_hotkey_not_typed",
+        "up/R1_unrecorded",
+        "up/R6_record",
+        "up/R7_advanced",
+        "up/U1_record"
       ],
       "tests": ["test/engine-unrecorded.test.js"],
       "paths": ["engine/catalog.js"],
       "content": {
-        "renderer/app.js": "[Tt]emplate|NEW_SESSION_TRIGGERS|[Rr]ecord session|unrecorded|sessionEditor|[Pp]rofile",
+        "renderer/app.js": "[Tt]emplate|NEW_SESSION_TRIGGERS|[Rr]ecord session|unrecorded|sessionEditor|[Pp]rofile|recordNote|session-editor-advanced",
         "engine/index.js": "record|template|unrecorded"
       }
     },
     "sharing": {
       "about": "share links, joining, joined sessions, the Pear and Freenet backends, the zxterm-core seam",
       "seconds": 300,
-      "scripts": ["bs/R8_joined_session"],
+      "scripts": ["bs/R8_joined_session", "up/U2_lock"],
       "tests": [
         "test/share-manager.test.js",
         "test/share-manager-seam.test.js",
@@ -311,7 +334,8 @@
         "test/rpc-schema.test.js",
         "test/spawn-worker.test.js",
         "test/caps.test.js",
-        "test/buffer-search.test.js"
+        "test/buffer-search.test.js",
+        "test/session-data-batcher.test.js"
       ],
       "paths": ["engine/*", "electron/engine-*.js", "electron/main.js", "electron/preload.js"],
       "content": {}
