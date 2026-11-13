@@ -49,6 +49,10 @@ The same brief asked to close the verifier's gaps of `acceptance/report--2026-11
 
 Relayed with them: this is the approval to change hard rows R11 and R5 (R3/R6 where affected); the kit budget for the complete set is ~25 min.
 
+**2026-11-13, on the duplicated or lost lines after switching sessions** (verbatim): "This bug sounds like a bad design. Please add a dinal task to the end of the new project to investigate and approve the solution with me"
+
+**2026-11-13, F3's new figures:** the user approved all three (the U3 flood rate, U3 requests in flight, and R2's colour tolerance).
+
 ## Context
 
 - **Replaces an earlier idea.** Before this request the plan was a full-text search of recorded history on disk. Recorded history and snapshots are encrypted (measured in `../261110_ui-chrome/status--done.md` *Gotchas*: a `grep -rlF` for a recorded marker finds nothing), so such a search would have to decrypt and replay every session. "Instead" drops that: this project searches memory only, and the on-disk search is out of scope.

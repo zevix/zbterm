@@ -103,6 +103,10 @@ None.
 
 ## Open
 
+- **Moved to `261113_ui-polish` (user, 2026-11-13):** after F4 (`bceccbb`, flush before invoke answers), selecting a session while it prints still shows 1–2 lines twice or drops one in about 1 of 18 probe trials (`report--2026-11-13-F3.md`). The user called it "a bad design". Investigating the design and approving a solution with the user is the last task of `261113_ui-polish`.
+- Resolved 2026-11-13: the user approved F3's new figures (U3: flood at half rate or better, requests in flight for at least 1/5 of the flood, in-flight samples only; R2: colour tolerance of 8 per channel).
+- Resolved 2026-11-13 (F4): report F3's coalescing finding. Batched output is flushed before every invoke answer, and `electron/session-data-batcher.js` has unit tests (7/7).
+
 - Resolved 2026-11-13 (F3): the renderer stall under a flood during a search (U3). Main sent 1 700–2 400 `session:data` IPC messages a second; they are now batched (8 ms / 64 KB). The repro hung in 4 of 6 runs before (HEAD) and 0 of 3 after; U3 passes.
 
 - Resolved 2026-11-13 (F2): R11's reading (the user's layout, built) and the kit time (the user accepts ~25 min for the complete set; `--full` 905 s).
