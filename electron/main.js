@@ -16,6 +16,7 @@ const { EngineLifecycle } = require('./engine-lifecycle')
 const { BACKEND_CHOICES, resolveBackendLimit } = require('./backend-limit')
 const { iceServersFlag, resolveIceServers } = require('./ice-servers')
 const { createDebugServer, DEFAULT_PORT } = require('./debug-server')
+const { createSessionDataBatcher } = require('./session-data-batcher')
 const { detectChannel, checkForUpdate } = require('./update-channel')
 const { listProviders, GITHUB_USERNAME } = require('../engine/identity/providers')
 const { command, flag } = require('paparam')
@@ -402,50 +403,18 @@ ipcMain.on('renderer:fileLog', (evt, msg) => {
   debugLog('[Renderer]', msg)
 })
 
-// Session output is sent to the renderer in batches (261111_buffer-search F3,
-// U3): a flood arrives as thousands of ~1 KB chunks a second, and one IPC
-// message each backed the main-to-renderer channel up until nothing else
-// (invoke answers, the debug server's scripts) got through. Chunks of the same
-// session, source and HD state are joined and sent every SESSION_DATA_FLUSH_MS,
-// or at once past SESSION_DATA_FLUSH_BYTES; any other event flushes first, so
-// the order the renderer sees is unchanged. The bytes are the same, so the
-// renderer's acks count the same.
-const SESSION_DATA_FLUSH_MS = 8
-const SESSION_DATA_FLUSH_BYTES = 64 * 1024
-let sessionDataQueue = []
-let sessionDataBytes = 0
-let sessionDataTimer = null
+// Session output is batched; see electron/session-data-batcher.js. Every other
+// event and every invoke answer flushes it first, so order is unchanged.
+const sessionData = createSessionDataBatcher({
+  send: (data) => sendToAll('zbterm:event', { name: 'session:data', data })
+})
 
 function queueSessionData(data) {
-  const last = sessionDataQueue[sessionDataQueue.length - 1]
-  if (
-    last &&
-    (last.sessionId !== data.sessionId || last.source !== data.source || last.hd !== data.hd)
-  ) {
-    flushSessionData()
-  }
-  sessionDataQueue.push(data)
-  sessionDataBytes += data.data ? data.data.byteLength || data.data.length || 0 : 0
-  if (sessionDataBytes >= SESSION_DATA_FLUSH_BYTES) {
-    flushSessionData()
-  } else if (!sessionDataTimer) {
-    sessionDataTimer = setTimeout(flushSessionData, SESSION_DATA_FLUSH_MS)
-  }
+  sessionData.push(data)
 }
 
 function flushSessionData() {
-  if (sessionDataTimer) clearTimeout(sessionDataTimer)
-  sessionDataTimer = null
-  const queue = sessionDataQueue
-  sessionDataQueue = []
-  sessionDataBytes = 0
-  if (!queue.length) return
-  const first = queue[0]
-  const data =
-    queue.length === 1
-      ? first.data
-      : Buffer.concat(queue.map((item) => Buffer.from(item.data || [])))
-  sendToAll('zbterm:event', { name: 'session:data', data: { ...first, data } })
+  sessionData.flush()
 }
 
 function sendToAll(name, data) {
@@ -1694,6 +1663,10 @@ ipcMain.handle('zbterm:invoke', async (evt, method, args) => {
         details: err.details || null
       }
     }
+  } finally {
+    // F4: output the worker sent before this answer must reach the renderer
+    // before it - a session.open/extend frame painted first gets it twice.
+    flushSessionData()
   }
 })
 // The renderer's "STUN/TURN servers" setting (preload `app.setIceServers`).
