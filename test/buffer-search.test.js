@@ -296,6 +296,20 @@ test('debug.historyReads: a buffer search reads no history, a playback does', as
   t.ok(after.packets > before.packets, 'playback read packets of the recording')
 })
 
+test('debug.bufferSearches counts session.searchBuffer calls per session', async (t) => {
+  const { engine, pty } = await engineWith(t)
+  const { sessionId } = await engine.invoke('session.create', { name: 'one', cols: 80, rows: 24 })
+  await push(engine, pty, sessionId, 'counted-word\r\n')
+  t.alike(await engine.invoke('debug.bufferSearches'), { calls: 0, sessions: {} })
+  await engine.invoke('session.searchBuffer', { sessionId, query: 'counted-word' })
+  await engine.invoke('session.searchBuffer', { sessionId, query: '' })
+  await engine.invoke('session.searchBuffer', { sessionId: 'nope', query: 'x' })
+  t.alike(await engine.invoke('debug.bufferSearches'), {
+    calls: 3,
+    sessions: { [sessionId]: 2, nope: 1 }
+  })
+})
+
 test('searchBuffer: ended, pending and unknown sessions answer gone', async (t) => {
   const { engine, pty } = await engineWith(t)
   const { sessionId } = await engine.invoke('session.create', { name: 'one', cols: 80, rows: 24 })

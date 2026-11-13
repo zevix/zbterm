@@ -8941,6 +8941,7 @@
       layer.append(mark)
       bs.decorations.push({
         isDisposed: false,
+        element: mark,
         dispose() {
           this.isDisposed = true
           mark.remove()
@@ -10079,6 +10080,34 @@
     }
   }
 
+  // The highlights as drawn (R2): each of the search's decorations whose
+  // element is on screen, as viewport cells read off its rect against the
+  // terminal's screen element, { row, col, width }. xterm makes an element
+  // only for a decoration in the viewport and hides it (display none) when it
+  // scrolls out; the alternate screen's overlay boxes are read the same way.
+  function debugDrawnSearchMarks(bs, term) {
+    if (!bs || !term || !term.element || !Array.isArray(bs.decorations)) return []
+    const screen = term.element.querySelector('.xterm-screen')
+    if (!screen || !term.cols || !term.rows) return []
+    const grid = screen.getBoundingClientRect()
+    const cellWidth = grid.width / term.cols
+    const cellHeight = grid.height / term.rows
+    if (!cellWidth || !cellHeight) return []
+    const drawn = []
+    for (const item of bs.decorations) {
+      const el = item && !item.isDisposed ? item.element : null
+      if (!el || !el.isConnected || window.getComputedStyle(el).display === 'none') continue
+      const rect = el.getBoundingClientRect()
+      if (!rect.width || !rect.height) continue
+      drawn.push({
+        row: Math.round((rect.top - grid.top) / cellHeight),
+        col: Math.round((rect.left - grid.left) / cellWidth),
+        width: Math.round(rect.width / cellWidth)
+      })
+    }
+    return drawn.sort((a, b) => a.row - b.row || a.col - b.col)
+  }
+
   function debugInSessionSearch() {
     const bs = state.bufferSearch || null
     const term = state.term || null
@@ -10103,6 +10132,11 @@
       length: buffer ? buffer.length : null,
       rows: term ? term.rows : null,
       decorations: bs && Array.isArray(bs.decorations) ? bs.decorations.length : 0,
+      drawn: debugDrawnSearchMarks(bs, term),
+      colors: {
+        match: searchColorToken('--search-match', '#5c4a12'),
+        current: searchColorToken('--search-current', '#f3c969')
+      },
       mode: state.mode || null,
       buffer: buffer ? buffer.type : null
     }
@@ -10177,38 +10211,48 @@
     }
   }
 
-  // key-probe (261111_buffer-search U1): "start" listens for keydown on the
-  // element that has the focus now (observing only, never preventing); "take"
-  // returns what reached it since, and the element, and stops listening.
-  const debugKeys = { target: null, listener: null, events: [] }
-  function debugKeyProbe(action) {
+  // key-probe (261111_buffer-search U1, U3): "start" listens for keydown on
+  // the element that has the focus now, or with scope "document" on the whole
+  // page in the capture phase (observing only, never preventing); "take"
+  // returns what reached it since, and the element, and stops listening. Each
+  // event's `at` is when it happened (its timeStamp, as epoch ms), `handledAt`
+  // when this listener ran.
+  const debugKeys = { target: null, listener: null, capture: false, events: [] }
+  function debugKeyProbe(action, options = {}) {
+    const where = (target) => (target === document ? 'document' : debugNodeKey(target))
     if (action === 'start') {
       debugKeyProbe('stop')
-      const target = document.activeElement || document.body
+      const capture = options.scope === 'document'
+      const target = capture ? document : document.activeElement || document.body
       debugKeys.events = []
       debugKeys.target = target
+      debugKeys.capture = capture
       debugKeys.listener = (event) => {
+        const handledAt = Date.now()
         debugKeys.events.push({
           key: event.key,
           code: event.code,
           ctrl: event.ctrlKey,
           shift: event.shiftKey,
           target: debugNodeKey(event.target),
-          defaultPrevented: event.defaultPrevented
+          defaultPrevented: event.defaultPrevented,
+          at: handledAt - Math.max(0, performance.now() - event.timeStamp),
+          handledAt
         })
       }
-      target.addEventListener('keydown', debugKeys.listener)
-      return { listening: debugNodeKey(target) }
+      target.addEventListener('keydown', debugKeys.listener, capture)
+      return { listening: where(target) }
     }
     const answer = {
-      listening: debugKeys.target ? debugNodeKey(debugKeys.target) : null,
+      listening: debugKeys.target ? where(debugKeys.target) : null,
       events: debugKeys.events
     }
     if (debugKeys.target && debugKeys.listener) {
-      debugKeys.target.removeEventListener('keydown', debugKeys.listener)
+      debugKeys.target.removeEventListener('keydown', debugKeys.listener, debugKeys.capture)
     }
     debugKeys.target = null
     debugKeys.listener = null
+    debugKeys.capture = false
     debugKeys.events = []
     return answer
   }
@@ -10692,7 +10736,7 @@
     // The 261111_buffer-search kit's commands: pure reads.
     if (command === 'search-state') return debugSearchState()
     if (command === 'buffer-search-log') return debugTakeBufferSearchLog()
-    if (command === 'key-probe') return debugKeyProbe(request.action)
+    if (command === 'key-probe') return debugKeyProbe(request.action, request)
     if (command === 'selection-log') {
       debugStartSelectionLog()
       const events = debugKit.log.slice()

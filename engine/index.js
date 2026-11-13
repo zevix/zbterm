@@ -141,6 +141,10 @@ class SessionEngine extends EventEmitter {
     // session.searchBuffer: the newest `seq` per `searchKey` (one key per
     // renderer window), so a newer query stops the older one's scans.
     this._bufferSearchSeq = new Map()
+    // session.searchBuffer calls per session id, answered by
+    // debug.bufferSearches (261111_buffer-search R8: a check that a joined
+    // session's search runs on this app's copy, never on its host's).
+    this._bufferSearchCalls = new Map()
     // The Rust `zxterm-core` sidecar for this profile (not the JS
     // `zbterm-core` package this file belongs to): every identity path -
     // SSH keys, the identity claim, verification, provider key lookups and
@@ -336,6 +340,7 @@ class SessionEngine extends EventEmitter {
       }
       if (method === 'debug.currentSelection') return null
       if (method === 'debug.historyReads') return historyReads()
+      if (method === 'debug.bufferSearches') return this.bufferSearches()
       if (method === 'preference.get') return await this.getPreference(args.key)
       if (method === 'preference.set') {
         return await this.setPreference(args.key, args.value)
@@ -1221,6 +1226,19 @@ class SessionEngine extends EventEmitter {
     return { sessions }
   }
 
+  // debug.bufferSearches: { calls, sessions: { <sessionId>: calls } }, every
+  // session.searchBuffer call this core answered since it started, whatever the
+  // answer. Counting only; nothing reads these to decide anything.
+  bufferSearches() {
+    let calls = 0
+    const sessions = {}
+    for (const [id, n] of this._bufferSearchCalls) {
+      sessions[String(id)] = n
+      calls += n
+    }
+    return { calls, sessions }
+  }
+
   // Counts the matches of `query` in a live session's in-memory screen: the
   // headless mirror of an own session or of a joined one (the copy this app
   // holds), its normal buffer with the scrollback plus the alternate screen
@@ -1234,6 +1252,7 @@ class SessionEngine extends EventEmitter {
   // or may not be in it (261111_buffer-search A-4).
   async searchBuffer(args = {}) {
     const sessionId = args.sessionId
+    this._bufferSearchCalls.set(sessionId, (this._bufferSearchCalls.get(sessionId) || 0) + 1)
     const query = typeof args.query === 'string' ? args.query : ''
     const searchKey = args.searchKey === null ? '' : String(args.searchKey)
     const seq = Number.isFinite(args.seq) ? args.seq : null
