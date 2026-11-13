@@ -730,6 +730,24 @@
         padding: 8px;
       }
 
+      /* R13: the rows just moved; no clicks until the list is still. */
+      .sessions.reorder-guard {
+        cursor: not-allowed;
+      }
+
+      .sessions.reorder-guard > * {
+        pointer-events: none;
+      }
+
+      /* "Other - unmatched sessions" while searching (R3): dimmed. */
+      .session-row.unmatched {
+        opacity: 0.5;
+      }
+
+      .session-row.unmatched:hover {
+        opacity: 1;
+      }
+
       .session-select-wrap {
         display: none;
         padding: 8px 12px;
@@ -918,6 +936,24 @@
         margin-top: 0;
       }
 
+      /* Spaced like the panel's own rows (8 px), set off from the summary
+         and indented under it (R7). */
+      .session-editor-advanced-body {
+        display: grid;
+        gap: 8px;
+        margin: 8px 0 2px;
+        padding-left: 12px;
+        min-width: 0;
+      }
+
+      /* A note under a box (R6: "Applies to new sessions"). */
+      .session-editor-note {
+        grid-column: 1 / -1;
+        margin: -6px 0 0 24px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
       .session-editor-share-options[hidden] {
         display: none;
       }
@@ -982,6 +1018,35 @@
 
       .settings-menu {
         min-width: 226px;
+      }
+
+      /* A menu item standing for a toolbar button (R10): the button's icon in
+         the tick's column, the identity dot on its corner. */
+      .context-menu-icon {
+        display: inline-grid;
+        place-items: center;
+      }
+
+      /* The size lock (261113_ui-polish R11): locked, the button is marked. */
+      .size-lock[hidden] {
+        display: none;
+      }
+
+      .size-lock.locked {
+        border-color: var(--accent-blue-border);
+      }
+
+      .size-lock-menu .context-menu-icon {
+        width: 1.1em;
+        margin-right: 6px;
+        color: var(--soft-text);
+      }
+
+      .context-menu-icon[data-identity]::after {
+        top: -4px;
+        right: -6px;
+        width: 7px;
+        height: 7px;
       }
 
       .context-menu-separator {
@@ -1305,15 +1370,26 @@
         outline: none;
       }
 
-      /* The in-session count (3/17) inside the box's right end. */
+      /* The magnifying glass at the box's right end, the in-session count
+         (3/17) just left of it (261113_ui-polish R2). */
       .search-cell input {
-        padding-right: 64px;
+        padding-right: 86px;
+      }
+
+      .search-icon {
+        position: absolute;
+        top: 50%;
+        right: 11px;
+        transform: translateY(-50%);
+        color: var(--muted);
+        font-size: 12px;
+        cursor: text;
       }
 
       .search-count {
         position: absolute;
         top: 50%;
-        right: 10px;
+        right: 30px;
         transform: translateY(-50%);
         max-width: 56px;
         overflow: hidden;
@@ -1351,6 +1427,28 @@
         align-items: center;
         gap: 8px;
         min-width: min(720px, 60vw);
+      }
+
+      /* An unrecorded session (261113_ui-polish R1): nothing to play back, so
+         only its duration, at the bar's right end. */
+      .playback.unrecorded {
+        min-width: 0;
+        justify-content: flex-end;
+      }
+
+      .playback.unrecorded > :not(.session-duration) {
+        display: none;
+      }
+
+      .session-duration {
+        color: var(--soft-text);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .session-duration[hidden] {
+        display: none;
       }
 
       .time-label {
@@ -1421,6 +1519,21 @@
         font-variant-numeric: tabular-nums;
         pointer-events: none;
         white-space: nowrap;
+        /* Two lines, both centred (261113_ui-polish R4): clock, then elapsed. */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        line-height: 1.25;
+      }
+
+      .scrubber-tip > span {
+        display: block;
+        text-align: center;
+      }
+
+      .scrubber-tip > span[hidden] {
+        display: none;
       }
 
       .scrubber-indicators {
@@ -2289,7 +2402,7 @@
           background: var(--input-bg);
           border: 1px solid var(--control-border);
           border-radius: 6px;
-          padding: 7px 64px 7px 9px;
+          padding: 7px 86px 7px 9px;
         }
 
         .bottom > .status,
@@ -2308,6 +2421,10 @@
           grid-template-rows: auto auto;
           gap: 6px;
           align-items: center;
+        }
+
+        .playback.unrecorded {
+          display: flex;
         }
 
         .playback .text-btn {
@@ -2437,6 +2554,17 @@
             >
               <i class="fa-solid fa-minus btn-icon" aria-hidden="true"></i><span>Font</span>
             </button>
+            <button
+              id="sizeLock"
+              class="text-btn icon-only size-lock"
+              title="Terminal size: unlocked"
+              aria-label="Lock terminal size"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              hidden
+            >
+              <i class="fa-solid fa-lock-open" aria-hidden="true"></i>
+            </button>
             <button id="shareSession" class="text-btn label-btn" disabled>
               <i class="fa-solid fa-share-nodes btn-icon" aria-hidden="true"></i><span>Share</span>
             </button>
@@ -2470,6 +2598,11 @@
         <div class="search-cell">
           <input id="search" type="search" placeholder="Search (Ctrl+Shift+F)" />
           <span id="searchCount" class="search-count" aria-live="polite" hidden></span>
+          <i
+            id="searchIcon"
+            class="fa-solid fa-magnifying-glass search-icon"
+            aria-hidden="true"
+          ></i>
         </div>
         <div id="status" class="status">ready - initial</div>
         <div id="playback" class="playback" hidden>
@@ -2502,6 +2635,9 @@
             <option value="4">4x</option>
             <option value="8">8x</option>
           </select>
+          <span id="sessionDuration" class="session-duration" title="Session duration" hidden
+            >0:00</span
+          >
         </div>
       </footer>
       <div
@@ -2517,6 +2653,12 @@
     <div id="sessionMenu" class="context-menu" hidden></div>
     <div id="terminalMenu" class="context-menu" hidden></div>
     <div id="settingsMenu" class="context-menu settings-menu" role="menu" hidden></div>
+    <div
+      id="sizeLockMenu"
+      class="context-menu settings-menu size-lock-menu"
+      role="menu"
+      hidden
+    ></div>
     <button id="rename" class="text-btn" hidden>Rename</button>
     <button id="clearCaches" class="text-btn" hidden>Delete History</button>
     <button id="removeHd" class="text-btn" hidden>Remove HD</button>

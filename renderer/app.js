@@ -119,6 +119,15 @@
   const TEMPLATE_PREFERENCE_PREFIX = 'newSessionTemplate.'
   // Per profile: pinned session ids, in the order they were pinned.
   const PINNED_SESSIONS_PREFERENCE = 'zbterm.pinnedSessions'
+  // R11/R12 (261113_ui-polish, Q-8): the terminal size locks, per session id,
+  // a profile preference ({ [sessionId]: { rows, cols, from } }).
+  const SIZE_LOCKS_PREFERENCE = 'zbterm.sizeLocks'
+  const SIZE_LOCK_PRESETS = [
+    { rows: 32, cols: 120 },
+    { rows: 25, cols: 80 }
+  ]
+  // R13: how long the session list must be still before its rows take clicks.
+  const SESSION_REORDER_GUARD_MS = 500
   // The ways to start a new session, each served by its own template profile
   // (261110_session-templates R3–R7). This table is the only place a trigger
   // is named: the Advanced dropdown, the settings-menu section, the key and
@@ -449,6 +458,8 @@
     goLive: document.getElementById('goLive'),
     fontSizeDecrease: document.getElementById('fontSizeDecrease'),
     fontSizeIncrease: document.getElementById('fontSizeIncrease'),
+    sizeLock: document.getElementById('sizeLock'),
+    sizeLockMenu: document.getElementById('sizeLockMenu'),
     shareSession: document.getElementById('shareSession'),
     inputMode: document.getElementById('inputMode'),
     hdToggle: document.getElementById('hdToggle'),
@@ -477,6 +488,7 @@
     scrubber: document.getElementById('scrubber'),
     scrubberIndicators: document.getElementById('scrubberIndicators'),
     scrubberTip: document.getElementById('scrubberTip'),
+    sessionDuration: document.getElementById('sessionDuration'),
     timeLabel: document.getElementById('timeLabel'),
     timeLabelTip: document.getElementById('timeLabelTip'),
     currentTime: document.getElementById('currentTime'),
@@ -1270,11 +1282,20 @@
       'click',
       guard(() => adjustLiveFontSize(1))
     )
+    if (els.sizeLock) {
+      els.sizeLock.addEventListener('click', () => {
+        if (els.sizeLockMenu && els.sizeLockMenu.hidden) openSizeLockMenu()
+        else closeSizeLockMenu()
+      })
+    }
     els.shareSession.addEventListener('click', guard(shareSession))
     els.inputMode.addEventListener('click', guard(toggleInputMode))
     els.hdToggle.addEventListener('click', guard(toggleHd))
     els.themeToggle.addEventListener('click', toggleTheme)
     if (els.brandMark) els.brandMark.addEventListener('click', toggleSidePane)
+    // The magnifying glass is decorative; a click on it focuses the box (R2).
+    const searchIcon = document.getElementById('searchIcon')
+    if (searchIcon && els.search) searchIcon.addEventListener('click', () => els.search.focus())
     if (els.status) {
       els.status.addEventListener('click', () => {
         if (!state.identityRefusal) return
@@ -1298,6 +1319,10 @@
     els.terminal.addEventListener('contextmenu', openTerminalMenu)
     els.terminal.addEventListener('auxclick', guard(handleTerminalAuxClick))
     document.addEventListener('pointerdown', (event) => {
+      if (els.sizeLockMenu && !els.sizeLockMenu.hidden) {
+        const onButton = event.target && event.target.closest && event.target.closest('#sizeLock')
+        if (!els.sizeLockMenu.contains(event.target) && !onButton) closeSizeLockMenu()
+      }
       if (els.settingsMenu && !els.settingsMenu.hidden) {
         const onToggle =
           event.target && event.target.closest && event.target.closest('#settingsToggle')
@@ -1607,22 +1632,26 @@
   }
 
   async function refreshSessions() {
-    const sessions = await api.invoke('session.list', {
-      query: state.query,
-      activeOnly: state.activeOnly
-    })
+    const query = state.query
+    // While the box holds text the list also needs the sessions the name
+    // filter hides: they are "Other - unmatched sessions" (261113_ui-polish R3).
+    const [sessions, unfiltered] = await Promise.all([
+      api.invoke('session.list', { query, activeOnly: state.activeOnly }),
+      query ? api.invoke('session.list', { activeOnly: state.activeOnly }) : null
+    ])
     updateActiveToggle()
     const realIds = new Set(sessions.map((session) => session.sessionId))
     state.pendingJoins = state.pendingJoins.filter((join) => !realIds.has(join.sessionId))
     await prunePinnedSessions(realIds)
     state.sessions = withPinnedFirst([...state.pendingJoins, ...sessions])
+    state.unfilteredSessions = unfiltered ? withPinnedFirst(unfiltered) : null
     ingestSessionIdentities(state.sessions)
     syncSelectedSessionFromList()
     renderSessions()
   }
 
   async function loadSessionListPreferences() {
-    await Promise.all([loadTemplates(), loadPinnedSessionsPreference()])
+    await Promise.all([loadTemplates(), loadPinnedSessionsPreference(), loadSizeLocks()])
   }
 
   async function loadPinnedSessionsPreference() {
@@ -1842,13 +1871,16 @@
       ? (await allSessions()).find((session) => session.sessionId === stored.sessionId)
       : null
     const live = isProfileSession(entry) ? entry : null
+    // "Record session" is what new sessions from the template get
+    // (261113_ui-polish R6): the stored choice wins over the session's own,
+    // which is fixed at creation; the session's fills in when none is stored.
     const profile = live
       ? templateCopy(
           {
             name: live.name,
             cwd: live.cwd || '',
             command: live.command || '',
-            record: live.record !== false
+            record: copy.record !== undefined ? copy.record !== false : live.record !== false
           },
           copy
         )
@@ -2079,7 +2111,9 @@
       triggerId: trigger.id,
       skipDialog: profile.skipDialog,
       share: profile.share,
-      recordLocked: !!live,
+      // R6: editable here; it applies to new sessions only (U1: the
+      // template's own session keeps its recording).
+      recordNote: live ? 'Applies to new sessions' : '',
       shareAutoCopy: await shareAutoCopyPreference(),
       beforeSubmit: templateChecks({
         selfId: live ? live.sessionId : null,
@@ -2629,6 +2663,78 @@
     }
     for (const session of rows) els.sessions.append(buildSessionRow(session))
     renderSessionBufferSection()
+    if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)
+    noteSessionRowOrder()
+  }
+
+  // Last while searching (261113_ui-polish R3): every listed session (the
+  // All/Active toggle applies) that is not the current session, a name match
+  // or a buffer match, in the list's usual order, dimmed. A late buffer match
+  // moves its row up into "Session buffer matches".
+  function renderUnmatchedSessionSection(current, nameRows) {
+    const all = state.unfilteredSessions || []
+    const shown = new Set(nameRows.map((session) => session.sessionId))
+    if (current) shown.add(current.sessionId)
+    const bm = state.bufferMatches
+    if (bm) for (const row of bm.rows) shown.add(row.id)
+    const other = all.filter((session) => !session.pending && !shown.has(session.sessionId))
+    if (!other.length) return
+    els.sessions.append(sessionSectionTitle('Other - unmatched sessions'))
+    for (const session of other) {
+      const row = buildSessionRow(session)
+      row.classList.add('unmatched')
+      els.sessions.append(row)
+    }
+  }
+
+  // R13 (261113_ui-polish): whenever the rows change position, clicks on them
+  // are blocked (pointer-events off, the not-allowed cursor on the list) until
+  // the list has been still for SESSION_REORDER_GUARD_MS; each change restarts
+  // the wait. A change is any item of the list (row, heading, note) that now
+  // sits where another one was; items only added or dropped at the end move
+  // nothing.
+  function sessionListLayoutKeys() {
+    return Array.from(els.sessions.children).map((el) =>
+      el.classList.contains('session-row')
+        ? `row:${el.dataset.sessionId}`
+        : `${el.className}:${el.textContent.trim()}`
+    )
+  }
+
+  function noteSessionRowOrder() {
+    const next = sessionListLayoutKeys()
+    const prev = state.sessionListKeys || []
+    state.sessionListKeys = next
+    const n = Math.min(prev.length, next.length)
+    let moved = false
+    for (let i = 0; i < n && !moved; i++) moved = prev[i] !== next[i]
+    if (moved) armSessionReorderGuard()
+  }
+
+  // A click while the guard is on lands on the list itself (its rows take no
+  // pointer events): counted, for the R13 kit, and goes nowhere.
+  function countBlockedSessionClick(event) {
+    const guard = state.reorderGuard
+    if (guard && guard.on && event.target === els.sessions) guard.blockedClicks++
+  }
+
+  function armSessionReorderGuard() {
+    let guard = state.reorderGuard
+    if (!guard) {
+      guard = state.reorderGuard = { timer: null, changes: 0, blockedClicks: 0 }
+      els.sessions.addEventListener('click', countBlockedSessionClick)
+    }
+    guard.changes++
+    guard.lastChangeAt = Date.now()
+    guard.on = true
+    els.sessions.classList.add('reorder-guard')
+    clearTimeout(guard.timer)
+    guard.timer = setTimeout(() => {
+      guard.timer = null
+      guard.on = false
+      guard.releasedAt = Date.now()
+      els.sessions.classList.remove('reorder-guard')
+    }, SESSION_REORDER_GUARD_MS)
   }
 
   function sessionSectionTitle(text) {
@@ -3022,6 +3128,13 @@
         recordInput.disabled = true
         recordInput.title = 'Fixed when the session was created'
       }
+      if (recordInput && options.recordNote) {
+        const note = document.createElement('span')
+        note.className = 'session-editor-note'
+        note.textContent = options.recordNote
+        // Beside the label, not in it: the box keeps "Record session" as its label.
+        recordInput.closest('label').after(note)
+      }
       // Off every time: copying history is never the implied choice.
       const copyHistoryInput =
         options.mode === 'copy' ? addCheck('Copy history', false, 'session-editor-history') : null
@@ -3115,7 +3228,12 @@
         }
         triggerSelect.addEventListener('change', syncSkip)
         syncSkip()
-        advanced.append(summary, label, triggerSelect, skip.label)
+        // The controls in a body of their own: a <details>'s content is one
+        // slot, so the grid's gap never reached them (261113_ui-polish R7).
+        const body = document.createElement('div')
+        body.className = 'session-editor-advanced-body'
+        body.append(label, triggerSelect, skip.label)
+        advanced.append(summary, body)
         panel.insertBefore(advanced, actionsRow)
       }
       overlay.append(panel)
@@ -3391,16 +3509,29 @@
   //   separator  a rule between groups: {}
   //   info       a line of text, disabled: { label } (the version, last)
   // The new-session templates sit in a section of their own (R5).
+  // Groups, one separator where two meet (261113_ui-polish R8, R9): the
+  // checks; the two CTRL -/+ checks; the templates; (collapsed) identity and
+  // theme; STUN/TURN; the version, last.
   function settingsMenuItems() {
-    const paneItems = collapsedPaneItems()
-    return [
-      ...settingsPreferenceItems(),
-      { kind: 'separator' },
-      ...templateMenuItems(),
-      ...(paneItems.length ? [{ kind: 'separator' }, ...paneItems] : []),
-      { kind: 'separator' },
-      { kind: 'info', label: `ZBTerm v${state.appVersion || '?'}` }
-    ]
+    const prefs = settingsPreferenceItems()
+    const ctrlPair = prefs.filter((item) => item.ctrlPair)
+    const groups = [
+      prefs.filter((item) => !item.ctrlPair),
+      ctrlPair,
+      templateMenuItems(),
+      collapsedPaneItems(),
+      [stunTurnMenuItem()],
+      [{ kind: 'info', label: `ZBTerm v${state.appVersion || '?'}` }]
+    ].filter((group) => group.length)
+    return groups.flatMap((group, index) => (index ? [{ kind: 'separator' }, ...group] : group))
+  }
+
+  function stunTurnMenuItem() {
+    return {
+      kind: 'field',
+      label: 'STUN/TURN servers…',
+      toggle: editIceServers
+    }
   }
 
   function settingsPreferenceItems() {
@@ -3421,30 +3552,35 @@
         kind: 'check',
         label: 'Change font size with CTRL -/+',
         checked: state.ctrlZoom,
-        toggle: toggleCtrlZoom
+        toggle: toggleCtrlZoom,
+        ctrlPair: true
       },
       {
         kind: 'check',
         label: 'Zoom whole app with CTRL -/+',
         checked: state.appZoom,
-        toggle: toggleAppZoom
-      },
-      {
-        kind: 'field',
-        label: 'STUN/TURN servers…',
-        toggle: editIceServers
+        toggle: toggleAppZoom,
+        ctrlPair: true
       }
     ]
   }
 
   // While the side pane is collapsed its identity and theme buttons are out
-  // of sight, so the menu carries them (R5); the Identity item has the dot.
+  // of sight, so the menu carries them (261110_ui-chrome R5) as each button
+  // looks (261113_ui-polish R10): its icon, then its tooltip, the identity
+  // dot on the icon.
   function collapsedPaneItems() {
     if (!isSidePaneCollapsed()) return []
+    const iconOf = (button, fallback) => {
+      const icon = button && button.querySelector('i')
+      const name = icon && Array.from(icon.classList).find((c) => /^fa-(?!solid$)/.test(c))
+      return name || fallback
+    }
     return [
       {
         kind: 'field',
-        label: 'Identity…',
+        icon: iconOf(els.identitySetup, 'fa-id-badge'),
+        label: (els.identitySetup && els.identitySetup.title) || 'Choose your identity',
         identity: identityDotState(),
         toggle: () => {
           closeSettingsMenu()
@@ -3452,9 +3588,9 @@
         }
       },
       {
-        kind: 'check',
-        label: 'Dark theme',
-        checked: state.theme === 'dark',
+        kind: 'field',
+        icon: iconOf(els.themeToggle, 'fa-moon'),
+        label: (els.themeToggle && els.themeToggle.title) || 'Toggle theme',
         toggle: toggleTheme
       }
     ]
@@ -3526,9 +3662,19 @@
     } else {
       button.setAttribute('role', 'menuitem')
     }
-    if (item.identity) button.dataset.identity = item.identity
-    button.innerHTML =
-      '<i class="fa-solid fa-check btn-icon check-mark" aria-hidden="true"></i><span></span>'
+    if (item.icon) {
+      // An item standing for a toolbar button: that button's icon, with the
+      // identity dot on it (R10), in the tick's column.
+      button.classList.add('context-menu-iconic')
+      button.innerHTML =
+        '<span class="context-menu-icon btn-icon"><i class="fa-solid" aria-hidden="true"></i></span><span></span>'
+      button.querySelector('.context-menu-icon i').classList.add(item.icon)
+      if (item.identity) button.querySelector('.context-menu-icon').dataset.identity = item.identity
+    } else {
+      if (item.identity) button.dataset.identity = item.identity
+      button.innerHTML =
+        '<i class="fa-solid fa-check btn-icon check-mark" aria-hidden="true"></i><span></span>'
+    }
     button.querySelector('span:last-child').textContent = item.label
     if (kind === 'info' || item.disabled) {
       button.disabled = true
@@ -3851,6 +3997,8 @@
   // when the session ended while shown; otherwise the screen is empty.
   function showUnrecordedEnded(sessionId) {
     const wasShownLive = state.mode === 'live' && state.selectedId === sessionId
+    // The end, for an entry the list has not refreshed with endedAt yet (R1).
+    state.unrecordedEnded = { sessionId, at: Date.now() }
     clearLiveWrites({ ack: true })
     state.mode = 'playback'
     state.playbackGridLayout = null
@@ -4275,6 +4423,10 @@
   // Returns whether the size actually moved, so a keyboard zoom only flashes
   // the button when something happened.
   async function adjustLiveFontSize(delta) {
+    if (activeSizeLock()) {
+      setStatus('Terminal size is locked')
+      return false
+    }
     const canResizeSession = canResizeSelectedLiveSession() && state.mode === 'live'
     const canResizeDevTerminal = isDevLogTerminalVisible()
     if (!canResizeSession && !canResizeDevTerminal) return false
@@ -5196,11 +5348,13 @@
     els.shareSession.hidden = hideSessionActions || !isActiveSession || !isLive || !canOfferSharing
     els.fontSizeDecrease.hidden = !canAdjustFont
     els.fontSizeIncrease.hidden = !canAdjustFont
+    syncSizeLockButton(canAdjustSessionFont)
     els.inputMode.hidden = !canShowInputMode || !canOfferSharing
     els.extendSession.hidden = hideSessionActions || !(canExtend || extending)
     els.hdToggle.disabled = !canToggleHd
     els.scrubber.disabled = !hasSession || unrecorded
     els.scrubber.title = unrecorded ? 'Not recorded' : ''
+    syncUnrecordedDuration(hasSession && unrecorded ? current || state.currentSession : null)
 
     setIconOnly(
       els.playPause,
@@ -5250,6 +5404,13 @@
     setButtonLabel(els.fontSizeIncrease, 'fa-plus', 'Font')
     els.fontSizeDecrease.title = 'Decrease terminal font size'
     els.fontSizeIncrease.title = 'Increase terminal font size'
+    // R12: a locked size fixes the grid; the font follows the window.
+    if (canAdjustSessionFont && activeSizeLock()) {
+      els.fontSizeDecrease.disabled = true
+      els.fontSizeIncrease.disabled = true
+      els.fontSizeDecrease.title = 'Terminal size is locked'
+      els.fontSizeIncrease.title = 'Terminal size is locked'
+    }
     setButtonLabel(
       els.inputMode,
       'fa-keyboard',
@@ -5341,6 +5502,40 @@
       !!state.seek.timer ||
       !!state.seek.pauseRequested
     )
+  }
+
+  // An unrecorded session shows no timeline, only its duration at the bar's
+  // right end (261113_ui-polish R1): ticking while it runs, frozen at
+  // endedAt - startedAt once it has ended.
+  function unrecordedDurationMs(session) {
+    const start = Number(session.startedAt) || 0
+    if (!start) return 0
+    if (session.active) return Date.now() - start
+    const end =
+      Number(session.endedAt) ||
+      (state.unrecordedEnded && state.unrecordedEnded.sessionId === session.sessionId
+        ? state.unrecordedEnded.at
+        : 0)
+    return end ? end - start : 0
+  }
+
+  function syncUnrecordedDuration(session) {
+    const on = !!session
+    if (els.playback) els.playback.classList.toggle('unrecorded', on)
+    if (!els.sessionDuration) return
+    els.sessionDuration.hidden = !on
+    if (on) setTextIfChanged(els.sessionDuration, formatDuration(unrecordedDurationMs(session)))
+    const tick = on && !!session.active
+    if (tick && !state.unrecordedTicker) {
+      state.unrecordedTicker = setInterval(() => {
+        const current = selectedSessionEntry() || state.currentSession
+        if (!isUnrecordedSession(current)) return syncUnrecordedDuration(null)
+        syncUnrecordedDuration(current)
+      }, 1000)
+    } else if (!tick && state.unrecordedTicker) {
+      clearInterval(state.unrecordedTicker)
+      state.unrecordedTicker = null
+    }
   }
 
   function sessionHasHd() {
@@ -7103,9 +7298,7 @@
     setTextIfChanged(els.currentTime, formatDuration(currentElapsed))
     setTextIfChanged(els.totalTime, formatDuration(totalElapsed))
     setTimeLabelTipText(tipText)
-    if (!state.seek.hovering) {
-      els.scrubberTip.textContent = scrubberTipTextForTs(state.playbackClockTs)
-    }
+    if (!state.seek.hovering) setScrubberTip(state.playbackClockTs)
     updateTransportControls()
   }
 
@@ -7161,10 +7354,29 @@
     els.scrubberTip.style.left = `${pct * 100}%`
   }
 
-  // The bubble: the wall-clock time of tsMs (renderer/wall-clock.js), then the
-  // elapsed time, e.g. "14:32:05 · 0:42" or, with gaps collapsed,
-  // "14:32:05 · 0:42 (1:05)".
-  function scrubberTipTextForTs(tsMs) {
+  // The bubble, two centred lines (261113_ui-polish R4): the wall-clock time,
+  // then the elapsed time, its content as before ("14:32:05" over "0:42", or
+  // with gaps collapsed "0:42 (1:05)"). Written only when a line changes.
+  function setScrubberTip(tsMs) {
+    const tip = els.scrubberTip
+    if (!tip) return
+    const { clock, elapsed } = scrubberTipLinesForTs(tsMs)
+    let clockEl = tip.querySelector('.scrubber-tip-clock')
+    let elapsedEl = tip.querySelector('.scrubber-tip-elapsed')
+    if (!clockEl || !elapsedEl) {
+      tip.replaceChildren()
+      clockEl = document.createElement('span')
+      clockEl.className = 'scrubber-tip-clock'
+      elapsedEl = document.createElement('span')
+      elapsedEl.className = 'scrubber-tip-elapsed'
+      tip.append(clockEl, elapsedEl)
+    }
+    setTextIfChanged(clockEl, clock)
+    clockEl.hidden = !clock
+    setTextIfChanged(elapsedEl, elapsed)
+  }
+
+  function scrubberTipLinesForTs(tsMs) {
     const start = state.playbackStartTs
     const realElapsed = tsMs - start
     let elapsed = formatDuration(realElapsed)
@@ -7176,8 +7388,7 @@
         elapsed = `${formatDuration(compElapsed)} (${formatDuration(realElapsed)})`
       }
     }
-    const clock = formatWallClock(tsMs, Date.now())
-    return clock ? `${clock} · ${elapsed}` : elapsed
+    return { clock: formatWallClock(tsMs, Date.now()), elapsed }
   }
 
   function formatWallClock(tsMs, nowMs) {
@@ -7199,7 +7410,7 @@
     state.seek.hovering = true
     els.scrubberTip.hidden = false
     els.scrubberTip.style.left = `${clamp((value / SCRUBBER_STEPS) * 100, 0, 100)}%`
-    els.scrubberTip.textContent = scrubberTipTextForTs(tsMs)
+    setScrubberTip(tsMs)
   }
 
   function hideScrubberHover() {
@@ -7638,6 +7849,7 @@
   }
 
   function fitLiveTerminal() {
+    if (fitLockedTerminal()) return
     syncTerminalLayout()
     setLetterboxed(false)
     els.terminal.style.width = '100%'
@@ -7711,6 +7923,202 @@
     setTerminalFontSize(layout.fontSize)
     if (state.term.cols !== cols || state.term.rows !== rows) state.term.resize(cols, rows)
     sizeTerminalToGrid(cols, rows, layout.metrics)
+  }
+
+  // ---- Terminal size lock (261113_ui-polish R11, R12) ---------------------
+  // The selected session's lock, when it applies: an own live session shown
+  // live (never joined, ended or scrolled back: U2).
+  function activeSizeLock() {
+    if (state.mode !== 'live' || !state.selectedId || !canResizeSelectedLiveSession()) return null
+    return sizeLockOf(state.selectedId)
+  }
+
+  function sizeLockOf(sessionId) {
+    const lock = state.sizeLocks && state.sizeLocks[sessionId]
+    return lock && lock.rows > 0 && lock.cols > 0 ? lock : null
+  }
+
+  async function loadSizeLocks() {
+    let saved = null
+    try {
+      saved = api ? await api.invoke('preference.get', { key: SIZE_LOCKS_PREFERENCE }) : null
+    } catch {}
+    let locks = {}
+    try {
+      locks = JSON.parse(saved || '{}')
+    } catch {}
+    state.sizeLocks = locks && typeof locks === 'object' && !Array.isArray(locks) ? locks : {}
+  }
+
+  async function setSizeLock(sessionId, lock) {
+    const next = { ...(state.sizeLocks || {}) }
+    if (lock) next[sessionId] = lock
+    else delete next[sessionId]
+    state.sizeLocks = next
+    fitAndResize()
+    updateTransportControls()
+    await api.invoke('preference.set', {
+      key: SIZE_LOCKS_PREFERENCE,
+      value: JSON.stringify(next)
+    })
+  }
+
+  // Locked: the grid stays at the lock's rows x cols and the font is the
+  // largest that fits the window, letterboxed, as a joined view is drawn.
+  function fitLockedTerminal() {
+    const lock = activeSizeLock()
+    if (!lock || !state.term) return false
+    syncTerminalLayout()
+    setLetterboxed(true)
+    const { cols, rows } = lock
+    const bounds = terminalContentBounds()
+    const layoutKey = `${cols}x${rows}:${Math.round(bounds.width)}x${Math.round(bounds.height)}`
+    let layout = state.lockGridLayout
+    if (!layout || layout.key !== layoutKey) {
+      const fontSize = fontSizeForGrid(cols, rows)
+      layout = { key: layoutKey, fontSize, metrics: terminalCellMetrics(fontSize) }
+      state.lockGridLayout = layout
+    }
+    setTerminalFontSize(layout.fontSize)
+    if (state.term.cols !== cols || state.term.rows !== rows) state.term.resize(cols, rows)
+    sizeTerminalToGrid(cols, rows, layout.metrics)
+    return true
+  }
+
+  function syncSizeLockButton(canLock) {
+    const button = els.sizeLock
+    if (!button) return
+    button.hidden = !canLock
+    button.disabled = !canLock
+    if (!canLock && els.sizeLockMenu && !els.sizeLockMenu.hidden) closeSizeLockMenu()
+    const lock = canLock ? sizeLockOf(state.selectedId) : null
+    button.classList.toggle('locked', !!lock)
+    setIconOnly(button, lock ? 'fa-lock' : 'fa-lock-open')
+    button.title = lock
+      ? `Terminal size locked: ${lock.rows} x ${lock.cols}`
+      : 'Terminal size: unlocked'
+  }
+
+  function sizeLockMenuItems() {
+    const lock = sizeLockOf(state.selectedId)
+    const current = lock || {
+      rows: state.term ? state.term.rows : 0,
+      cols: state.term ? state.term.cols : 0
+    }
+    const choose = (next) => () => {
+      closeSizeLockMenu()
+      return setSizeLock(state.selectedId, next)
+    }
+    const presetChosen = (preset) =>
+      !!lock && lock.from === 'preset' && lock.rows === preset.rows && lock.cols === preset.cols
+    return [
+      {
+        icon: 'fa-lock-open',
+        label: 'Unlocked - set by terminal and font sizes',
+        checked: !lock,
+        action: choose(null)
+      },
+      { kind: 'separator' },
+      {
+        icon: 'fa-lock',
+        label: `Current size: ${current.rows} x ${current.cols}`,
+        checked: !!lock && lock.from !== 'preset',
+        action: choose({ rows: current.rows, cols: current.cols, from: 'current' })
+      },
+      { kind: 'separator' },
+      ...SIZE_LOCK_PRESETS.map((preset) => ({
+        icon: 'fa-lock',
+        label: `${preset.rows} x ${preset.cols}`,
+        checked: presetChosen(preset),
+        action: choose({ ...preset, from: 'preset' })
+      }))
+    ]
+  }
+
+  function renderSizeLockMenu() {
+    const menu = els.sizeLockMenu
+    menu.replaceChildren()
+    for (const item of sizeLockMenuItems()) {
+      if (item.kind === 'separator') {
+        const rule = document.createElement('div')
+        rule.className = 'context-menu-separator'
+        rule.setAttribute('role', 'separator')
+        rule.dataset.kind = 'separator'
+        menu.append(rule)
+        continue
+      }
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.dataset.kind = 'check'
+      button.className = 'context-menu-item context-menu-check label-btn'
+      button.setAttribute('role', 'menuitemradio')
+      button.setAttribute('aria-checked', item.checked ? 'true' : 'false')
+      button.innerHTML =
+        '<i class="fa-solid fa-check btn-icon check-mark" aria-hidden="true"></i>' +
+        '<span class="context-menu-icon"><i class="fa-solid" aria-hidden="true"></i></span><span></span>'
+      button.querySelector('.context-menu-icon i').classList.add(item.icon)
+      button.querySelector('span:last-child').textContent = item.label
+      button.addEventListener('click', () => Promise.resolve().then(item.action).catch(showError))
+      menu.append(button)
+    }
+  }
+
+  function openSizeLockMenu() {
+    if (!els.sizeLockMenu || !els.sizeLock || els.sizeLock.disabled) return
+    closeSessionMenu()
+    closeTerminalMenu()
+    closeSettingsMenu()
+    renderSizeLockMenu()
+    els.sizeLockMenu.hidden = false
+    els.sizeLock.setAttribute('aria-expanded', 'true')
+    const rect = els.sizeLock.getBoundingClientRect()
+    const menuRect = els.sizeLockMenu.getBoundingClientRect()
+    const x = Math.min(
+      window.innerWidth - menuRect.width - 8,
+      Math.max(8, rect.right - menuRect.width)
+    )
+    const y = Math.min(window.innerHeight - menuRect.height - 8, Math.max(8, rect.bottom + 4))
+    els.sizeLockMenu.style.left = `${x}px`
+    els.sizeLockMenu.style.top = `${y}px`
+  }
+
+  function closeSizeLockMenu() {
+    if (!els.sizeLockMenu) return
+    els.sizeLockMenu.hidden = true
+    els.sizeLockMenu.replaceChildren()
+    if (els.sizeLock) els.sizeLock.setAttribute('aria-expanded', 'false')
+  }
+
+  function debugSizeLockState() {
+    const button = els.sizeLock
+    const icon = button && button.querySelector('i')
+    return {
+      button: button
+        ? {
+            hidden: !button.getClientRects().length,
+            disabled: !!button.disabled,
+            title: button.title,
+            icon: icon ? Array.from(icon.classList).find((c) => /^fa-(?!solid$)/.test(c)) : null,
+            rect: debugRect(button)
+          }
+        : null,
+      menuOpen: !!(els.sizeLockMenu && !els.sizeLockMenu.hidden),
+      menu:
+        els.sizeLockMenu && !els.sizeLockMenu.hidden
+          ? Array.from(els.sizeLockMenu.children).map(debugMenuItem)
+          : null,
+      lock: state.selectedId ? sizeLockOf(state.selectedId) : null,
+      active: !!activeSizeLock(),
+      term: state.term ? { rows: state.term.rows, cols: state.term.cols } : null,
+      fontSize: state.term ? Number(state.term.options.fontSize) : null,
+      liveFontSize: state.liveFontSize,
+      fontButtons: {
+        decrease: { disabled: !!els.fontSizeDecrease.disabled, title: els.fontSizeDecrease.title },
+        increase: { disabled: !!els.fontSizeIncrease.disabled, title: els.fontSizeIncrease.title }
+      },
+      selectedId: state.selectedId,
+      mode: state.mode
+    }
   }
 
   function setLetterboxed(letterboxed) {
@@ -9541,15 +9949,11 @@
     return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
   }
 
+  // Every duration shown (time labels, the bubble's elapsed line, the
+  // "Uncompressed" tip, an unrecorded session's duration): renderer/wall-clock.js,
+  // "Nd h:mm:ss" from 24 h on (261113_ui-polish R5).
   function formatDuration(ms) {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000))
-    const hours = Math.floor(totalSeconds / 3600)
-    const minutes = Math.floor((totalSeconds % 3600) / 60)
-    const seconds = totalSeconds % 60
-    if (hours) {
-      return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-    }
-    return `${minutes}:${String(seconds).padStart(2, '0')}`
+    return window.zbtermFormatDuration(ms)
   }
 
   function clamp(value, min, max) {
@@ -9917,13 +10321,53 @@
 
   function debugSettingsMenuState() {
     if (!els.settingsMenu || els.settingsMenu.hidden) return null
-    return Array.from(els.settingsMenu.children).map((el) => ({
+    return Array.from(els.settingsMenu.children).map(debugMenuItem)
+  }
+
+  // One menu row; `icon` is its leading icon (the toolbar's for R10 items),
+  // `dot` the identity dot as drawn (its host, colour and rect from ::after).
+  function debugMenuItem(el) {
+    const host = el.dataset.identity ? el : el.querySelector('[data-identity]')
+    const iconWrap = el.querySelector('.context-menu-icon')
+    const icon = el.querySelector('.context-menu-icon i') || el.querySelector('i.btn-icon')
+    const iconName = icon
+      ? Array.from(icon.classList).find((c) => /^fa-(?!solid$)/.test(c)) || null
+      : null
+    let dot = null
+    if (host) {
+      const after = window.getComputedStyle(host, '::after')
+      const r = host.getBoundingClientRect()
+      const px = (v) => parseFloat(v) || 0
+      const width = px(after.width)
+      const height = px(after.height)
+      const left = r.right - px(after.right) - width
+      const top = r.top + px(after.top)
+      dot = {
+        on: host === el ? 'row' : host === iconWrap ? 'icon' : debugNodeKey(host),
+        color: after.backgroundColor,
+        rect: { left, top, width, height, right: left + width, bottom: top + height }
+      }
+    }
+    return {
       kind: debugMenuItemKind(el),
       label: el.textContent.replace(/\s+/g, ' ').trim(),
       disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
       checked: el.hasAttribute('aria-checked') ? el.getAttribute('aria-checked') === 'true' : null,
-      identity: el.dataset.identity || null
-    }))
+      identity: host ? host.dataset.identity : null,
+      icon: iconName,
+      iconRect: icon && icon.getClientRects().length ? debugRect(icon) : null,
+      iconVisible: !!(
+        icon &&
+        icon.getClientRects().length &&
+        window.getComputedStyle(icon).visibility !== 'hidden'
+      ),
+      checkMark: (() => {
+        const mark = el.querySelector('.check-mark')
+        return !!(mark && window.getComputedStyle(mark).visibility !== 'hidden')
+      })(),
+      rect: debugRect(el),
+      dot
+    }
   }
 
   function debugUiState() {
@@ -9970,7 +10414,20 @@
       },
       bubble: els.scrubberTip
         ? {
-            text: els.scrubberTip.textContent,
+            // Kept as one line, "<clock> · <elapsed>", as before R4; `lines` are
+            // the two lines as shown, each with its text alignment and rect.
+            text: Array.from(els.scrubberTip.children)
+              .filter((el) => !el.hidden && el.textContent)
+              .map((el) => el.textContent)
+              .join(' · '),
+            lines: Array.from(els.scrubberTip.children)
+              .filter((el) => !el.hidden && el.getClientRects().length)
+              .map((el) => ({
+                text: el.textContent,
+                textAlign: window.getComputedStyle(el).textAlign,
+                rect: debugRect(el)
+              })),
+            rect: debugRect(els.scrubberTip),
             hidden: !!els.scrubberTip.hidden,
             scrubber: debugRect(els.scrubber),
             playbackHidden: els.playback ? !!els.playback.hidden : null
@@ -10055,7 +10512,8 @@
     const sectionOf = {
       'Current session': 'current',
       'Session name matches': 'name',
-      'Session buffer matches': 'buffer'
+      'Session buffer matches': 'buffer',
+      'Other - unmatched sessions': 'other'
     }
     let heading = null
     let headingIndex = -1
@@ -10092,6 +10550,9 @@
         subColor: debugColor(sub),
         rowBg: debugEffectiveBg(el),
         selected: el.classList.contains('selected'),
+        opacity: Number(window.getComputedStyle(el).opacity),
+        pointerEvents: window.getComputedStyle(el).pointerEvents,
+        rect: debugRect(el),
         section,
         index
       })
@@ -10114,7 +10575,34 @@
       searching,
       empty,
       nameEmpty,
-      rows
+      rows,
+      headingStyles: children
+        .filter((el) => el.classList.contains('session-section-title'))
+        .map((el) => {
+          const style = window.getComputedStyle(el)
+          return { text: el.textContent.trim(), fontSize: style.fontSize, color: style.color }
+        }),
+      guard: debugReorderGuard()
+    }
+  }
+
+  // R13: the reorder guard as it stands, and the cursor drawn over the list.
+  function debugReorderGuard() {
+    const guard = state.reorderGuard || {}
+    const container = els.sessions
+    return {
+      on: !!(container && container.classList.contains('reorder-guard')),
+      changes: guard.changes || 0,
+      blockedClicks: guard.blockedClicks || 0,
+      lastChangeAt: guard.lastChangeAt || null,
+      releasedAt: guard.releasedAt || null,
+      now: Date.now(),
+      cursor: container ? window.getComputedStyle(container).cursor : null,
+      rowPointerEvents: container
+        ? Array.from(container.querySelectorAll('.session-row')).map(
+            (el) => window.getComputedStyle(el).pointerEvents
+          )
+        : []
     }
   }
 
@@ -10550,7 +11038,14 @@
       iconColor: icon ? window.getComputedStyle(icon).color : null,
       animations: animations.length,
       runningAnimations: animations.filter((a) => a.playState === 'running').length,
-      selectionColor: debugCssVarColor('--terminal-selection')
+      selectionColor: debugCssVarColor('--terminal-selection'),
+      // 261113_ui-polish kit: what is drawn and how.
+      visible: !!el.getClientRects().length,
+      text: el.textContent.replace(/\s+/g, ' ').trim(),
+      title: el.title || '',
+      cursor: styles.cursor,
+      opacity: Number(styles.opacity),
+      pointerEvents: styles.pointerEvents
     }
   }
 
@@ -10773,6 +11268,9 @@
     if (command === 'style-of') return debugStyleOf(request.selector)
     // The 261111_buffer-search kit's commands: pure reads.
     if (command === 'search-state') return debugSearchState()
+    // The 261113_ui-polish kit's commands: reads, and the duration formatter.
+    if (command === 'size-lock-state') return debugSizeLockState()
+    if (command === 'duration-format') return { text: formatDuration(Number(request.ms)) }
     if (command === 'buffer-search-log') return debugTakeBufferSearchLog()
     if (command === 'key-probe') return debugKeyProbe(request.action, request)
     if (command === 'selection-log') {

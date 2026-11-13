@@ -4,7 +4,7 @@
 process.env.TZ = 'Europe/Berlin'
 
 const test = require('brittle')
-const { formatWallClock } = require('../renderer/wall-clock.js')
+const { formatWallClock, formatDuration } = require('../renderer/wall-clock.js')
 
 const ms = (iso) => Date.parse(iso)
 
@@ -37,4 +37,22 @@ test('formatWallClock: hours are 24h and zero-padded', (t) => {
 test('formatWallClock: a timestamp that is not a number gives no text', (t) => {
   t.is(formatWallClock(NaN, ms('2026-11-11T12:00:00Z')), '')
   t.is(formatWallClock(undefined, ms('2026-11-11T12:00:00Z')), '')
+})
+
+// formatDuration (261113_ui-polish R5): durations of 24 h or more as "Nd h:mm:ss".
+const H = 3600000
+const DURATIONS = [
+  [0, '0:00'],
+  [42000, '0:42'],
+  [(3 * 3600 + 5 * 60 + 9) * 1000, '3:05:09'],
+  [24 * H - 1000, '23:59:59'],
+  [24 * H, '1d 0:00:00'],
+  [(54 * 3600 + 32 * 60 + 10) * 1000, '2d 6:32:10'],
+  [(48 * 3600 + 5) * 1000, '2d 0:00:05'],
+  [(10 * 86400 + 11 * 3600 + 7 * 60) * 1000 + 999, '10d 11:07:00'],
+  [-5000, '0:00']
+]
+
+test('formatDuration: under 24 h unchanged, from 24 h "Nd h:mm:ss"', (t) => {
+  for (const [value, want] of DURATIONS) t.is(formatDuration(value), want, `${value} ms`)
 })

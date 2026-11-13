@@ -644,14 +644,21 @@ test('ui-chrome: version is the last settings item, the bubble has a wall clock,
   const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')
   const html = await fs.promises.readFile(path.join(rendererDir, 'index.html'), 'utf8')
   t.absent(html.includes('id="version"'), 'the brand bar has no version')
+  // Changed 2026-11-13 (261113_ui-polish R8, R9): the menu is built from groups joined by one
+  // separator each; the version's group is still the last.
   t.ok(
-    js.includes("{ kind: 'separator' },\n      { kind: 'info', label: `ZBTerm v${state.appVersion"),
+    js.includes("[{ kind: 'info', label: `ZBTerm v${state.appVersion || '?'}` }]\n    ]") &&
+      js.includes("(index ? [{ kind: 'separator' }, ...group] : group)"),
     'the menu ends with a separator and the version as an info item'
   )
   t.ok(js.includes("if (kind === 'info' || item.disabled)"), 'info items are disabled')
   t.ok(html.includes('<script src="wall-clock.js"></script>'), 'index.html loads the formatter')
   t.ok(html.indexOf('wall-clock.js') < html.indexOf('<script src="app.js">'), 'before app.js')
-  t.ok(js.includes('const clock = formatWallClock(tsMs, Date.now())'), 'the bubble formats it')
+  // Changed 2026-11-13 (261113_ui-polish R4): the clock is the bubble's first line.
+  t.ok(
+    js.includes('return { clock: formatWallClock(tsMs, Date.now()), elapsed }'),
+    'the bubble formats it'
+  )
   t.ok(html.includes('#newSession .btn-icon {\n        color: var(--new-green);'), 'New icon')
   t.ok(html.includes('#joinLink .btn-icon {\n        color: var(--join-blue);'), 'Join icon')
   t.ok(html.includes("[data-identity='set']::after"), 'the identity dot')
@@ -693,7 +700,16 @@ test('buffer-search: the buffer-match section, its cyan in both themes, alternat
   const render = js.slice(js.indexOf('  function renderSessions() {'))
   const body = render.slice(0, render.indexOf('\n  }\n'))
   t.absent(body.includes('return'), 'renderSessions has no early return before the section')
-  t.ok(body.trim().endsWith('renderSessionBufferSection()'), 'the section is rendered last')
+  // Changed 2026-11-13 (261113_ui-polish R3, R13): only "Other - unmatched sessions" and the
+  // reorder guard's bookkeeping follow the buffer section.
+  t.ok(
+    body
+      .trim()
+      .endsWith(
+        'renderSessionBufferSection()\n    if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)\n    noteSessionRowOrder()'
+      ),
+    'the section is rendered last'
+  )
   t.ok(js.includes('syncSessionBufferSearchShown()'), 'collapse and narrow stop the search')
   t.ok(
     js.includes("querySelector('.xterm-screen')"),

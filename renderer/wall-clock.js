@@ -1,5 +1,6 @@
-// The wall-clock time shown in the timeline bubble (261110_ui-chrome R2): the
-// shorter, the more recent. `tsMs` and `nowMs` are epoch milliseconds, so the
+// The wall-clock time shown in the timeline bubble (261110_ui-chrome R2), and
+// the durations' format (261113_ui-polish R5, formatDuration below). The clock:
+// the shorter, the more recent. `tsMs` and `nowMs` are epoch milliseconds, so the
 // instant is absolute and is shown in the viewer's own time zone; days are
 // compared by local calendar date, never by 24-hour steps (DST, midnight).
 //   the same calendar day      14:32:05
@@ -30,10 +31,25 @@
     return `${ts.getFullYear()}-${pad2(ts.getMonth() + 1)}-${pad2(ts.getDate())} ${clock}`
   }
 
+  // A duration (261113_ui-polish R5): "m:ss", "h:mm:ss", and from 24 h on
+  // "Nd h:mm:ss" with the hours unpadded (54:32:10 is "2d 6:32:10", exactly
+  // 24 h is "1d 0:00:00"). Clock times never go through this.
+  function formatDuration(ms) {
+    const totalSeconds = Math.max(0, Math.floor(Number(ms) / 1000) || 0)
+    const days = Math.floor(totalSeconds / 86400)
+    const hours = Math.floor((totalSeconds % 86400) / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    const seconds = totalSeconds % 60
+    if (days) return `${days}d ${hours}:${pad2(minutes)}:${pad2(seconds)}`
+    if (hours) return `${hours}:${pad2(minutes)}:${pad2(seconds)}`
+    return `${minutes}:${pad2(seconds)}`
+  }
+
   if (typeof module === 'object' && module && module.exports) {
-    module.exports = { formatWallClock }
+    module.exports = { formatWallClock, formatDuration }
   }
   if (typeof window === 'object' && window) {
     window.zbtermFormatWallClock = formatWallClock
+    window.zbtermFormatDuration = formatDuration
   }
 })()
