@@ -9,9 +9,33 @@
   },
   "serial": ["bs/U3_responsive", "bs/R7_stream_and_cancel"],
   "known_failures": {
-    "test/doctor.test.js": "host-dependent checks; failing before 261111_buffer-search (baseline.md)",
-    "test/native-linkage.test.js": "flags libnode on this host; failing before 261111_buffer-search (baseline.md)",
-    "test/zxterm-seam.test.js": "exits 1 (E_BACKEND_UNSUPPORTED) with no 'not ok'; failing before 261111_buffer-search (baseline.md)"
+    "about": "A file here that fails is KNOWN only for its known reason: every top-level 'not ok' in its log is one of `failing`, and the log holds `crash` when one is given (else the run reached brittle's summary). Any other failure of the file is FAIL. Remove an entry once its file passes. (F3, 2026-11-13)",
+    "test/doctor.test.js": {
+      "about": "host-dependent checks; failing before 261111_buffer-search (baseline.md)",
+      "failing": ["doctor: run() reports every check and exits 0 on this machine"]
+    },
+    "test/native-linkage.test.js": {
+      "about": "flags libnode on this host; failing before 261111_buffer-search (baseline.md)",
+      "failing": ["native-linkage: scan follows the dependency graph and flags libnode"]
+    },
+    "test/zxterm-seam.test.js": {
+      "about": "exits 1 (E_BACKEND_UNSUPPORTED) with no 'not ok'; failing before 261111_buffer-search (baseline.md)",
+      "failing": [],
+      "crash": "Error: no such seam method: test.echo"
+    }
+  },
+  "self": {
+    "about": "Changes to these files select sanity plus the self-check (run.sh --self-check: the index against the tree, the selection rules on fixed cases, the KNOWN rule on fixture logs, --list and --dry-run); --full runs it too. (F3)",
+    "paths": ["docs/acceptance/run.sh", "docs/acceptance/index.json"]
+  },
+  "docs_only": {
+    "about": "A changed file matching these selects nothing beyond sanity, before any other rule: notes, goal pages, reports and kit READMEs. (F3)",
+    "paths": ["docs/*.md"]
+  },
+  "harness": {
+    "about": "Shared kit files and the kits whose scripts use them: a change selects every topic that lists a script of those kits. Any other non-script file in a kit's directory (activate, run_all.sh, its own helpers) does the same for its own kit; a changed R*/U* script selects the topics that list it. (F3)",
+    "docs/projects/261110_ui-chrome/acceptance/lib.sh": ["uc", "tf", "st", "bs"],
+    "docs/projects/261110_ui-chrome/acceptance/color.jq": ["uc", "tf", "st", "bs"]
   },
   "sanity": {
     "about": "Every change: lint, every quick unit test file (under ~3 s each, the known failures left out), and three short GUI checks that boot the packaged app (the search box and its hotkey; Ctrl+Shift+B and Ctrl+Shift+T never typed). Target <= 120 s with -j 4.",
@@ -67,8 +91,8 @@
   },
   "topics": {
     "search": {
-      "about": "the search box, in-session and cross-session buffer search, the search sections of the session list",
-      "seconds": 1250,
+      "about": "the search box, in-session and cross-session buffer search, the search sections of the session list; the joined session's buffer (bs/R8, also in sharing)",
+      "seconds": 1300,
       "scripts": [
         "bs/R1_box_and_hotkey",
         "bs/R2_in_session_matches",
@@ -77,6 +101,7 @@
         "bs/R5_buffer_section",
         "bs/R6_order_and_count",
         "bs/R7_stream_and_cancel",
+        "bs/R8_joined_session",
         "bs/R9_box_width",
         "bs/R10_click_terminal",
         "bs/R11_selected_on_top",
@@ -85,11 +110,7 @@
         "bs/U3_responsive"
       ],
       "tests": ["test/buffer-search.test.js", "test/renderer-static.test.js"],
-      "paths": [
-        "engine/buffer-search.js",
-        "renderer/buffer-search.js",
-        "docs/projects/261111_buffer-search/*"
-      ],
+      "paths": ["engine/buffer-search.js", "renderer/buffer-search.js"],
       "content": {
         "renderer/app.js": "[Ss]earch|bufferMatches|renderSessions|sessionSectionTitle|selectedSessionEntry|SessionBuffer",
         "renderer/index.html": "search|match-cyan|session-section",
@@ -111,11 +132,7 @@
         "bs/R9_box_width"
       ],
       "tests": ["test/renderer-static.test.js"],
-      "paths": [
-        "renderer/vendor/*",
-        "scripts/vendor-assets.js",
-        "docs/projects/261110_ui-chrome/*"
-      ],
+      "paths": ["renderer/vendor/*", "scripts/vendor-assets.js"],
       "content": {
         "renderer/app.js": "[Ss]idePane|[Tt]opbar|sidebar|[Ss]ettings[A-Z]|settingsMenu|[Tt]heme|bottomBar|BottomBar|[Bb]rand|syncTerminalLayout|NARROW",
         "renderer/index.html": "."
@@ -163,12 +180,7 @@
         "test/wall-clock.test.js",
         "test/packetizer.test.js"
       ],
-      "paths": [
-        "engine/player.js",
-        "renderer/time-collapse.js",
-        "renderer/wall-clock.js",
-        "docs/projects/261110_timeline-fixes/*"
-      ],
+      "paths": ["engine/player.js", "renderer/time-collapse.js", "renderer/wall-clock.js"],
       "content": {
         "renderer/app.js": "[Pp]layback|[Ss]crub|timeLabel|TimeLabel|[Ss]eek|[Aa]lt.?[Ww]heel|[Ss]election|bubble|[Cc]ollapse[A-Z]|timeline|clockTs",
         "engine/index.js": "player|seek|timeline"
@@ -191,7 +203,7 @@
         "st/U4_new_hotkey_not_typed"
       ],
       "tests": ["test/engine-unrecorded.test.js"],
-      "paths": ["engine/catalog.js", "docs/projects/261110_session-templates/*"],
+      "paths": ["engine/catalog.js"],
       "content": {
         "renderer/app.js": "[Tt]emplate|NEW_SESSION_TRIGGERS|[Rr]ecord session|unrecorded|sessionEditor|[Pp]rofile",
         "engine/index.js": "record|template|unrecorded"
@@ -298,13 +310,7 @@
         "test/caps.test.js",
         "test/buffer-search.test.js"
       ],
-      "paths": [
-        "engine/*",
-        "electron/engine-*.js",
-        "electron/main.js",
-        "electron/preload.js",
-        "docs/CORE-CONTRACT.md"
-      ],
+      "paths": ["engine/*", "electron/engine-*.js", "electron/main.js", "electron/preload.js"],
       "content": {}
     },
     "build": {
@@ -339,7 +345,7 @@
     }
   },
   "fallback": {
-    "about": "a changed file no topic's paths or content rule claims: these topics run for it (first matching pattern wins); docs and notes run nothing beyond sanity",
+    "about": "a changed file no other rule claims: these topics run for it (first matching pattern wins); docs and notes run nothing beyond sanity",
     "renderer/*": ["search", "chrome", "keyboard", "timeline", "templates"],
     "electron/*": ["engine", "keyboard"],
     "engine/*": ["engine"],

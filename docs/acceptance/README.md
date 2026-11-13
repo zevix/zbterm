@@ -7,8 +7,8 @@ index, `docs/acceptance/index.json` (asked by the user on 2026-11-13; built in
 | tier | when | what | wall time |
 |---|---|---|---|
 | **sanity** | every change | `npm run lint`, every quick unit test file (45 files under ~3 s each, the known failures left out), and three short GUI checks against the packaged app: the search box and Ctrl+Shift+F (`bs/R1`), Ctrl+Shift+B never typed (`uc/U1`), Ctrl+Shift+T never typed (`st/U4`) | 73 s (2026-11-13, `-j 4`, with `--package`) |
-| **topics** | what a change touches | sanity plus one or more topics: `search`, `chrome`, `keyboard`, `timeline`, `templates`, `sharing`, `identity`, `engine`, `build` (`run.sh --list`) | from ~1 min (`build`) to ~10 min (`search`) |
-| **full** | before a release | lint, every test file under `test/`, every `R*`/`U*` script of every project kit | 905 s (2026-11-13, `-j 4`) |
+| **topics** | what a change touches | sanity plus one or more topics: `search` (with `bs/R8`, the joined session, since F3), `chrome`, `keyboard`, `timeline`, `templates`, `sharing`, `identity`, `engine`, `build` (`run.sh --list`) | from ~1 min (`build`) to ~10 min (`search`) |
+| **full** | before a release | lint, the self-check, every test file under `test/`, every `R*`/`U*` script of every project kit | 905 s (2026-11-13, `-j 4`, before F3) |
 
 ```sh
 docs/acceptance/run.sh --sanity --package     # package into the scratch dir, then sanity
@@ -18,6 +18,7 @@ docs/acceptance/run.sh --topic search,keyboard
 docs/acceptance/run.sh --full --package       # the release set
 docs/acceptance/run.sh --list                 # topics, their scripts and tests
 docs/acceptance/run.sh --changed --dry-run    # what would run, and why each file selects what
+docs/acceptance/run.sh --self-check           # the index and the rules checked (~2 s; F3)
 ```
 
 Options: `-j N` (parallel jobs, default 4), `--package` (`ZBTERM_FORGE_OUT_DIR=<out> npm run
@@ -38,18 +39,39 @@ nothing failed.
   select the topic) and `content` (`{file: regex}`: the topic is selected when a line the change
   added or removed in that file matches; this is how a change to `renderer/app.js`, one large
   file, selects only the topics it touches).
-- `fallback`: for a changed file no topic claims, the topics to run (first matching pattern):
-  an unclassified change in `renderer/` runs every renderer topic; `.md` and `docs/` run nothing
-  beyond sanity.
+- `self`: `run.sh` and `index.json`; a change to either selects sanity plus the self-check.
+- `docs_only`: `docs/*.md` (goal pages, notes, reports, kit READMEs) select nothing beyond sanity.
+- `harness`: shared kit files and the kits that use them (ui-chrome's `lib.sh` and `color.jq` are
+  sourced by all four kits).
+- `fallback`: for a changed file no other rule claims, the topics to run (first matching
+  pattern): an unclassified change in `renderer/` runs every renderer topic; `.md` and `docs/`
+  run nothing beyond sanity.
 - `serial`: scripts that time things (`bs/U3_responsive`, `bs/R7_stream_and_cancel`); they run
   alone, after the parallel ones.
 - `known_failures`: test files that fail on this host before any of this work (`doctor`,
-  `native-linkage`, `zxterm-seam`); a failure there is `KNOWN`, not `FAIL`, and they are not in
-  sanity. Remove an entry once its file passes.
+  `native-linkage`, `zxterm-seam`), each with its known reason: `failing` (the top-level test
+  names allowed to fail) and `crash` (the text its log holds when it dies without a failing test).
+  Such a file failing for that reason is `KNOWN`; failing for any other reason (a new failing
+  test, another crash, a run that stops before brittle's summary) it is `FAIL`, with the reason on
+  its line. They are not in sanity. Remove an entry once its file passes.
 
-Patterns are bash `[[ == ]]` patterns, where `*` also matches `/`. A changed test file selects the
-topics that list it. A new kit script or test file belongs in at least one topic (the full tier
-finds it anyway, by globbing).
+`--changed` applies the rules in this order (F3, 2026-11-13): `self` → the self-check; `docs_only`
+→ nothing; a kit's `R*`/`U*` script → the topics listing it; a `harness` file → every topic that
+lists a script of its kits; any other file in a kit's directory (`activate`, `run_all.sh`,
+`lib_bs.sh`, …) → every topic that lists a script of that kit; then topic `paths`, listed tests and
+`content` rules; then `fallback`. Patterns are bash `[[ == ]]` patterns, where `*` also matches `/`.
+A new kit script or test file belongs in at least one topic (the full tier finds it anyway, by
+globbing; the self-check fails until it is listed).
+
+The self-check (`--self-check`, also run by `--full` and whenever `run.sh`/`index.json` change)
+checks: every listed script and test exists; every kit script and test file is in sanity or a
+topic; each harness file lists every kit that uses it; fixed selection cases (`lib.sh` → every
+topic of its kits, a goal page → none, `bs/R8`'s script → `search` and `sharing`, a change to
+`engine/buffer-search.js` runs `bs/R8`); the KNOWN rule on fixture logs (the known reason →
+KNOWN, a new failing test or another crash → FAIL); `--list`, every `--topic … --dry-run`, an
+unknown topic (exit 2), and that `--full --dry-run` lists every test file and kit script.
+`ZB_TIERS_FILES` (newline-separated paths) stands for the changed files of `--changed`; the
+self-check uses it.
 
 ## How it runs
 
