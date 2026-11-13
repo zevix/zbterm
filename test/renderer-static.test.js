@@ -702,7 +702,7 @@ test('buffer-search: the buffer-match section, its cyan in both themes, alternat
   t.ok(html.includes('.search-mark.current {'), 'the overlay boxes are styled')
 })
 
-test('buffer-search: a terminal click ends the search and keeps its text; the selected row leads', async (t) => {
+test('buffer-search: a terminal click ends the search and keeps its text; the search sections', async (t) => {
   const rendererDir = path.join(__dirname, '..', 'renderer')
   const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')
   const body = (name) => {
@@ -717,7 +717,14 @@ test('buffer-search: a terminal click ends the search and keeps its text; the se
   t.ok(body('leaveSearchForTerminal').includes('clearSearch({ remember: true })'), 'kept text')
   t.ok(js.includes('function clearSearch({ remember = false } = {})'), 'Esc forgets')
   t.ok(js.includes("els.search.addEventListener('focus', restoreRememberedSearch)"), 'restore')
-  // R11: the selected row first in each section while searching.
-  t.ok(body('renderSessions').includes('selectedFirst(state.sessions'), 'name rows')
-  t.ok(body('renderSessionBufferSection').includes('selectedFirst(bm.rows'), 'buffer rows')
+  // R11: while searching, "Current session" (the selected one, always), then
+  // "Session name matches" (only when there are some), then the buffer section.
+  const render = body('renderSessions')
+  t.ok(render.includes("sessionSectionTitle('Current session')"), 'current session heading')
+  t.ok(render.includes("sessionSectionTitle('Session name matches')"), 'name heading')
+  t.ok(
+    render.indexOf("'Current session'") < render.indexOf("'Session name matches'"),
+    'current before name matches'
+  )
+  t.absent(js.includes('selectedFirst('), 'no reordering of the rows')
 })

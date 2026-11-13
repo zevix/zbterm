@@ -2597,27 +2597,40 @@
     return message
   }
 
+  // While the box holds text (R11) the list has up to three sections, each
+  // under a small heading: "Current session" (the selected session, matching
+  // or not), "Session name matches" (the other name matches, in the list's
+  // own order; only when there are some) and "Session buffer matches".
+  // With the box empty it is the plain list.
   function renderSessions() {
     els.sessions.replaceChildren()
     renderSessionSelect()
-    if (!state.sessions.length) {
+    const searching = searchIsOn()
+    const current = searching ? selectedSessionEntry() : null
+    const rows = current
+      ? state.sessions.filter((session) => session.sessionId !== current.sessionId)
+      : state.sessions
+    if (current) {
+      els.sessions.append(sessionSectionTitle('Current session'))
+      els.sessions.append(buildSessionRow(current))
+    }
+    if (searching && rows.length) els.sessions.append(sessionSectionTitle('Session name matches'))
+    if (!rows.length && !current && !(searching && crossSessionShown())) {
       const empty = document.createElement('div')
       empty.className = 'empty'
       empty.textContent =
         state.query || state.activeOnly ? 'No matching sessions' : 'No sessions yet'
       els.sessions.append(empty)
     }
-    const rows = searchIsOn() ? selectedFirst(state.sessions, (s) => s.sessionId) : state.sessions
     for (const session of rows) els.sessions.append(buildSessionRow(session))
     renderSessionBufferSection()
   }
 
-  // While searching, the selected session's row leads each section it is in
-  // (R11); the other rows keep their order.
-  function selectedFirst(items, idOf) {
-    const at = state.selectedId ? items.findIndex((item) => idOf(item) === state.selectedId) : -1
-    if (at <= 0) return items
-    return [items[at], ...items.slice(0, at), ...items.slice(at + 1)]
+  function sessionSectionTitle(text) {
+    const title = document.createElement('div')
+    title.className = 'session-section-title'
+    title.textContent = text
+    return title
   }
 
   // One row of the session list: icon, name, subtitle, marks, identity
@@ -8791,7 +8804,7 @@
     title.className = 'session-section-title'
     title.textContent = 'Session buffer matches'
     els.sessions.append(title)
-    for (const row of selectedFirst(bm.rows, (item) => item.id)) {
+    for (const row of bm.rows) {
       const session = bm.sessions.get(row.id)
       if (session) els.sessions.append(buildSessionRow(session, { matchCount: row.count }))
     }
@@ -9991,19 +10004,35 @@
     return line ? line.translateToString(true) : null
   }
 
+  // The list as drawn. `heading`/`headingIndex` are the buffer section's
+  // (R5); `headings` lists every section heading in order. A row's section
+  // is the heading above it: "Current session" → current, "Session name
+  // matches" → name, "Session buffer matches" → buffer; rows under no
+  // heading (the plain list) are name rows. `nameEmpty`: "No matching
+  // sessions" is shown, or a search lists no name match.
   function debugSearchSessions() {
     const container = els.sessions
     const children = container ? Array.from(container.children) : []
+    const sectionOf = {
+      'Current session': 'current',
+      'Session name matches': 'name',
+      'Session buffer matches': 'buffer'
+    }
     let heading = null
     let headingIndex = -1
+    let section = 'name'
     let searching = false
     let empty = false
     let nameEmpty = false
+    const headings = []
     const rows = []
     children.forEach((el, index) => {
       if (el.classList.contains('session-section-title')) {
-        if (heading === null) {
-          heading = el.textContent.replace(/\s+/g, ' ').trim()
+        const text = el.textContent.replace(/\s+/g, ' ').trim()
+        headings.push({ text, index })
+        section = sectionOf[text] || text
+        if (section === 'buffer' && heading === null) {
+          heading = text
           headingIndex = index
         }
         return
@@ -10024,10 +10053,11 @@
         subColor: debugColor(sub),
         rowBg: debugEffectiveBg(el),
         selected: el.classList.contains('selected'),
-        section: headingIndex >= 0 ? 'buffer' : 'name',
+        section,
         index
       })
     })
+    if (headings.length && !rows.some((row) => row.section === 'name')) nameEmpty = true
     const pendingOf = (value) => {
       if (!value) return 0
       if (typeof value === 'number') return value
@@ -10041,6 +10071,7 @@
       pending: pendingOf(state.bufferSearchPending),
       heading,
       headingIndex,
+      headings,
       searching,
       empty,
       nameEmpty,
