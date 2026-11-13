@@ -21,6 +21,8 @@ and stops only the `uisolate` session it started. The harness is
 are in `lib_bs.sh` (P1). `R8` starts a second app and joins it, so it also needs the network the
 pear backend uses; a failed join is exit 75 with the reason.
 
+**Tiers.** These scripts also run from `docs/acceptance/run.sh` (sanity, topics, full; `docs/acceptance/README.md`).
+
 **Done kits as regression checks.** The box move takes the bottom bar out of `.main`. P6 re-runs
 `../../261110_ui-chrome/`, `../../261110_timeline-fixes/` and `../../261110_session-templates/` kits against
 this build; those kits are never edited here (`../phases.md` *Regression notes*).

@@ -1,0 +1,351 @@
+{
+  "about": "Test tiers for ZBTerm. docs/acceptance/run.sh reads this file; docs/acceptance/README.md explains it. Script ids are <kit>/<script name without .sh>; test ids are paths from the repo root. Patterns are bash [[ == ]] patterns, where * also matches '/'.",
+  "version": 1,
+  "kits": {
+    "bs": "docs/projects/261111_buffer-search/acceptance",
+    "uc": "docs/projects/261110_ui-chrome/acceptance",
+    "tf": "docs/projects/261110_timeline-fixes/acceptance",
+    "st": "docs/projects/261110_session-templates/acceptance"
+  },
+  "serial": ["bs/U3_responsive", "bs/R7_stream_and_cancel"],
+  "known_failures": {
+    "test/doctor.test.js": "host-dependent checks; failing before 261111_buffer-search (baseline.md)",
+    "test/native-linkage.test.js": "flags libnode on this host; failing before 261111_buffer-search (baseline.md)",
+    "test/zxterm-seam.test.js": "exits 1 (E_BACKEND_UNSUPPORTED) with no 'not ok'; failing before 261111_buffer-search (baseline.md)"
+  },
+  "sanity": {
+    "about": "Every change: lint, every quick unit test file (under ~3 s each, the known failures left out), and three short GUI checks that boot the packaged app (the search box and its hotkey; Ctrl+Shift+B and Ctrl+Shift+T never typed). Target <= 120 s with -j 4.",
+    "lint": true,
+    "tests": [
+      "test/account-store.test.js",
+      "test/backends/freenet-pv.test.js",
+      "test/backends/pear-backend.test.js",
+      "test/buffer-search.test.js",
+      "test/build-variants.test.js",
+      "test/caps.test.js",
+      "test/core-boundary.test.js",
+      "test/core-contract.test.js",
+      "test/crypto.test.js",
+      "test/debug-server-share.test.js",
+      "test/engine-client-pty.test.js",
+      "test/engine-delete-race.test.js",
+      "test/engine-session.test.js",
+      "test/engine-unrecorded.test.js",
+      "test/former-name.test.js",
+      "test/github-keys.test.js",
+      "test/identity-claim.test.js",
+      "test/identity-handshake.test.js",
+      "test/identity-no-migration.test.js",
+      "test/identity-resolver.test.js",
+      "test/identity-store.test.js",
+      "test/launcher.test.js",
+      "test/name.test.js",
+      "test/no-updater.test.js",
+      "test/packetizer.test.js",
+      "test/pipe-backpressure.test.js",
+      "test/player.test.js",
+      "test/postinstall.test.js",
+      "test/profile-manager.test.js",
+      "test/pty-scope.test.js",
+      "test/remote-history-wait.test.js",
+      "test/renderer-static.test.js",
+      "test/rpc-schema.test.js",
+      "test/schema.test.js",
+      "test/share-manager-seam.test.js",
+      "test/share-manager.test.js",
+      "test/spawn-worker.test.js",
+      "test/ssh-keys.test.js",
+      "test/store.test.js",
+      "test/terminal-frame.test.js",
+      "test/time-collapse.test.js",
+      "test/update-check.test.js",
+      "test/wall-clock.test.js",
+      "test/zxterm-seam-codec.test.js",
+      "test/zxterm-share.test.js"
+    ],
+    "scripts": ["bs/R1_box_and_hotkey", "uc/U1_hotkeys_not_typed", "st/U4_new_hotkey_not_typed"]
+  },
+  "topics": {
+    "search": {
+      "about": "the search box, in-session and cross-session buffer search, the search sections of the session list",
+      "seconds": 1250,
+      "scripts": [
+        "bs/R1_box_and_hotkey",
+        "bs/R2_in_session_matches",
+        "bs/R3_escape",
+        "bs/R4_playback",
+        "bs/R5_buffer_section",
+        "bs/R6_order_and_count",
+        "bs/R7_stream_and_cancel",
+        "bs/R9_box_width",
+        "bs/R10_click_terminal",
+        "bs/R11_selected_on_top",
+        "bs/U1_hotkey_not_typed",
+        "bs/U2_live_only",
+        "bs/U3_responsive"
+      ],
+      "tests": ["test/buffer-search.test.js", "test/renderer-static.test.js"],
+      "paths": [
+        "engine/buffer-search.js",
+        "renderer/buffer-search.js",
+        "docs/projects/261111_buffer-search/*"
+      ],
+      "content": {
+        "renderer/app.js": "[Ss]earch|bufferMatches|renderSessions|sessionSectionTitle|selectedSessionEntry|SessionBuffer",
+        "renderer/index.html": "search|match-cyan|session-section",
+        "engine/index.js": "searchBuffer|historyReads|BUFFER_SEARCH",
+        "engine/terminal-frame.js": "."
+      }
+    },
+    "chrome": {
+      "about": "window layout: top bar, side pane and its toggle, bottom bar, settings menu, theme, identity dot, button colours",
+      "seconds": 300,
+      "scripts": [
+        "uc/R1_version_in_menu",
+        "uc/R3_button_colours",
+        "uc/R4_pane_toggle",
+        "uc/R5_collapsed_layout",
+        "uc/R6_identity_dot",
+        "uc/U2_narrow_and_modal",
+        "bs/R1_box_and_hotkey",
+        "bs/R9_box_width"
+      ],
+      "tests": ["test/renderer-static.test.js"],
+      "paths": [
+        "renderer/vendor/*",
+        "scripts/vendor-assets.js",
+        "docs/projects/261110_ui-chrome/*"
+      ],
+      "content": {
+        "renderer/app.js": "[Ss]idePane|[Tt]opbar|sidebar|[Ss]ettings[A-Z]|settingsMenu|[Tt]heme|bottomBar|BottomBar|[Bb]rand|syncTerminalLayout|NARROW",
+        "renderer/index.html": "."
+      }
+    },
+    "keyboard": {
+      "about": "hotkeys and keys reaching the program: Ctrl+Shift+F/B/T never typed, typing after a search, dialogs keep their keys",
+      "seconds": 260,
+      "scripts": [
+        "bs/R10_click_terminal",
+        "bs/U1_hotkey_not_typed",
+        "uc/U1_hotkeys_not_typed",
+        "st/U4_new_hotkey_not_typed",
+        "bs/R1_box_and_hotkey"
+      ],
+      "tests": [
+        "test/renderer-static.test.js",
+        "test/engine-client-pty.test.js",
+        "test/pty-scope.test.js"
+      ],
+      "paths": ["electron/pty-*.js"],
+      "content": {
+        "renderer/app.js": "keydown|[Hh]otkey|attachCustomKeyEventHandler|isTerminalInputKey|onData|onKey|canInputToTerminal|keyTriggerFor|trapDialogTab"
+      }
+    },
+    "timeline": {
+      "about": "playback, the scrubber and time labels, compressed time, selection and copy in the terminal, Alt+wheel",
+      "seconds": 600,
+      "scripts": [
+        "tf/R1_history_selection",
+        "tf/R2_select_pauses",
+        "tf/R3_right_click_copy",
+        "tf/R4_uncompressed_popup",
+        "tf/R5_compressed_end_time",
+        "tf/R6_altwheel_live",
+        "tf/R7_compressed_playback",
+        "tf/U1_click_no_pause",
+        "tf/U2_altwheel_edges",
+        "uc/R2_bubble_clock",
+        "bs/R4_playback"
+      ],
+      "tests": [
+        "test/player.test.js",
+        "test/time-collapse.test.js",
+        "test/wall-clock.test.js",
+        "test/packetizer.test.js"
+      ],
+      "paths": [
+        "engine/player.js",
+        "renderer/time-collapse.js",
+        "renderer/wall-clock.js",
+        "docs/projects/261110_timeline-fixes/*"
+      ],
+      "content": {
+        "renderer/app.js": "[Pp]layback|[Ss]crub|timeLabel|TimeLabel|[Ss]eek|[Aa]lt.?[Ww]heel|[Ss]election|bubble|[Cc]ollapse[A-Z]|timeline|clockTs",
+        "engine/index.js": "player|seek|timeline"
+      }
+    },
+    "templates": {
+      "about": "creating sessions: New/Copy dialogs, profile templates and their triggers, unrecorded sessions",
+      "seconds": 140,
+      "scripts": [
+        "st/R1_record_checkbox",
+        "st/R2_unrecorded_live",
+        "st/R3_template_choice",
+        "st/R4_trigger_creates",
+        "st/R5_menu_templates",
+        "st/R6_deleted_template",
+        "st/R7_one_table",
+        "st/U1_unrecorded_nothing_on_disk",
+        "st/U2_template_warnings",
+        "st/U3_template_takeover",
+        "st/U4_new_hotkey_not_typed"
+      ],
+      "tests": ["test/engine-unrecorded.test.js"],
+      "paths": ["engine/catalog.js", "docs/projects/261110_session-templates/*"],
+      "content": {
+        "renderer/app.js": "[Tt]emplate|NEW_SESSION_TRIGGERS|[Rr]ecord session|unrecorded|sessionEditor|[Pp]rofile",
+        "engine/index.js": "record|template|unrecorded"
+      }
+    },
+    "sharing": {
+      "about": "share links, joining, joined sessions, the Pear and Freenet backends, the zxterm-core seam",
+      "seconds": 300,
+      "scripts": ["bs/R8_joined_session"],
+      "tests": [
+        "test/share-manager.test.js",
+        "test/share-manager-seam.test.js",
+        "test/share-join-outcomes.test.js",
+        "test/share-flood.test.js",
+        "test/debug-server-share.test.js",
+        "test/remote-history-wait.test.js",
+        "test/pipe-backpressure.test.js",
+        "test/pipe-backpressure-flood.test.js",
+        "test/zxterm-share.test.js",
+        "test/zxterm-history.test.js",
+        "test/zxterm-seam.test.js",
+        "test/zxterm-seam-codec.test.js",
+        "test/freenet-history.test.js",
+        "test/backend-boundary.test.js",
+        "test/backends/conformance-loopback.test.js",
+        "test/backends/conformance-pear.test.js",
+        "test/backends/conformance-freenet.test.js",
+        "test/backends/freenet-backend.test.js",
+        "test/backends/freenet-bare.test.js",
+        "test/backends/freenet-client.test.js",
+        "test/backends/freenet-pv.test.js",
+        "test/backends/freenet-session.test.js",
+        "test/backends/pear-backend.test.js",
+        "test/backends/registry.test.js"
+      ],
+      "paths": [
+        "engine/share-manager.js",
+        "engine/backends/*",
+        "engine/zxterm/*",
+        "engine/invite.js",
+        "engine/rpc/*",
+        "electron/debug-server.js"
+      ],
+      "content": {
+        "renderer/app.js": "[Ss]hare|[Jj]oin|[Ii]nvite|viewer|[Rr]emote",
+        "engine/index.js": "share|join|remote|Remote"
+      }
+    },
+    "identity": {
+      "about": "identity claims and keys, accounts, devices, profiles, the identity dot",
+      "seconds": 80,
+      "scripts": ["uc/R6_identity_dot"],
+      "tests": [
+        "test/identity-claim.test.js",
+        "test/identity-handshake.test.js",
+        "test/identity-no-migration.test.js",
+        "test/identity-resolver.test.js",
+        "test/identity-store.test.js",
+        "test/ssh-keys.test.js",
+        "test/github-keys.test.js",
+        "test/account-store.test.js",
+        "test/crypto.test.js",
+        "test/profile-manager.test.js",
+        "test/former-name.test.js"
+      ],
+      "paths": [
+        "engine/identity/*",
+        "engine/account-store.js",
+        "engine/crypto.js",
+        "engine/profile-manager.js",
+        "electron/zxterm-core-host.js"
+      ],
+      "content": {
+        "renderer/app.js": "[Ii]dentity|[Cc]laim|[Dd]evice"
+      }
+    },
+    "engine": {
+      "about": "recording and history on disk, sessions, the core and its RPC, the sidecar spawn, history never read by search",
+      "seconds": 400,
+      "scripts": [
+        "bs/U2_live_only",
+        "st/U1_unrecorded_nothing_on_disk",
+        "st/R2_unrecorded_live",
+        "tf/R5_compressed_end_time"
+      ],
+      "tests": [
+        "test/store.test.js",
+        "test/schema.test.js",
+        "test/packetizer.test.js",
+        "test/terminal-frame.test.js",
+        "test/player.test.js",
+        "test/engine-session.test.js",
+        "test/engine-attach.test.js",
+        "test/engine-attach-seam.test.js",
+        "test/engine-extend.test.js",
+        "test/engine-delete-race.test.js",
+        "test/engine-store-lock.test.js",
+        "test/engine-unrecorded.test.js",
+        "test/engine-client-pty.test.js",
+        "test/core-contract.test.js",
+        "test/core-boundary.test.js",
+        "test/rpc-schema.test.js",
+        "test/spawn-worker.test.js",
+        "test/caps.test.js",
+        "test/buffer-search.test.js"
+      ],
+      "paths": [
+        "engine/*",
+        "electron/engine-*.js",
+        "electron/main.js",
+        "electron/preload.js",
+        "docs/CORE-CONTRACT.md"
+      ],
+      "content": {}
+    },
+    "build": {
+      "about": "packaging, install and launch, the no-updater rule, the sidecar staging, doctor",
+      "seconds": 60,
+      "scripts": [],
+      "tests": [
+        "test/build-variants.test.js",
+        "test/no-updater.test.js",
+        "test/postinstall.test.js",
+        "test/native-linkage.test.js",
+        "test/doctor.test.js",
+        "test/launcher.test.js",
+        "test/name.test.js",
+        "test/update-check.test.js"
+      ],
+      "paths": [
+        "forge.config.js",
+        "package.json",
+        "package-lock.json",
+        "engine/package.json",
+        "scripts/*",
+        "build/*",
+        "flatpak/*",
+        "build_all.sh",
+        "run.sh",
+        "install_deps.sh",
+        "bin/*",
+        "npm/*"
+      ],
+      "content": {}
+    }
+  },
+  "fallback": {
+    "about": "a changed file no topic's paths or content rule claims: these topics run for it (first matching pattern wins); docs and notes run nothing beyond sanity",
+    "renderer/*": ["search", "chrome", "keyboard", "timeline", "templates"],
+    "electron/*": ["engine", "keyboard"],
+    "engine/*": ["engine"],
+    "test/*": ["engine"],
+    "*.md": [],
+    "docs/*": [],
+    "*": []
+  }
+}
