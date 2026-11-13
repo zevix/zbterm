@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # R8 joined_session — proves R8: a joined live session is searched too, through the copy this app holds.
 # Asserts: app A hosts a session printing JOINMARK; app B joins it (POST /join + approve on A); in B, typing JOINMARK in the box lists the joined session under 'Session buffer matches' with '1 match' or more; in B, with the joined session selected, the same box shows .inSession.total >= 1.
+# Kit correction 2026-11-13 (F3): report 2026-11-13 finding 6: "the copy this app holds" was inferred from B's mirror only.
+# Also asserted now: while B searches, no search of the session runs on host A: A's engine count of session.searchBuffer calls
+# (debug.bufferSearches) for it, and in all, is the same after B's search as before, and A's renderer sent no search request
+# (A's buffer-search-log is empty); B's count for the session rose (B searched its own copy). The positive control: A's own
+# box searching the same text afterwards raises A's count for the session, so the counter would have shown a search on A.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/activate"
 source "$ZBUI_LIB"
@@ -29,6 +34,13 @@ api POST "/popups/$(jq -rn --arg p "$pid" '$p | @uri')/actions/approve" >/dev/nu
 b_live() { on_b api GET /sessions | jq -e --arg s "$sid" 'any(.[]; .sessionId == $s and .active and (.pending | not))' >/dev/null; }
 wait_until 90 b_live || cannot "join failed: B never listed the session live: $(on_b api GET /sessions)"
 wait_until 60 on_b mirror_has "$sid" JOINMARK || cannot "join failed: JOINMARK never reached B's copy"
+# Kit correction 2026-11-13 (F3): the searches each engine ran, and A's renderer log, before B's search.
+searches() { api POST /invoke '{"method":"debug.bufferSearches"}'; }
+win_size 1280 800
+bslog >/dev/null
+a0="$(searches)"
+b0="$(on_b searches)"
+echo "before B's search: A $a0, B $b0"
 # In B: the box lists the joined session under "Session buffer matches".
 on_b win_size 1280 800
 on_b type_box JOINMARK
@@ -41,3 +53,18 @@ jq -e --arg s "$sid" 'any(.sessions.rows[]; .section == "buffer" and .id == $s a
 on_b select_session "$sid"
 sleep 1
 jq -e '.inSession.total >= 1' <<<"$(on_b sstate)"
+# Kit correction 2026-11-13 (F3): B's search ran in B (its count for the session rose), none ran on A.
+on_b wait_search
+a1="$(searches)"
+b1="$(on_b searches)"
+alog="$(bslog)"
+echo "after B's search: A $a1, B $b1, A's buffer-search-log $alog"
+jq -e -n --arg s "$sid" --argjson b0 "$b0" --argjson b1 "$b1" '($b1.sessions[$s] // 0) > ($b0.sessions[$s] // 0)'
+jq -e -n --arg s "$sid" --argjson a0 "$a0" --argjson a1 "$a1" '($a1.sessions[$s] // 0) == ($a0.sessions[$s] // 0) and $a1.calls == $a0.calls'
+jq -e '.logging == true and .entries == []' <<<"$alog"
+# The control: A's own box searching JOINMARK runs a search of the session on A, and it is counted.
+type_box JOINMARK
+wait_search
+a2="$(searches)"
+echo "after A's own search: A $a2"
+jq -e -n --arg s "$sid" --argjson a1 "$a1" --argjson a2 "$a2" '($a2.sessions[$s] // 0) > ($a1.sessions[$s] // 0)'
