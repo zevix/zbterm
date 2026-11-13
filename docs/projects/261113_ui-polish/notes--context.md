@@ -105,6 +105,26 @@ Each with a proposed default, marked *proposed*; none is decided.
   zero gaps in N trials), and the snapshot fix (`_sessionState` takes the snapshot and its position
   together, with `mirrorPending`) lands in the same change.
 
+## Added before done (user, 2026-11-14)
+
+The user's words: "Before we close lets fix one bug and one ask I was not clear about + one minor
+feature 1) after we switch to "zoom all app with ctrl -/+" mode, zooming works, but when returning to
+"zoom font" mode, the application zoom is restored to what it was - the app zooming is not kept - need
+to keep it 2) I want the zoom lock button to be the left-most button on the toolbar to be more visible
++ if the user clicks CTRL -/+ in font zoom mode and zoom lock, flash in red the zoom lock button like
+when typing when the keyboard and live flash in playback and trying to type"
+
+- **R14** (the bug): `applyAppZoom(false)` put the level back to 0 on purpose, and the restore applied
+  the stored level only in app mode. Now the level outlives the mode: leaving app mode keeps it, and a
+  restart restores it in either mode. To change it again the user turns app mode back on (Ctrl 0 resets
+  there). Checked with Electron's own `getZoomLevel` (`/renderer/layout`).
+- **R15**: `#sizeLock` is the first child of `.topbar-actions`, before "+ Font".
+- **R16**: the refusal in `adjustLiveFontSize` calls `flashInputBlockedButton(els.sizeLock)`, the same
+  red flash as the keyboard and Live buttons; the icon turns light like theirs (CSS for an icon-only
+  button). It also covers the "± Font" buttons, but those are disabled while locked, so in practice
+  only the keys reach it. Debug `size-lock-state` gained `button.first`, `button.flashing`, `flashes`,
+  `appZoom`.
+
 ## Soft changes
 
 2026-11-13 (builder). Each rewords or fixes a detail; no outcome dropped, no check weakened. Merged

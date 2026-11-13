@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # R12 lock_holds — proves R12: while locked, the session keeps its rows and columns whatever the window or the font does.
-# Asserts: a live own session locked at 32 x 120 through the lock menu (real clicks); window 1280x800 -> 1000x640 -> 1500x900: the grid stays 32 x 120 and the shell's stty says '32 120' each time, while the drawn font size changes with the window (the font follows, not the grid); the Font +/- buttons are disabled with the title 'Terminal size is locked'; a real Ctrl+= (CTRL -/+ font mode, on by default) leaves the grid at 32 x 120 and liveFontSize unchanged; after a restart of the app (same HOME and storage) the session, selected again, is still locked at 32 x 120 (stty '32 120').
+# Asserts: a live own session locked at 32 x 120 through the lock menu (real clicks); window 1280x800 -> 1000x640 -> 1500x900: the grid stays 32 x 120 and the shell's stty says '32 120' each time, while the drawn font size changes with the window (the font follows, not the grid); the Font +/- buttons are disabled with the title 'Terminal size is locked'; a real Ctrl+= (CTRL -/+ font mode, on by default) flashes the lock button red (R16: the flash count rises by one and the button carries the flash at once) and leaves the grid at 32 x 120 and liveFontSize unchanged; after a restart of the app (same HOME and storage) the session, selected again, is still locked at 32 x 120 (stty '32 120').
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/activate"
 source "$ZBUI_LIB"
@@ -42,8 +42,11 @@ jq -e -n --argjson a "$f2" --argjson b "$f3" '$a != $b'
 lstate | jq -e '.fontButtons.increase.disabled and .fontButtons.decrease.disabled
   and .fontButtons.increase.title == "Terminal size is locked" and .fontButtons.decrease.title == "Terminal size is locked"'
 lf="$(lstate | jq .liveFontSize)"
+fl="$(lstate | jq .flashes)"
 focus_terminal
 key ctrl+equal
+# R16: the refused zoom flashes the lock button red.
+lstate | jq -e --argjson n "$fl" '.flashes == $n + 1 and .button.flashing'
 key ctrl+minus
 sleep 1
 held

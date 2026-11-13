@@ -4430,6 +4430,10 @@
   async function adjustLiveFontSize(delta) {
     if (activeSizeLock()) {
       setStatus('Terminal size is locked')
+      // The lock is why nothing moved, so its button flashes like the
+      // keyboard and Live buttons do for blocked typing.
+      state.sizeLockFlashes = (state.sizeLockFlashes || 0) + 1
+      flashInputBlockedButton(els.sizeLock)
       return false
     }
     const canResizeSession = canResizeSelectedLiveSession() && state.mode === 'live'
@@ -8104,7 +8108,10 @@
             disabled: !!button.disabled,
             title: button.title,
             icon: icon ? Array.from(icon.classList).find((c) => /^fa-(?!solid$)/.test(c)) : null,
-            rect: debugRect(button)
+            rect: debugRect(button),
+            // The left-most top-bar button, and whether it is flashing red.
+            first: !!(button.parentElement && button.parentElement.firstElementChild === button),
+            flashing: button.classList.contains('input-blocked-flash')
           }
         : null,
       menuOpen: !!(els.sizeLockMenu && !els.sizeLockMenu.hidden),
@@ -8117,6 +8124,8 @@
       term: state.term ? { rows: state.term.rows, cols: state.term.cols } : null,
       fontSize: state.term ? Number(state.term.options.fontSize) : null,
       liveFontSize: state.liveFontSize,
+      flashes: state.sizeLockFlashes || 0,
+      appZoom: { on: !!state.appZoom, level: state.appZoomLevel },
       fontButtons: {
         decrease: { disabled: !!els.fontSizeDecrease.disabled, title: els.fontSizeDecrease.title },
         increase: { disabled: !!els.fontSizeIncrease.disabled, title: els.fontSizeIncrease.title }
@@ -8404,7 +8413,8 @@
     applyAppZoom(appZoom, false)
     applyCtrlZoom(appZoom ? false : await preferredCtrlZoom(), false)
     const level = Number.parseFloat((await storedAppPreference(APP_ZOOM_LEVEL_STORAGE_KEY)) || '')
-    setAppZoomLevel(appZoom && Number.isFinite(level) ? level : 0, false)
+    // The level outlives the mode: leaving whole-app zoom keeps the app's size.
+    setAppZoomLevel(Number.isFinite(level) ? level : 0, false)
   }
 
   // Install-wide like the Ctrl font zoom; the engine copy wins over the
@@ -8423,12 +8433,11 @@
     if (api) api.invoke('app.preference.set', { key, value }).catch(() => {})
   }
 
-  // Turning whole-app zoom off also puts the app back at 100%, since the
-  // keys that could undo it now belong to something else.
+  // Turning whole-app zoom off keeps the app at the level it reached; the
+  // user turns the mode back on to change it (Ctrl 0 resets it there).
   function applyAppZoom(enabled, persist = false) {
     state.appZoom = !!enabled
     if (persist) persistAppPreference(APP_ZOOM_STORAGE_KEY, state.appZoom ? '1' : '0')
-    if (!state.appZoom && state.appZoomLevel !== 0) setAppZoomLevel(0, persist)
   }
 
   function setAppZoomLevel(level, persist = false) {

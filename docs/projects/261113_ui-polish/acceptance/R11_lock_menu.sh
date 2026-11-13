@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # R11 lock_menu — proves R11: a size lock button whose menu is 'Unlocked - set by terminal and font sizes', 'Current size: R x C', '32 x 120', '25 x 80', with lock icons and separators as drawn.
-# Asserts: a live own session; the lock button is shown in the top bar (fa-lock-open, 'Terminal size: unlocked'); a real click opens the menu: kinds [check, separator, check, separator, check, check]; labels ['Unlocked - set by terminal and font sizes', 'Current size: <rows> x <cols>' (the grid as it is), '32 x 120', '25 x 80']; icons [fa-lock-open, fa-lock, fa-lock, fa-lock]; only Unlocked ticked; a real click on '25 x 80' locks: the button shows fa-lock and 'Terminal size locked: 25 x 80', the grid is 25 x 80 and the shell's stty says '25 80'; reopened, the menu reads 'Current size: 25 x 80' with '25 x 80' ticked; 'Current size' locks the grid as it is (after Unlocked); 'Unlocked' unlocks (fa-lock-open) and the grid follows the window again (not 25 x 80 at 1280 x 800).
+# Asserts: a live own session; the lock button is shown in the top bar, its left-most button (R15) (fa-lock-open, 'Terminal size: unlocked'); a real click opens the menu: kinds [check, separator, check, separator, check, check]; labels ['Unlocked - set by terminal and font sizes', 'Current size: <rows> x <cols>' (the grid as it is), '32 x 120', '25 x 80']; icons [fa-lock-open, fa-lock, fa-lock, fa-lock]; only Unlocked ticked; a real click on '25 x 80' locks: the button shows fa-lock and 'Terminal size locked: 25 x 80', the grid is 25 x 80 and the shell's stty says '25 80'; reopened, the menu reads 'Current size: 25 x 80' with '25 x 80' ticked; 'Current size' locks the grid as it is (after Unlocked); 'Unlocked' unlocks (fa-lock-open) and the grid follows the window again (not 25 x 80 at 1280 x 800).
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/activate"
 source "$ZBUI_LIB"
@@ -20,6 +20,8 @@ sleep 1
 l="$(lstate)"
 jq '.' <<<"$l"
 jq -e '.button.hidden == false and .button.disabled == false and .button.icon == "fa-lock-open" and .button.title == "Terminal size: unlocked"' <<<"$l"
+# R15: the left-most button of the top bar.
+jq -e '.button.first' <<<"$l"
 open_lock_menu() {
   click_rect "$(lstate | jq -c '.button.rect')"
   lstate | jq -e '.menuOpen' >/dev/null

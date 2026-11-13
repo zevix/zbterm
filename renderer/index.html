@@ -1036,6 +1036,14 @@
         border-color: var(--accent-blue-border);
       }
 
+      .size-lock.input-blocked-flash i {
+        color: #ffefed;
+      }
+
+      :root[data-theme='light'] .size-lock.input-blocked-flash i {
+        color: #ffffff;
+      }
+
       .size-lock-menu .context-menu-icon {
         width: 1.1em;
         margin-right: 6px;
@@ -2539,6 +2547,17 @@
           </div>
           <div class="topbar-actions">
             <button
+              id="sizeLock"
+              class="text-btn icon-only size-lock"
+              title="Terminal size: unlocked"
+              aria-label="Lock terminal size"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              hidden
+            >
+              <i class="fa-solid fa-lock-open" aria-hidden="true"></i>
+            </button>
+            <button
               id="fontSizeIncrease"
               class="text-btn label-btn"
               aria-label="Increase font size"
@@ -2553,17 +2572,6 @@
               disabled
             >
               <i class="fa-solid fa-minus btn-icon" aria-hidden="true"></i><span>Font</span>
-            </button>
-            <button
-              id="sizeLock"
-              class="text-btn icon-only size-lock"
-              title="Terminal size: unlocked"
-              aria-label="Lock terminal size"
-              aria-haspopup="menu"
-              aria-expanded="false"
-              hidden
-            >
-              <i class="fa-solid fa-lock-open" aria-hidden="true"></i>
             </button>
             <button id="shareSession" class="text-btn label-btn" disabled>
               <i class="fa-solid fa-share-nodes btn-icon" aria-hidden="true"></i><span>Share</span>

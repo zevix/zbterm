@@ -10,6 +10,9 @@ tree b365b0b). "Done" is the user's word, after the soft-change read-back below.
 design A (byte offsets) on 2026-11-13, to be built as its own follow-up project; nothing is fixed here.
 2026-11-14: merged the parallel run's docs (`zr-todo` at fcf4534, retired; reviewed by a fresh Fable
 agent before the merge).
+2026-11-14: the user added R14–R16 before "done" (app zoom kept when leaving app mode; the lock button
+left-most; a red flash on the lock when CTRL -/+ is refused). Built and checked by the builder; no fresh
+verifier has run on them yet.
 
 ## Plan
 
@@ -48,6 +51,14 @@ delivery design (investigation only).
 - History: the kit corrections to `261110_ui-chrome` R2 and `261111_buffer-search` R3/R5/R10/R11 went in
   with the maintainer's commit 03c396e "wip" (18:44), which took the whole working tree.
 
+- R14–R16 (2026-11-14): `renderer/app.js`, `renderer/index.html`; new `acceptance/R14_app_zoom_kept.sh`,
+  R15 in `R11_lock_menu.sh`, R16 in `R12_lock_holds.sh`; `R14` in the `chrome` topic. Package at
+  `/tmp/claude-1000/zbui-polish/out`: R11, R12, R14 PASS alone; `docs/acceptance/run.sh --topic chrome
+  --out /tmp/claude-1000/zbui-polish/out`: 63 PASS, 1 FAIL `test/engine-session.test.js` (a `waitFor`
+  timeout; alone 3 of 5 runs pass, two different subtests time out; no engine or test file changed, so a
+  flake outside this change). Logs `/tmp/claude-1000/zbtiers/runs/20261114-014428-topic`. A first run
+  without `--out` used an older package and failed every `up/` script: a wrong-package run, not a result.
+
 ## Measured (parallel run, 2026-11-13, host `zr`, package from the tree at 120f79b)
 
 `npm run package` 4 s (incremental); `acceptance/run_all.sh` 14/14 in 555 s: R1 34, R2 32, R3 118, R4 31,
@@ -78,6 +89,8 @@ first said "none to rows", which understated it).
 - R13: CSS guard; real clicks are blocked, the debug server's synthetic `click` still gets through. Only
   rows that change place arm it; a heading's text changing does not (F5).
 - U2: for an ended session, the check is that the lock no longer applies.
+- R14: leaving app-zoom mode keeps the level; to change it the user turns app mode back on (Ctrl 0
+  resets there). R16's flash also sits on the "± Font" path, which is disabled while locked.
 - Tiers: `test/session-data-batcher.test.js` added to sanity/engine/search/keyboard to fix the self-check.
 - Checks narrower than the row: R7 as gaps ≥ 6 px plus the screenshot read; R12 sampled; R3 "dimmed" as
   opacity 0.4–0.6.

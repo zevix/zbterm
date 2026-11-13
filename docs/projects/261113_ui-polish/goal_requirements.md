@@ -23,6 +23,9 @@ Small fixes from use, and a terminal size lock, checked on a scratch packaged ap
 | R11 | hard | add a size lock button whose menu is "Unlocked - set by terminal and font sizes", "Current size: R x C", "32 x 120", "25 x 80", with lock icons and separators as drawn | `acceptance/R11_lock_menu.sh` |
 | R12 | hard | while locked, keep the session's rows and columns whatever the window or font does | `acceptance/R12_lock_holds.sh` |
 | R13 | hard | whenever the left pane's session rows change position, block clicks on them with a no-entry cursor until the list has been still for 500 ms | `acceptance/R13_reorder_guard.sh` |
+| R14 | hard | keep the app's zoom when CTRL -/+ goes back from "Zoom whole app" to "Change font size", and across a restart | `acceptance/R14_app_zoom_kept.sh` |
+| R15 | hard | make the size lock button the top bar's left-most button | `acceptance/R11_lock_menu.sh` |
+| R16 | hard | flash the size lock button red, as blocked typing flashes the keyboard and Live buttons, when CTRL -/+ in font mode is refused by a lock | `acceptance/R12_lock_holds.sh` |
 
 ### Unwanted behaviour (mandatory)
 
@@ -39,3 +42,4 @@ Small fixes from use, and a terminal size lock, checked on a scratch packaged ap
 
 Approved by the user, 2026-11-13 (relayed by the orchestrator to the builder, 2026-11-13; the decisions are final): R1 at the bottom right, R13 added (session rows that move block clicks with the not-allowed cursor until 500 ms without a change), R4's bubble keeps today's content in two centred lines, Q-1–Q-11 resolved as recorded in `notes--context.md` *Decisions* (Q-6–Q-11: the proposed defaults). File at 8b601de plus this edit.
 Soft changes (2026-11-13, recorded 2026-11-14 in `notes--context.md` *Soft changes*): R1, R5, R6, R11, R12, R13 (detail), U2.
+R14–R16 added by the user, 2026-11-14, before "done" (`notes--context.md` *Added before done*).
