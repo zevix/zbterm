@@ -7,6 +7,13 @@
 #   query "QELV 9" (no name matches): headings == ["Current session", "Session buffer matches"], no name rows, current == [none], buffer == [nine].
 #   Esc: headings == [], all six sessions in the plain list; a click in the terminal after retyping: the same.
 # Kit correction 2026-11-13 (builder fix round F2): rewritten for the user's layout, replacing F1's "selected row first in each section"; the row's id stays R11.
+# Kit correction 2026-11-13 (F3): report 2026-11-13 finding 3: "in its selected colour" was checked as "unlike the other rows",
+# and "in their usual order" against a hard-coded list. Also asserted now: the current row's background equals the same
+# session's row background when selected in the plain list (box empty, pointer off the list), read in the same theme
+# (qelv-a and r11-none before their search; r11-five, selected by the click during the search, after the box is emptied);
+# and the name rows equal the plain list's own order as read at run time (its rows whose name holds the query, the current
+# session left out), read with the box empty before the search (after it for r11-five), and after Esc. The hard-coded
+# lists and every earlier check stay.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/activate"
 source "$ZBUI_LIB"
@@ -31,6 +38,37 @@ qb="$(seed_n qelv-b 3)"
 buffer="[\"$s9\",\"$s5\",\"$qb\",\"$qa\",\"$s1\"]"
 subs='["9 matches","5 matches","3 matches","2 matches","1 match"]'
 three='["Current session","Session name matches","Session buffer matches"]'
+# Kit correction 2026-11-13 (F3): the theme is tracked by its toggles (0: as started, 1: the other);
+# REF[<theme>] is the current session's selected row background in the plain list, PLAIN its rows in
+# order ([{id, name}]), both read with the box empty; check records the current row's background in
+# CUR[<theme>] and compares it to REF when that is known.
+theme=0
+declare -A REF=() CUR=()
+PLAIN='[]'
+toggle_theme() {
+  cmd '{"command":"click","selector":"#themeToggle"}' >/dev/null
+  sleep 1
+  theme=$((1 - theme))
+}
+# plain_read <sid>: the plain list (box empty, no heading), its order into PLAIN and <sid>'s selected
+# row background into REF[<theme>].
+plain_read() {
+  local s
+  mouse_to 700 300
+  s="$(sstate)"
+  jq -c '[.sessions.rows[] | {id, name, selected, rowBg}]' <<<"$s"
+  jq -e --arg c "$1" '.box.value == "" and .sessions.headings == [] and .selectedId == $c' <<<"$s"
+  PLAIN="$(jq -c '[.sessions.rows[] | {id, name}]' <<<"$s")"
+  REF[$theme]="$(jq -r --arg c "$1" '[.sessions.rows[] | select(.id == $c and .selected)][0].rowBg // empty' <<<"$s")"
+  [ -n "${REF[$theme]}" ]
+}
+# plain_names <current id>: the plain list's rows whose name holds the box's text ($QUERY,
+# ignoring case), in its order, the current session left out.
+QUERY=QELV
+plain_names() {
+  jq -c --arg c "$1" --arg q "$QUERY" '($q | ascii_downcase) as $q
+    | [.[] | select((.name // "") | ascii_downcase | contains($q)) | select(.id != $c) | .id]' <<<"$PLAIN"
+}
 # check <state> <current id> <headings json> <name ids json> <buffer ids json> <buffer subs json>
 check() {
   local s="$1" cur="$2"
@@ -47,14 +85,28 @@ check() {
   jq -e --arg c "$cur" '[.sessions.rows[] | select(.selected) | .id] | unique == [$c]' <<<"$s"
   jq -e '[.sessions.rows[] | select(.section == "current")][0] as $c
     | all(.sessions.rows[] | select(.selected | not); .rowBg != $c.rowBg)' <<<"$s"
+  # Kit correction 2026-11-13 (F3): the name rows in the plain list's own order, and the current
+  # row in the colour the same session's row has when selected in the plain list.
+  jq -e --argjson n "$(plain_names "$cur")" '[.sessions.rows[] | select(.section == "name") | .id] == $n' <<<"$s"
+  CUR[$theme]="$(jq -r '[.sessions.rows[] | select(.section == "current")][0].rowBg' <<<"$s")"
+  if [ -n "${REF[$theme]:-}" ]; then
+    echo "current row ${CUR[$theme]}, selected in the plain list ${REF[$theme]} (theme $theme)"
+    [ "${CUR[$theme]}" = "${REF[$theme]}" ]
+  fi
 }
 both_themes() {
   check "$(sstate)" "$@"
-  cmd '{"command":"click","selector":"#themeToggle"}' >/dev/null
-  sleep 1
+  toggle_theme
   check "$(sstate)" "$@"
 }
+_bs_plain() { sstate | jq -e '.box.value == "" and .sessions.headings == []' >/dev/null; }
 select_session "$qa"
+# Kit correction 2026-11-13 (F3): qelv-a's selected colour in the plain list, in both themes, and
+# the plain list's order, before the search.
+plain_read "$qa"
+toggle_theme
+plain_read "$qa"
+toggle_theme
 type_box QELV
 wait_search
 both_themes "$qa" "$three" "[\"$qb\"]" "$buffer" "$subs"
@@ -67,18 +119,35 @@ wait_until 15 _bs_shows "$s5"
 mouse_to 700 300
 wait_search
 jq -e '.box.value == "QELV"' <<<"$(sstate)"
+REF=() CUR=()
 both_themes "$s5" "$three" "[\"$qb\",\"$qa\"]" "$buffer" "$subs"
+# Kit correction 2026-11-13 (F3): r11-five became current during the search, so its plain-list
+# colour and the list's order are read now, with the box emptied (it stays selected), and compared
+# to what the search showed in each theme.
+clear_box
+wait_until 10 _bs_plain || true
+for _ in 1 2; do
+  plain_read "$s5"
+  echo "r11-five: current row ${CUR[$theme]}, selected in the plain list ${REF[$theme]} (theme $theme)"
+  [ "${CUR[$theme]}" = "${REF[$theme]}" ]
+  jq -e --argjson n "$(plain_names "$s5")" '. == $n' <<<"[\"$qb\",\"$qa\"]"
+  toggle_theme
+done
 # A current session that matches nothing is still shown under its heading. (The debug
 # server's switch picks from the list as shown, which the name filter narrows: switch with
 # the box empty.)
 clear_box
 select_session "$s0"
+# Kit correction 2026-11-13 (F3): r11-none's selected colour and the list's order before its search.
+REF=() CUR=()
+plain_read "$s0"
 type_box QELV
 wait_search
 check "$(sstate)" "$s0" "$three" "[\"$qb\",\"$qa\"]" "$buffer" "$subs"
 # No name match: no "Session name matches" heading.
 clear_box
 xdo type --delay 30 'QELV 9'
+QUERY='QELV 9'
 wait_search
 check "$(sstate)" "$s0" '["Current session","Session buffer matches"]' '[]' "[\"$s9\"]" '["1 match"]'
 # Esc: the plain list.
@@ -86,8 +155,11 @@ key Escape
 s="$(sstate)"
 jq '.sessions' <<<"$s"
 jq -e '.sessions.headings == []' <<<"$s"
+# Kit correction 2026-11-13 (F3): in the order read before the search.
+jq -e --argjson p "$PLAIN" '[.sessions.rows[] | .id] == [$p[] | .id]' <<<"$s"
 jq -e --argjson all "[\"$s0\",\"$s1\",\"$s5\",\"$s9\",\"$qa\",\"$qb\"]" '[.sessions.rows[] | select(.section == "name") | .id] | sort == ($all | sort)' <<<"$s"
 # A click in the terminal: the plain list too.
+QUERY=QELV
 type_box QELV
 wait_search
 jq -e '.sessions.headings | length == 3' <<<"$(sstate)"
