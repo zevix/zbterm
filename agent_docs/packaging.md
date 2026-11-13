@@ -26,9 +26,14 @@
   Snap command name (no spaces/punctuation — see `agent_docs/releases.md`'s
   rebrand trap).
 - The Flatpak maker (`pear-electron-forge-maker-flatpak`) emits a package for
-  the manifest under `flatpak/` (`net.z33v.zbterm.yml`/`.metainfo.xml`); its
-  download URLs/sha512 need updating by hand to a real release location before
-  submission — see [README](../README.md) for where the current build lands.
+  the manifest under `flatpak/` (`net.z33v.zbterm.yml`/`.metainfo.xml`).
+  `build_all.sh` runs it only with `--flatpak` (it needs only `tar`, not
+  `flatpak-builder`), gated by `scripts/flatpak-release.js`: it needs
+  `flatpak/releases/<version>.md` and refuses a version whose Flatpak was built
+  from other sources (source-tree fingerprint stamps under `out/`). It then writes
+  the tarball's file name + sha512 into the manifest and a `<release>` with the
+  notes into the metainfo. The download URLs still need a real release location
+  by hand before submission — see [README](../README.md).
 - deb/rpm/AppImage makers are configured; zip is not. The prebuild plugins
   rename (not merge) darwin prebuilds and prune non-target platforms.
 - The Rust `zxterm-core` sidecar is built from the `zxterm/` git submodule by

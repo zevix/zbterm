@@ -29,6 +29,9 @@ searching() {
   jq -e '[.sessions.rows[] | select(.section == "name")] == []' <<<"$s"
   jq -e --arg a "$sa" '[.sessions.rows[] | select(.section == "buffer") | .id] | index($a) != null' <<<"$s"
   jq -e '.inSession.total > 0 and .sessions.heading == "Session buffer matches"' <<<"$s"
+  # Kit correction 2026-11-13 (builder 261113_ui-polish R3): beta (no ZTEN) is under the fourth section,
+  # "Other - unmatched sessions"; the checks above are unchanged.
+  jq -e --arg b "$sb" '[.sessions.rows[] | select(.section == "other") | .id] == [$b]' <<<"$s"
 }
 # ended <remembered>: the state a terminal click (or Esc) leaves.
 ended() {

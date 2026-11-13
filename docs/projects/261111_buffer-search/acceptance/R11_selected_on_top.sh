@@ -38,6 +38,11 @@ qb="$(seed_n qelv-b 3)"
 buffer="[\"$s9\",\"$s5\",\"$qb\",\"$qa\",\"$s1\"]"
 subs='["9 matches","5 matches","3 matches","2 matches","1 match"]'
 three='["Current session","Session name matches","Session buffer matches"]'
+# Kit correction 2026-11-13 (builder 261113_ui-polish R3): a session that matches neither by name nor by buffer
+# is listed last under "Other - unmatched sessions": r11-none while qelv-a or r11-five is current, and
+# r11-one, r11-five, qelv-a, qelv-b for "QELV 9". `four` is `three` plus that heading; where every session
+# matches (r11-none current) `three` stays. The other rows are asserted to be exactly those sessions.
+four='["Current session","Session name matches","Session buffer matches","Other - unmatched sessions"]'
 # Kit correction 2026-11-13 (F3): the theme is tracked by its toggles (0: as started, 1: the other);
 # REF[<theme>] is the current session's selected row background in the plain list, PLAIN its rows in
 # order ([{id, name}]), both read with the box empty; check records the current row's background in
@@ -76,7 +81,9 @@ check() {
   jq -e --arg c "$cur" '.selectedId == $c' <<<"$s"
   jq -e --argjson h "$3" '[.sessions.headings[].text] == $h and ([.sessions.headings[].index] | . == sort)' <<<"$s"
   # Rows sit under their own heading, in DOM order.
-  jq -e '[.sessions.rows[] | .section] as $s | ($s | map({current: 0, name: 1, buffer: 2}[.])) | . == sort' <<<"$s"
+  # Kit correction 2026-11-13 (261113_ui-polish R3): "other" is the fourth section, last.
+  jq -e '[.sessions.rows[] | .section] as $s | ($s | map({current: 0, name: 1, buffer: 2, other: 3}[.])) | . == sort' <<<"$s"
+  jq -e --argjson o "${OTHER:-[]}" '[.sessions.rows[] | select(.section == "other") | .id] | sort == ($o | sort)' <<<"$s"
   jq -e --arg c "$cur" '[.sessions.rows[] | select(.section == "current") | .id] == [$c]' <<<"$s"
   jq -e --argjson n "$4" '[.sessions.rows[] | select(.section == "name") | .id] == $n' <<<"$s"
   jq -e --argjson b "$5" '[.sessions.rows[] | select(.section == "buffer") | .id] == $b' <<<"$s"
@@ -109,10 +116,16 @@ plain_read "$qa"
 toggle_theme
 type_box QELV
 wait_search
-both_themes "$qa" "$three" "[\"$qb\"]" "$buffer" "$subs"
+OTHER="[\"$s0\"]"
+both_themes "$qa" "$four" "[\"$qb\"]" "$buffer" "$subs"
 # A real click on r11-five's buffer row makes it the current session; the box keeps its text.
 r="$(cmd "{\"command\":\"style-of\",\"selector\":\".session-row[data-session-id=\\\"$s5\\\"]\"}")"
 jq -c '.rect' <<<"$r"
+# Kit correction 2026-11-13 (builder 261113_ui-polish R13): rows that just moved take no clicks for 500 ms;
+# the click waits until the list is still.
+_r11_still() { sstate | jq -e '.sessions.guard.on == false' >/dev/null; }
+wait_until 5 _r11_still
+r="$(cmd "{\"command\":\"style-of\",\"selector\":\".session-row[data-session-id=\\\"$s5\\\"]\"}")"
 click_at "$(jq '(.rect.left + 40) | floor' <<<"$r")" "$(jq '(.rect.top + .rect.height / 2) | floor' <<<"$r")"
 wait_until 15 _bs_shows "$s5"
 # The pointer off the list, so no row is drawn hovered.
@@ -120,7 +133,7 @@ mouse_to 700 300
 wait_search
 jq -e '.box.value == "QELV"' <<<"$(sstate)"
 REF=() CUR=()
-both_themes "$s5" "$three" "[\"$qb\",\"$qa\"]" "$buffer" "$subs"
+both_themes "$s5" "$four" "[\"$qb\",\"$qa\"]" "$buffer" "$subs"
 # Kit correction 2026-11-13 (F3): r11-five became current during the search, so its plain-list
 # colour and the list's order are read now, with the box emptied (it stays selected), and compared
 # to what the search showed in each theme.
@@ -143,13 +156,15 @@ REF=() CUR=()
 plain_read "$s0"
 type_box QELV
 wait_search
+OTHER='[]'
 check "$(sstate)" "$s0" "$three" "[\"$qb\",\"$qa\"]" "$buffer" "$subs"
 # No name match: no "Session name matches" heading.
 clear_box
 xdo type --delay 30 'QELV 9'
 QUERY='QELV 9'
 wait_search
-check "$(sstate)" "$s0" '["Current session","Session buffer matches"]' '[]' "[\"$s9\"]" '["1 match"]'
+OTHER="[\"$s1\",\"$s5\",\"$qa\",\"$qb\"]"
+check "$(sstate)" "$s0" '["Current session","Session buffer matches","Other - unmatched sessions"]' '[]' "[\"$s9\"]" '["1 match"]'
 # Esc: the plain list.
 key Escape
 s="$(sstate)"

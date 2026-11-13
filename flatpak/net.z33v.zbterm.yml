@@ -36,10 +36,10 @@ modules:
         strip-components: 0
         sha512: 332a858325424ed38fde74c4ebc12db932b60481c3927fca07128410e7a8de28c842246f6a0fc282327fef29000396d0022413ab38efb4b292b15fad2a1413e0 # TODO: Use sha512sum to get the value
       - type: archive
-        url: http://localhost:8000/zbterm_1.0.0_x64_flatpak.tar.gz # TODO: Update to the link where the Flatpak asset is hosted
+        url: http://localhost:8000/zbterm_1.2.13_x64_flatpak.tar.gz # TODO: Update to the link where the Flatpak asset is hosted
         only-arches:
           - x86_64
         strip-components: 0
-        sha512: ea1fb6861d6d22dad2dbb58678d6617992773b281a2c9d9d1a7f111cc337a5c46a31b9ff6885fbb322f2f57d55af6df614fa75a66b615d472939a154167411f6 # TODO: Use sha512sum to get the value
+        sha512: a6e091202a4ed3c4b377f01221664d77853c4406481f6c2b25761b583f3b6bb086399a187d2aeb11c7d3685ef99f7fe48666d45344538e1167a3c55356e6c346
       - type: file
         path: net.z33v.zbterm.metainfo.xml

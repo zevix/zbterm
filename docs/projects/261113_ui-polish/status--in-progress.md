@@ -10,6 +10,13 @@ R4 today's content on two lines, Q-6–Q-11 proposed defaults adopted). The buil
 (`acceptance/`, kit `up` in `docs/acceptance/index.json`), implements in `renderer/`, and proves it
 on a scratch package (`/tmp/claude-1000/zbui-polish/out`).
 
+## Plan
+
+1. Kit (`acceptance/`, kit `up`), Kit corrections to ui-chrome R2 and buffer-search R3/R5/R10/R11.
+2. Renderer: R1–R13 (U1/U2 follow).
+3. Scratch package, the kit green.
+4. Last, after the kit is green (added by the user 2026-11-13, via the coordinator; investigation only, no fix): *Output delivery design*: a design note here with the root cause (switching to a session while it prints shows 1-2 lines twice or drops one: `session:data` IPC events and `session.open`/`extend`/`resync` invoke answers are not ordered against each other), proved with `/tmp/claude-1000/zbv4/probe/dup.sh` (each run under `timeout 600`), 2-3 candidate designs with trade-offs, one recommendation; then stop for the user's approval. Budget 45 min.
+
 ## Done
 
 - Requirements (2026-11-13): approved; R13 added.

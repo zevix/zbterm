@@ -38,6 +38,9 @@ jq '{box, inSession, sessions}' <<<"$s"
 jq -e '[.sessions.rows[] | select(.section == "name")] == []' <<<"$s"
 jq -e --arg a "$sa" '[.sessions.rows[] | select(.section == "buffer") | .id] == [$a]' <<<"$s"
 jq -e '.inSession.total > 0' <<<"$s"
+# Kit correction 2026-11-13 (builder 261113_ui-polish R3): a fourth section, "Other - unmatched sessions", lists
+# beta (neither a name nor a buffer match) while searching; every check here is unchanged.
+jq -e --arg b "$sb" '[.sessions.rows[] | select(.section == "other") | .id] == [$b]' <<<"$s"
 # A real Escape clears everything the box drives and focuses the terminal.
 key Escape
 s="$(sstate)"

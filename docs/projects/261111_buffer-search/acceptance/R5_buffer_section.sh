@@ -34,12 +34,17 @@ jq -e '.sessions.heading == "Session buffer matches"' <<<"$s"
 # Kit correction 2026-11-13 (builder fix round F2), R5/R11 as the user laid them out on
 # 2026-11-13: the sections are "Current session" (r5-pager, selected), "Session name matches"
 # (zqx-named), "Session buffer matches", in that order; every check below is unchanged.
-jq -e '[.sessions.headings[].text] == ["Current session", "Session name matches", "Session buffer matches"]' <<<"$s"
+# Kit correction 2026-11-13 (builder 261113_ui-polish R3): beta matches nothing, so a fourth heading, "Other -
+# unmatched sessions", follows the three (was: exactly the three).
+jq -e '[.sessions.headings[].text] == ["Current session", "Session name matches", "Session buffer matches", "Other - unmatched sessions"]' <<<"$s"
 jq -e --arg p "$sp" '[.sessions.rows[] | select(.section == "current") | .id] == [$p]' <<<"$s"
 # The heading comes after every name row.
 jq -e '.sessions.headingIndex > ([.sessions.rows[] | select(.section == "name") | .index] | max)' <<<"$s"
 jq -e --arg a "$sa" --arg n "$sn" --arg p "$sp" '[.sessions.rows[] | select(.section == "buffer") | .id] | sort == ([$a, $n, $p] | sort)' <<<"$s"
-jq -e --arg b "$sb" '[.sessions.rows[] | .id] | index($b) == null' <<<"$s"
+# Kit correction 2026-11-13 (builder 261113_ui-polish R3): beta is listed now, only under "Other - unmatched
+# sessions" (was: not listed at all); it is still in no name, current or buffer row.
+jq -e --arg b "$sb" '[.sessions.rows[] | select(.section != "other") | .id] | index($b) == null' <<<"$s"
+jq -e --arg b "$sb" '[.sessions.rows[] | select(.section == "other") | .id] | index($b) != null' <<<"$s"
 jq -e --arg p "$sp" '.sessions.rows[] | select(.id == $p) | .sub | test("^[0-9]+ match(es)?$")' <<<"$s"
 # Only buffers match: the heading follows "No matching sessions".
 clear_box
@@ -49,7 +54,9 @@ s="$(sstate)"
 jq '.sessions' <<<"$s"
 jq -e '.sessions.nameEmpty == true and .sessions.heading == "Session buffer matches"' <<<"$s"
 # Kit correction 2026-11-13 (F2): no name match, so no "Session name matches" heading.
-jq -e '[.sessions.headings[].text] == ["Current session", "Session buffer matches"]' <<<"$s"
+# Kit correction 2026-11-13 (builder 261113_ui-polish R3): beta and zqx-named match nothing here, so "Other -
+# unmatched sessions" follows (was: exactly the two headings).
+jq -e '[.sessions.headings[].text] == ["Current session", "Session buffer matches", "Other - unmatched sessions"]' <<<"$s"
 jq -e '[.sessions.rows[] | select(.section == "name")] == []' <<<"$s"
 jq -e --arg a "$sa" '[.sessions.rows[] | select(.section == "buffer") | .id] == [$a]' <<<"$s"
 # An ended zqx-old: "All" lists it by name; Active only drops it, the buffer rows stay.

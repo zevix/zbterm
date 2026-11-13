@@ -23,6 +23,16 @@
   <url type="bugtracker">https://github.com/zevix/zbterm/issues</url>
 
   <releases>
+    <release date="2026-11-10" version="1.2.13">
+      <description>
+        <p>Extending a recorded session now starts the new shell with a clean terminal.</p>
+        <ul>
+          <li>The previous program's terminal modes (mouse tracking, alternate screen, bracketed paste, keyboard modes and the like) are switched off when a session is extended, so viewers no longer send mouse reports to a shell that never asked for them</li>
+          <li>The screen text is kept, and the cursor lands where the new shell expects it</li>
+          <li>Live sessions you attach to are unchanged: the program that set those modes is still running there</li>
+        </ul>
+      </description>
+    </release>
     <release date="2026-06-29" version="1.0.0"/>
   </releases>
 

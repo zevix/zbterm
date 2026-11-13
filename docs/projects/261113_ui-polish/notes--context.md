@@ -94,6 +94,10 @@ Each with a proposed default, marked *proposed*; none is decided.
 - **Q-10 (R12) What the terminal does while locked.** *Proposed:* the grid stays at the locked rows × columns and the font is chosen to fit the window (`fontSizeForGrid()`, letterboxed, as a joined view does), so window resizes change the font, not the grid; the Font −/+ buttons and CTRL −/+ (font mode) are disabled with a tooltip saying the size is locked. Alternative: the font stays as set and the grid is clipped or scrolled when the window is too small. Button: *proposed* in the top bar with the Font buttons, icon only, the open or closed lock showing the state, tooltip "Terminal size: unlocked" / "Terminal size locked: 32 x 120".
 - **Q-11 (R10) The identity button's tooltip has no state.** `#identitySetup`'s title is always "Choose your identity"; only the dot shows the state. *Proposed:* the menu item uses the button's title as it is ("Choose your identity"), so the text follows the button if it ever gains a state. Alternative: give the button (and item) a state text, e.g. "Identity: <name>" when set up and "Choose your identity" when not, which changes the toolbar too.
 
+## Added task (user, 2026-11-13)
+
+- **Output delivery design** (relayed by the coordinator, 2026-11-13; from `261111_buffer-search` F3/F4, the user: "this bug sounds like a bad design"): investigation only, no fix. Switching to a session while it prints can show 1-2 lines twice or drop one; main forwards `session:data` as IPC events and answers `session.open`/`extend`/`resync` frames through `ipcMain.handle`, and Electron does not order the two. `renderLiveFrame` (`renderer/app.js`) clears live writes and paints `buildLiveBootstrap`'s screen (`engine/index.js`). Deliverable: a short design note in this folder (root cause proved with the probe `/tmp/claude-1000/zbv4/probe/dup.sh`, 2-3 candidate designs, one recommendation), then the user approves. Evidence: `261111_buffer-search/acceptance/report--2026-11-13-F3.md`, commit bceccbb.
+
 ## Soft changes
 
 None yet.

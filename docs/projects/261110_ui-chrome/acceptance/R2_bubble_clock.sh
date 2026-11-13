@@ -29,6 +29,10 @@ s="$(state)"
 jq '.bubble' <<<"$s"
 jq -e '.bubble.hidden == false' <<<"$s"
 jq -e --arg re "$clock" '.bubble.text | test($re)' <<<"$s"
+# Kit correction 2026-11-13 (builder 261113_ui-polish R4): the bubble is two centred lines now (clock, then
+# elapsed); ui-state's .bubble.text still joins them as "<clock> · <elapsed>", so the check above is
+# unchanged. Added: the two lines as drawn, the clock first.
+jq -e '(.bubble.lines | length) == 2 and (.bubble.lines[0].text | test("^[0-9]{2}:[0-9]{2}:[0-9]{2}$"))' <<<"$s"
 # A live seek: the bubble while the playhead is dragged.
 mouse_to "$(jq -r '.bubble.scrubber | (.left + .width * 0.3) | floor' <<<"$s")" "$y"
 xdo mousedown 1
