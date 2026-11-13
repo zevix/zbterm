@@ -31,6 +31,7 @@ P4  in-session search in the box: highlights, count, Enter, Esc         needs: P
 P5  cross-session section in the session list                           needs: P2, P3
 P6  kit at HEAD, done kits as regression, packaged boot, tests, docs    needs: all
 F1  fix round: R10, R11 (user, 2026-11-13); report 2026-11-12 gaps      needs: P6
+F2  R11 as the user laid it out; test tiers (sanity, topics, full)      needs: F1
 ```
 
 Line numbers below are at 3682f01 (ui-chrome, timeline-fixes and session-templates merged), re-checked by the planner on 2026-11-11.
@@ -131,6 +132,12 @@ Line numbers below are at 3682f01 (ui-chrome, timeline-fixes and session-templat
 - Kit: `R10_click_terminal.sh`, `R11_selected_on_top.sh` (new); dated *Kit corrections* in `R6`, `R7`, `U1`, `U2`, `U3`, `activate`, `run_all.sh`.
 
 **Acceptance.** The whole kit (R1–R11, U1–U3) green against a scratch package, wall time reported against the ≤ 20 min budget; the three done kits green; `npm test` with only the known failures; lint exit 0.
+
+## Phase F2: fix round 2 (2026-11-13)
+
+**Goal.** R11 as the user laid it out (sections "Current session", "Session name matches", "Session buffer matches"), R5 reworded; test tiers (sanity ≤ 2 min, topics, full) with an index and a runner.
+**Code map.** `renderer/app.js` `renderSessions`, `sessionSectionTitle`, `debugSearchSessions` (`headings`, section `current`); `test/renderer-static.test.js`; kit R3, R5, R6, R10, R11 (dated corrections); `docs/acceptance/index.json`, `run.sh`, `README.md`.
+**Acceptance.** `run.sh --sanity` ≤ 120 s and green; `run.sh --changed` for this round's diff green; `run.sh --full` green, its wall time reported against ~25 min; lint exit 0; only the known test failures.
 
 ## Regression notes
 

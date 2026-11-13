@@ -5,7 +5,7 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
-verifying, 2026-11-13: **F1 (fix round) built** on `main` (builder; for a fresh verifier): the user's R10 (a terminal click ends the search, keeps the text) and R11 (selected row first) as hard rows, and the gaps of `acceptance/report--2026-11-12.md` closed (U2 direct, U3 output, R7 margin, U1 probe, logs kept). Kit 14/14 PASS in 1359 s, **over the ≤ 20 min budget** (the two new scripts add ~211 s; reported, no check cut). Done kits green. **Next:** a fresh verifier writes `acceptance/report--<date>.md`; the user answers *Open* (R11 reading, the kit budget).
+verifying, 2026-11-13: **F2 built** on `main` (builder; for a fresh verifier): R11 as the user laid it out (sections "Current session", "Session name matches", "Session buffer matches"; R5 reworded), and the test tiers (`docs/acceptance/`: sanity 73 s, nine topics, full 905 s with `-j 4`, all green). The user answered F1's two questions on 2026-11-13 (R11's layout; ~25 min for the complete set). **Next:** a fresh verifier runs `docs/acceptance/run.sh --full --package` (or `acceptance/run_all.sh`) and writes `acceptance/report--<date>.md`.
 
 ## Done
 
@@ -20,8 +20,16 @@ verifying, 2026-11-13: **F1 (fix round) built** on `main` (builder; for a fresh 
 
 - P6 (builder, 2026-11-12): repackaged (`ZBTERM_FORGE_OUT_DIR=/tmp/claude-1000/zbbs/out npm run package`, rc 0) and ran the kit, the three done kits, every test file and lint (*Measured*). `README.md`: one *Implemented* bullet for the search box (bottom left, Ctrl+Shift+F, name filter, in-session highlights/count/Enter/Shift+Enter/Esc, playback, the "Session buffer matches" section, the collapsed width, live sessions only). `docs/debug_server_howto.md` checked against `window.__zbtermDebugCommand` (`renderer/app.js`): every command in its tables is handled there, and `search-state`'s documented fields match `debugSearchState`/`debugInSessionSearch`/`debugSearchSessions`; no edit. `AGENTS.md`/`agent_docs/`: no statement about the search box, the bottom bar, hotkeys or engine methods; nothing false, no edit. `phases.md`: step 6's grep spelled `FILL[:]` (dated note) and a dated P6 *Regression notes* entry.
 - F1 (builder, 2026-11-13): commits 23d8180 (renderer: `selectedSessionEntry`, terminal click ends search / restore on focus, `selectedFirst`, debug fields, `key-probe`), a7f157a (engine `debug.historyReads`, contract row, unit test), 8cfa490 (kit: R10, R11, dated corrections in R6/R7/U1/U2/U3/activate/run_all), then the docs commit. Details: `phases.md` *Phase F1*, `notes--context.md` *Requirement notes* R10/R11 and *Soft changes* (fix round).
+- F2 (builder, 2026-11-13): commits 513a113 (renderer: the three search sections, `search-state` `headings`/section `current`), fa23e4c (kit: R11 rewritten; R3, R5, R6, R10 corrected), 71ff3d6 (test tiers: `docs/acceptance/index.json`, `run.sh`, `README.md`), then the docs commit. Details: `phases.md` *Phase F2*, `notes--context.md` *Soft changes* (F2).
 
 ## Measured
+
+- F2, 2026-11-13 on `zr`, package of `main` at 71ff3d6's code (`/tmp/claude-1000/zbtiers/out`, `run.sh --package`). Logs `/tmp/claude-1000/zbtiers/runs/` and `runs/261111_buffer-search/fix2/`.
+  - `docs/acceptance/run.sh --sanity --package`: 50 PASS, 0 FAIL, **73 s** (package 4 s, lint 4 s, 45 test files 9 s, GUI 56 s).
+  - `run.sh --full` (`-j 4`): 106 PASS, 3 KNOWN (`doctor`, `native-linkage`, `zxterm-seam`), 0 FAIL, **905 s** (test files 112 s, GUI 789 s); within the user's ~25 min.
+  - `run.sh --changed 22e1e60..HEAD` (this round; selects search, chrome, keyboard): 67 PASS, 0 FAIL, **625 s** (45 test files 9 s, 21 GUI scripts 612 s).
+  - R3, R5, R6, R10, R11 alone against the F2 package first: all rc 0 (`fix2/rc.txt`).
+  - `npm run lint` rc 0, 95 warnings (as before).
 
 - F1, 2026-11-13 on `zr`, package of `main` at 8cfa490's code (`ZBTERM_FORGE_OUT_DIR=/tmp/claude-1000/zbbs/out npm run package`, rc 0; packaged `renderer/` and `engine/` identical to the checkout by `diff -rq`; package.json in the tree is the maintainer's uncommitted 1.3.2). Logs `runs/261111_buffer-search/fix1/`.
   - Kit (`source acceptance/activate && ZBUI_TMP=/tmp/zbbsk acceptance/run_all.sh`): 14 run, 14 PASS, rc 0, **1359 s** (`kit.txt`, logs `kit_logs/`). Per script (log mtimes, s): R10 ~59, R11 152, R1 56, R2 194, R3 87, R4 34, R5 152, R6 109, R7 155, R8 38, R9 55, U1 58, U2 66, U3 144. R7: 20 of 1123 reads with small rows and no big row (≥ 5 required). U2: `debug.historyReads` `{storeOpens 1, packets 6, snapshots 1}` before and after the searches, `snapshots 2` after the control. U3: echo median 22 ms during a search (16 without), output median 24 ms (14 without).
@@ -85,8 +93,7 @@ None.
 
 ## Open
 
-- (F1, for the user) **R11's reading.** Built: the selected row leads each section it is listed in (name rows if its name matches, buffer rows if its buffer does). Not built: the literal "always at the top of the list" when it matches neither; that would put a non-matching row in the name section, against R3's and R5's checks (name section empty / only name matches). Hard-row question; the builder did not resolve it.
-- (F1, for the user) **Kit time 1359 s against the ≤ 20 min budget** (R10 + R11 add ~211 s). Reported, no check cut.
+- Resolved 2026-11-13 (F2): R11's reading (the user's layout, built) and the kit time (the user accepts ~25 min for the complete set; `--full` 905 s).
 - (F1) `docs/CORE-CONTRACT.md` gains `debug.historyReads` (additive); the `engine/package.json` version bump stays release work for the maintainer, as for `session.searchBuffer`.
 
 - Resolved 2026-11-12 (P6b): R7's reads line (kit timing fixed per the user's decision; *Soft changes to read back*), the kit-run target (now ≤ 20 min, user 2026-11-12; 1132 s), lint 3.9 s vs 3.1 s (recorded as noise-level per the user, `baseline.md` *Cost* note), and `test/no-updater.test.js` (fixed by the maintainer's 05a3cda; 57 ok, 0 not ok).
@@ -94,6 +101,8 @@ None.
 - `design.md` rows 17–22 (the single-box revision) were added by the planner and not seen by the reviewer.
 
 ## Soft changes to read back
+
+- 2026-11-13 (F2): the current session not repeated among the name matches, kept with its count among the buffer matches; no "Current session" section without a selection; "No matching sessions" only when nothing at all is listed; R6 selects r6-one first and asserts the original order again; the test tiers' design (sanity contents, nine topics, 4 jobs with U3/R7 alone, one test file per process, known failures as KNOWN, changed-line rules for `renderer/app.js`) (`notes--context.md` *Soft changes*). F1's "selected row first" and "above user pins" items are withdrawn.
 
 - 2026-11-13 (F1): Esc forgets the search text, a terminal click keeps it (R10 decision); only a primary click ends the search; the remembered text is used once and a restore searches again; R11 built per section and the selected row above user-pinned rows while searching; R6's kit expects the selected row first (exact list, the others in count order); U2 proved by the engine's `debug.historyReads` (inotify tried and dropped: RocksDB served the control from memory); U3 times output too, on bash's clock (uutils `date` misprints `%3N`); R7's big session 1500 columns, ≥ 5 early reads; U1's `key-probe`; the kit's logs kept beside the state dir; debug fields added (`notes--context.md` *Soft changes*).
 
