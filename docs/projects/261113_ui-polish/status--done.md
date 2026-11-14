@@ -5,6 +5,9 @@ Rewritten in place after every phase; this is the memory between sessions, not a
 
 ## Now
 
+done, 2026-11-14: the user said "ok lets close it" after R17 (1.3.6, 1b0a573). Open items below stay
+as follow-ups; the delivery design A is its own project.
+
 verifying, 2026-11-13: the verifier's report is GREEN (`acceptance/report--2026-11-13.md`, 15 of 15 rows,
 tree b365b0b). "Done" is the user's word, after the soft-change read-back below. P4: the user chose
 design A (byte offsets) on 2026-11-13, to be built as its own follow-up project; nothing is fixed here.
