@@ -1172,9 +1172,10 @@
     renderSessions()
     stopDevTerminalLog()
     await sleep(2500)
-    // await writeTerminal(
-    //   '\r\n\r\nReady! Click here, press Enter, or press Play to show live stream...\r\n'
-    // )
+    // The pause only lets the diagnostics be read; the stream then shows by
+    // itself (a click, Enter or Play shows it sooner). Left waiting, the
+    // pending join's "Joining"/"Syncing" spinner stayed up until a click.
+    if (state.pendingLiveRevealSession === session) await showRevealedLiveStream()
   }
 
   async function showRevealedLiveStream() {
@@ -10412,6 +10413,12 @@
             rect: debugRect(brandMark)
           }
         : null,
+      liveReveal: {
+        pending: !!state.pendingLiveRevealSession,
+        devLog: !!state.devLogActive,
+        spinner: !!(els.terminalPending && !els.terminalPending.hidden),
+        meta: els.meta ? els.meta.textContent : ''
+      },
       identityDot: els.identitySetup ? els.identitySetup.dataset.identity || null : null,
       identityDotSettings: els.settingsToggle ? els.settingsToggle.dataset.identity || null : null,
       identityDotColor: debugDotColor(els.identitySetup),

@@ -13,6 +13,8 @@ agent before the merge).
 2026-11-14: the user added R14–R16 before "done" (app zoom kept when leaving app mode; the lock button
 left-most; a red flash on the lock when CTRL -/+ is refused). Built and checked by the builder; no fresh
 verifier has run on them yet.
+2026-11-14: R17 (a bug the user found: with debugging on, a joined session waited for a click behind
+the diagnostics, spinner up). Fixed; red/green shown on two builds; full tier on 1.3.5 GREEN before it.
 
 ## Plan
 
@@ -58,6 +60,13 @@ delivery design (investigation only).
   timeout; alone 3 of 5 runs pass, two different subtests time out; no engine or test file changed, so a
   flake outside this change). Logs `/tmp/claude-1000/zbtiers/runs/20261114-014428-topic`. A first run
   without `--out` used an older package and failed every `up/` script: a wrong-package run, not a result.
+- Full tier on 1.3.5 (b8d648f, `docs/acceptance/run.sh --full --package --out /tmp/claude-1000/zbui-polish/out135`):
+  124 PASS, 0 FAIL/CANNOT RUN, 3 KNOWN (`doctor`, `native-linkage`, `zxterm-seam`, their known reasons); wall
+  1156 s. Logs `/tmp/claude-1000/zbtiers/runs/20261114-021055-full`. (Two earlier attempts with `--out out`
+  found no `ZBTerm-linux-x64/ZBTerm` — build_all names it `ZBTerm-1.3.5` — and are not results.)
+- R17 (2026-11-14): `beginLiveReveal` ends the pause itself; `ui-state.liveReveal`; new
+  `acceptance/R17_debug_join_shows.sh` (real clicks and typing in the Join dialog of a second app), in the
+  `chrome` topic. The fixed build: PASS; the same build minus the one line: FAIL (held "paused before live").
 
 ## Measured (parallel run, 2026-11-13, host `zr`, package from the tree at 120f79b)
 
@@ -91,6 +100,7 @@ first said "none to rows", which understated it).
 - U2: for an ended session, the check is that the lock no longer applies.
 - R14: leaving app-zoom mode keeps the level; to change it the user turns app mode back on (Ctrl 0
   resets there). R16's flash also sits on the "± Font" path, which is disabled while locked.
+- R17: a click, Enter or Play still ends the 2.5 s diagnostics pause early; it is not removed.
 - Tiers: `test/session-data-batcher.test.js` added to sanity/engine/search/keyboard to fix the self-check.
 - Checks narrower than the row: R7 as gaps ≥ 6 px plus the screenshot read; R12 sampled; R3 "dimmed" as
   opacity 0.4–0.6.

@@ -125,6 +125,15 @@ when typing when the keyboard and live flash in playback and trying to type"
   only the keys reach it. Debug `size-lock-state` gained `button.first`, `button.flashing`, `flashes`,
   `appZoom`.
 
+- **R17** (a bug, the user's words: "when debugging is on and I join a session, it shows the debug
+  window with progress animation forever when done until I click it"). With debugging on (the default)
+  a Join-dialog join ends in `beginLiveReveal`, which stopped the diagnostics log, waited 2.5 s and then
+  waited for a click, Enter or Play (`showRevealedLiveStream`); meanwhile the pending placeholder stayed
+  the current session, so its "Joining"/"Syncing" spinner could stay up. Now the pause ends by itself
+  in `showRevealedLiveStream` (a click, Enter or Play still ends it sooner). Debug `ui-state` gained
+  `liveReveal` `{pending, devLog, spinner, meta}`. Red first: the same build minus that one line failed
+  R17 (held at "Joined - paused before live" past the 15 s limit); with it, PASS.
+
 ## Soft changes
 
 2026-11-13 (builder). Each rewords or fixes a detail; no outcome dropped, no check weakened. Merged

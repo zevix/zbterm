@@ -146,12 +146,13 @@
         "up/R11_lock_menu",
         "up/R12_lock_holds",
         "up/R14_app_zoom_kept",
+        "up/R17_debug_join_shows",
         "up/U2_lock"
       ],
       "tests": ["test/renderer-static.test.js"],
       "paths": ["renderer/vendor/*", "scripts/vendor-assets.js"],
       "content": {
-        "renderer/app.js": "[Ss]idePane|[Tt]opbar|sidebar|[Ss]ettings[A-Z]|settingsMenu|[Tt]heme|bottomBar|BottomBar|[Bb]rand|syncTerminalLayout|NARROW|[Ss]izeLock|SIZE_LOCK|fitLockedTerminal|collapsedPaneItems|stunTurnMenuItem|[Aa]ppZoom|APP_ZOOM",
+        "renderer/app.js": "[Ss]idePane|[Tt]opbar|sidebar|[Ss]ettings[A-Z]|settingsMenu|[Tt]heme|bottomBar|BottomBar|[Bb]rand|syncTerminalLayout|NARROW|[Ss]izeLock|SIZE_LOCK|fitLockedTerminal|collapsedPaneItems|stunTurnMenuItem|[Aa]ppZoom|APP_ZOOM|LiveReveal",
         "renderer/index.html": "."
       }
     },
