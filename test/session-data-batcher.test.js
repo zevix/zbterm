@@ -123,3 +123,17 @@ test('string data is counted in bytes, not characters', (t) => {
   batcher.push({ sessionId: 'a', data: 'éé' }) // 4 bytes, 2 characters
   t.is(sent.length, 1, 'flushed at 4 bytes')
 })
+
+// 261114_live-output-and-fixes: a joined message ends where its last chunk did.
+test('a joined message keeps the last chunk end', (t) => {
+  const { batcher, sent, fire } = harness()
+  batcher.push(chunk('a', 'one ', { end: 4 }))
+  batcher.push(chunk('a', 'two', { end: 7 }))
+  fire()
+  t.is(sent.length, 1)
+  t.is(sent[0].end, 7, 'the stream position after the joined bytes')
+  t.is(Buffer.from(sent[0].data).toString(), 'one two')
+  batcher.push(chunk('a', 'old core'))
+  fire()
+  t.absent('end' in sent[1], 'no end from a core that sends none')
+})

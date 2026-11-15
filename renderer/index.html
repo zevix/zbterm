@@ -1141,10 +1141,19 @@
         visibility: hidden;
       }
 
-      /* Marks the session SHIFT+New copies. */
+      /* Marks a template session (SHIFT+New and the other template triggers). */
       .session-default-mark {
         font-size: 12px;
         color: var(--pear-deep);
+      }
+
+      /* The A of the font-size buttons, in a serif face as word processors
+         draw it (261114 R7). */
+      .font-size-a {
+        font-family: 'Times New Roman', 'Liberation Serif', 'DejaVu Serif', Georgia, serif;
+        font-size: 1.15em;
+        font-weight: 600;
+        line-height: 1;
       }
 
       .session-pin-mark {
@@ -1392,6 +1401,27 @@
         color: var(--muted);
         font-size: 12px;
         cursor: text;
+      }
+
+      /* Search mode (the box focused or holding text, 261114 R9): the icon is
+         a blue "x" that closes the search; the native clear button is hidden,
+         so there is one "x". */
+      .app.searching .search-icon {
+        color: var(--accent-blue-border);
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      #search::-webkit-search-cancel-button {
+        -webkit-appearance: none;
+        display: none;
+      }
+
+      /* The arrow-key cursor in search mode (261114 R10): a thicker border in
+         the logo's green (one pixel less padding, so the row keeps its size). */
+      .app.searching .session-row.search-cursor {
+        border: 2px solid var(--logo-green);
+        padding: 7px;
       }
 
       .search-count {
@@ -2563,7 +2593,8 @@
               aria-label="Increase font size"
               disabled
             >
-              <i class="fa-solid fa-plus btn-icon" aria-hidden="true"></i><span>Font</span>
+              <i class="fa-solid fa-plus btn-icon" aria-hidden="true"></i
+              ><span class="font-size-a">A</span>
             </button>
             <button
               id="fontSizeDecrease"
@@ -2571,7 +2602,8 @@
               aria-label="Decrease font size"
               disabled
             >
-              <i class="fa-solid fa-minus btn-icon" aria-hidden="true"></i><span>Font</span>
+              <i class="fa-solid fa-minus btn-icon" aria-hidden="true"></i
+              ><span class="font-size-a">A</span>
             </button>
             <button id="shareSession" class="text-btn label-btn" disabled>
               <i class="fa-solid fa-share-nodes btn-icon" aria-hidden="true"></i><span>Share</span>
@@ -2614,6 +2646,9 @@
         </div>
         <div id="status" class="status">ready - initial</div>
         <div id="playback" class="playback" hidden>
+          <button id="jumpStart" class="text-btn icon-only" title="Start" disabled>
+            <i class="fa-solid fa-backward-fast" aria-hidden="true"></i>
+          </button>
           <button id="stepBack" class="text-btn icon-only" title="Step back">
             <i class="fa-solid fa-backward-step" aria-hidden="true"></i>
           </button>
@@ -2622,6 +2657,9 @@
           </button>
           <button id="stepForward" class="text-btn icon-only" title="Step forward">
             <i class="fa-solid fa-forward-step" aria-hidden="true"></i>
+          </button>
+          <button id="jumpEnd" class="text-btn icon-only" title="End" disabled>
+            <i class="fa-solid fa-forward-fast" aria-hidden="true"></i>
           </button>
           <button id="collapseGaps" class="text-btn icon-only" title="Collapse empty time">
             <i class="fa-solid fa-compress" aria-hidden="true"></i>
@@ -2677,6 +2715,7 @@
     <script src="wall-clock.js"></script>
     <script src="time-collapse.js"></script>
     <script src="buffer-search.js"></script>
+    <script src="live-stream.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

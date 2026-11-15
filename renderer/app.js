@@ -87,6 +87,8 @@
   const SEEK_MAX_RENDER_MS = 500
   const SEEK_MOVEMENT_THRESHOLD = 10
   const LIVE_WRITE_MAX_BATCH_BYTES = 512 * 1024
+  // Quiet this long after live output: is the engine ahead of the screen (U1)?
+  const LIVE_TAIL_CHECK_MS = 700
   const THEME_STORAGE_KEY = 'zbterm.theme'
   const DEVB_STORAGE_KEY = 'zbterm.devb'
   const COPY_ON_SELECT_STORAGE_KEY = 'zbterm.copyOnSelect'
@@ -236,6 +238,8 @@
   const STARTUP_LOGO_GREEN_FG = hexToAnsiFg(window.STARTUP_LOGO_COLORS.green)
   const STARTUP_LOGO_BLUE_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.blue)
   const STARTUP_LOGO_BLACK_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.black)
+  // One source for the logo's green and the search cursor's border (261114 R10).
+  document.documentElement.style.setProperty('--logo-green', window.STARTUP_LOGO_COLORS.green)
 
   const state = {
     // package.json#version, shown as the settings menu's last item.
@@ -267,6 +271,10 @@
     // focus (R10); the click that focused it must not drop the selection.
     searchRemembered: '',
     searchRestoreSelect: false,
+    // 261114 R10: the arrow-key cursor ({ section, id }) and the session the
+    // "Current session" section keeps while the arrows walk the list.
+    searchCursor: null,
+    searchAnchorId: null,
     // "Input blocked" flashes so far (the debug server's search-state).
     inputBlockedFlashes: 0,
     sessionBufferSearchTimer: null,
@@ -379,6 +387,17 @@
       active: false,
       queue: []
     },
+    // Stream positions of the selected live session (261114, design A;
+    // renderer/live-stream.js): which chunks a frame already holds.
+    liveStream: window.zbtermLiveStream.createLiveStream(),
+    // A frame waiting for xterm to drain before it is painted; a newer one
+    // makes it void.
+    liveFrameToken: 0,
+    liveResync: null,
+    liveResyncs: 0,
+    liveTailTimer: 0,
+    // The U1 kit's injected loss: session:data chunks to discard unseen.
+    liveDropNext: 0,
     seek: {
       timer: null,
       version: 0,
@@ -496,6 +515,8 @@
     playPause: document.getElementById('playPause'),
     stepBack: document.getElementById('stepBack'),
     stepForward: document.getElementById('stepForward'),
+    jumpStart: document.getElementById('jumpStart'),
+    jumpEnd: document.getElementById('jumpEnd'),
     speed: document.getElementById('speed'),
     updateBtn: document.getElementById('update-btn')
   }
@@ -1035,15 +1056,12 @@
       startRow + STARTUP_LOGO_LINES.length + 2,
       'Written by Zeev Kotzer'
     )
-    // No newline after the last line: the block already reaches the bottom row
-    // of the fixed grid, and a line feed there scrolls it, leaving scrollback
-    // and with it a scrollbar floating at the edge of the centred grid.
-    await writeTerminal(
-      '\r\n\r\n' +
-        'Based on modules and examples by pears.com/holepunch.to\r\n' +
-        `See ${projectUrl()} for more information\r\n` +
-        '\r\n' +
-        'ZBTerm is not affiliated with Holepunch.to or pears.com'
+    // Written at its row, centred (261114 R13), with no line feed: a line
+    // feed on the fixed grid's bottom row scrolls it, leaving scrollback and
+    // with it a scrollbar floating at the edge of the centred grid.
+    await writeCenteredTerminalText(
+      startRow + STARTUP_LOGO_LINES.length + 4,
+      `See ${projectUrl()} for more information`
     )
 
     await writeTerminal(`${ANSI_RESET}\x1b[${startRow + blockHeight + 2};1H\x1b[?25h`)
@@ -1217,11 +1235,13 @@
       '',
       centered(`ZBTerm v${bridge.pkg().version}`),
       centered('Written by Zeev Kotzer'),
-      '\r\n\r\n',
-      'Based on modules and examples by pears.com/holepunch.to',
-      `See ${projectUrl()} for more information`,
       '',
-      'ZBTerm is not affiliated with Holepunch.to or pears.com',
+      centered(`See ${projectUrl()} for more information`),
+      '',
+      '',
+      '',
+      '',
+      '',
       ''
     ].join('\r\n')
   }
@@ -1243,7 +1263,10 @@
     })
     els.search.addEventListener('blur', () => {
       state.searchRestoreSelect = false
+      syncSearchMode()
     })
+    els.search.addEventListener('focus', syncSearchMode)
+    els.search.addEventListener('input', syncSearchMode)
     // The box's keys (R2, R3), left alone while an IME composes: Enter and
     // Shift+Enter step through the matches, Esc clears (instead of
     // type=search's own clear, so it happens in one place).
@@ -1256,6 +1279,11 @@
       } else if (event.key === 'Escape' && !event.shiftKey) {
         event.preventDefault()
         clearSearch()
+      } else if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !event.shiftKey) {
+        // 261114 R10: the arrows move the selection through the list as
+        // drawn; the caret never moves, also when nothing can move (U3).
+        event.preventDefault()
+        moveSearchSelection(event.key === 'ArrowDown' ? 1 : -1).catch(showError)
       }
     })
     els.activeOnly.addEventListener('click', async () => {
@@ -1294,9 +1322,24 @@
     els.hdToggle.addEventListener('click', guard(toggleHd))
     els.themeToggle.addEventListener('click', toggleTheme)
     if (els.brandMark) els.brandMark.addEventListener('click', toggleSidePane)
-    // The magnifying glass is decorative; a click on it focuses the box (R2).
+    // The magnifying glass focuses the box (261113 R2); in search mode it is
+    // the blue "x" and closes the search as Esc does (261114 R9). The mode
+    // is read at mousedown, whose default (blurring the box) is cancelled, so
+    // an empty focused box does not leave search mode before the click.
     const searchIcon = document.getElementById('searchIcon')
-    if (searchIcon && els.search) searchIcon.addEventListener('click', () => els.search.focus())
+    if (searchIcon && els.search) {
+      let closeOnClick = false
+      searchIcon.addEventListener('mousedown', (event) => {
+        closeOnClick = searchModeOn()
+        event.preventDefault()
+      })
+      searchIcon.addEventListener('click', () => {
+        const close = closeOnClick || searchModeOn()
+        closeOnClick = false
+        if (close) clearSearch()
+        else els.search.focus()
+      })
+    }
     if (els.status) {
       els.status.addEventListener('click', () => {
         if (!state.identityRefusal) return
@@ -1399,12 +1442,20 @@
           if (!event.shiftKey && String(event.key).toLowerCase() === 'r' && isOfflineResumable()) {
             event.preventDefault()
             event.stopPropagation()
-            extendSession().catch(showError)
+            // From the search box (261114 R15) the focus and the arrow walk stay there.
+            extendSession({ keepFocus: document.activeElement === els.search }).catch(showError)
             return
           }
           if (event.key === 'PageUp' || event.key === 'PageDown') {
             event.preventDefault()
             event.stopPropagation()
+            if (document.activeElement === els.search) {
+              // 261114 R14: in the search box they are Up and Down.
+              if (!event.shiftKey) {
+                moveSearchSelection(event.key === 'PageUp' ? -1 : 1).catch(showError)
+              }
+              return
+            }
             switchSessionRelative(event.key === 'PageUp' ? -1 : 1).catch(showError)
             return
           }
@@ -1436,6 +1487,14 @@
     els.stepForward.addEventListener(
       'click',
       guard(() => step(1))
+    )
+    els.jumpStart.addEventListener(
+      'click',
+      guard(() => jumpTo('start'))
+    )
+    els.jumpEnd.addEventListener(
+      'click',
+      guard(() => jumpTo('end'))
     )
     if (els.collapseGaps) {
       els.collapseGaps.addEventListener('click', guard(toggleTimeCollapse))
@@ -1488,7 +1547,7 @@
       syncSelectedSessionFromList()
       renderSessions()
     })
-    api.on('session:data', ({ sessionId, source, hd, data }) => {
+    api.on('session:data', ({ sessionId, source, hd, data, end }) => {
       const bytes = new Uint8Array(data)
       recordLiveActivity(sessionId, source, bytes.byteLength)
       scheduleJoinedAvailabilityRefresh(sessionId)
@@ -1497,12 +1556,21 @@
         ackSessionData(sessionId, bytes.byteLength)
         return
       }
+      if (state.liveDropNext > 0) {
+        // The U1 kit's injected loss: this chunk never reaches the screen.
+        state.liveDropNext--
+        ackSessionData(sessionId, bytes.byteLength)
+        scheduleLiveTailCheck(sessionId)
+        return
+      }
       state.hd = !!hd
       hideTerminalPending()
       noteLiveOutput()
-      enqueueLiveWrite({ sessionId, hd, data: bytes })
+      takeLiveChunk({ sessionId, hd, end, data: bytes })
       updateLiveClock()
     })
+    // A restarted core counts positions from 0 again.
+    api.on('engine:restarting', () => state.liveStream.clear())
     api.on('session:availability-changed', ({ sessionId }) => {
       scheduleJoinedAvailabilityRefresh(sessionId)
     })
@@ -1545,16 +1613,21 @@
     // screen once the engine has it.
     api.on('session:restored', ({ sessionId }) => {
       if (sessionId !== state.selectedId || state.mode !== 'live') return
+      state.liveStream.hold(sessionId)
       api
         .invoke('session.open', { sessionId })
         .then((opened) => {
           if (sessionId !== state.selectedId || state.mode !== 'live') return
           state.restoring = !!opened.restoring
           if (opened.frame && opened.frame.data) renderLiveFrame(opened.frame)
+          else releaseLiveStream(sessionId)
           setStatus('live')
           updateTransportControls()
         })
-        .catch(showError)
+        .catch((err) => {
+          releaseLiveStream(sessionId)
+          showError(err)
+        })
     })
     api.on('session:hd-changed', ({ sessionId, hd }) => {
       if (sessionId !== state.selectedId) return
@@ -2646,7 +2719,8 @@
     els.sessions.replaceChildren()
     renderSessionSelect()
     const searching = searchIsOn()
-    const current = searching ? selectedSessionEntry() : null
+    const anchor = searching && state.searchAnchorId ? sessionEntryById(state.searchAnchorId) : null
+    const current = searching ? anchor || selectedSessionEntry() : null
     const rows = current
       ? state.sessions.filter((session) => session.sessionId !== current.sessionId)
       : state.sessions
@@ -2665,6 +2739,7 @@
     for (const session of rows) els.sessions.append(buildSessionRow(session))
     renderSessionBufferSection()
     if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)
+    markSearchCursor()
     noteSessionRowOrder()
   }
 
@@ -2782,19 +2857,23 @@
     row.querySelector('.session-name').textContent = session.name
     // A buffer-match row (261111_buffer-search R6) says how many times the
     // box's text is in the session's buffer instead of "live · …".
+    // Matches the terminal cannot show (the normal-screen history behind a
+    // full-screen program, 261114 R5) are split out of the total.
     row.querySelector('.session-sub').textContent =
-      matchCount === null ? meta : `${matchCount} ${matchCount === 1 ? 'match' : 'matches'}`
+      matchCount === null ? meta : matchCountText(matchCount, options.hiddenCount)
     // Status marks sit at the row's right end, where the hover actions
     // appear; they hide while the actions show.
     const marks = document.createElement('span')
     marks.className = 'session-marks'
-    if (isPinnedSession(session)) {
-      marks.append(sessionMark('fa-thumbtack session-pin-mark', 'Pinned'))
-    }
+    // The template mark (a stamp, 261114 R4) comes first, so a pin is
+    // always the right-most mark.
     const templateFor = templateTriggersOf(session.sessionId)
     if (templateFor.length) {
       const verbs = templateFor.map((trigger) => trigger.verb).join(', ')
-      marks.append(sessionMark('fa-check session-default-mark', `Template when you ${verbs}`))
+      marks.append(sessionMark('fa-stamp session-default-mark', `Template when you ${verbs}`))
+    }
+    if (isPinnedSession(session)) {
+      marks.append(sessionMark('fa-thumbtack session-pin-mark', 'Pinned'))
     }
     if (marks.childElementCount) {
       row.classList.add('has-marks')
@@ -2809,6 +2888,15 @@
     }
     renderSessionActions(session, row.querySelector('.session-actions'))
     return row
+  }
+
+  // "12 matches (2 + 10 hidden history matches)", or "N matches" when
+  // nothing is hidden.
+  function matchCountText(count, hidden) {
+    const total = `${count} ${count === 1 ? 'match' : 'matches'}`
+    const h = Number.isFinite(hidden) && hidden > 0 ? Math.min(hidden, count) : 0
+    if (!h) return total
+    return `${total} (${count - h} + ${h} hidden history ${h === 1 ? 'match' : 'matches'})`
   }
 
   function sessionMark(classes, label) {
@@ -3870,6 +3958,11 @@
   // Entering a closed session of our own resumes it: the shell comes back and
   // the history keeps growing. Pass `{ extend: false }` to only look at it.
   async function selectSession(session, options = {}) {
+    // A click or any other selection ends an arrow-key walk (261114 R10).
+    if (!options.keepFocus) {
+      state.searchCursor = null
+      state.searchAnchorId = null
+    }
     await ensureTerminalReady()
     if (session.pending) {
       selectPendingJoin(session)
@@ -3904,7 +3997,7 @@
     renderSessions()
     if (state.term) {
       resetVisibleTerminal()
-      state.term.focus()
+      if (!options.keepFocus) state.term.focus()
     }
     hideTerminalPending()
     if (session.active) {
@@ -3915,7 +4008,18 @@
       setTerminalFontSize(state.liveFontSize)
       setStatus('live')
       updateTransportControls()
-      const opened = await api.invoke('session.open', { sessionId: session.sessionId })
+      // Chunks that arrive before the frame is painted are held, then
+      // written only past the frame's `through` (261114, design A).
+      state.liveStream.hold(session.sessionId)
+      let opened
+      try {
+        opened = await api.invoke('session.open', { sessionId: session.sessionId })
+      } catch (err) {
+        releaseLiveStream(session.sessionId)
+        throw err
+      }
+      // Another session was selected meanwhile: this answer is stale.
+      if (state.selectedId !== session.sessionId || state.mode !== 'live') return
       state.restoring = !!opened.restoring
       state.hd = !!opened.hd
       setTimeline(opened.timeline || [])
@@ -3923,9 +4027,11 @@
       configureScrubber({ value: SCRUBBER_STEPS, startTs: session.startedAt, endTs: Date.now() })
       if (opened.frame && opened.frame.data) {
         renderLiveFrame(opened.frame, { preserveGrid: isJoinedSession() })
-      } else if (isJoinedSession()) {
-        fitPlaybackFrame(opened.info || session)
-      } else fitLiveTerminal()
+      } else {
+        if (isJoinedSession()) fitPlaybackFrame(opened.info || session)
+        else fitLiveTerminal()
+        releaseLiveStream(session.sessionId)
+      }
       updateLiveClock()
       if (canResizeSelectedLiveSession()) {
         const dims = dimensions()
@@ -4069,6 +4175,12 @@
 
   function renderLiveFrame(frame, options = {}) {
     if (!state.term) return
+    const sessionId = state.selectedId
+    // Chunks that arrive until the frame is painted are held (a caller that
+    // asked for the frame already holds them; one more hold keeps them).
+    if (state.liveStream.sessionId !== sessionId || !state.liveStream.holding) {
+      state.liveStream.hold(sessionId)
+    }
     hideTerminalPending()
     clearLiveWrites({ ack: true })
     clearPlaybackWrites()
@@ -4089,9 +4201,106 @@
     state.mode = 'live'
     if (options.preserveGrid || isJoinedSession()) fitPlaybackFrame(frame)
     else fitLiveTerminal()
-    resetVisibleTerminal()
-    state.term.write(frame.data || '', refreshTerminal)
     updatePlaybackClock(frame.tsMs || Date.now())
+    // xterm's reset() does not cancel writes it has queued: wait until they
+    // are parsed, or they land on the blank screen under the frame
+    // (delivery-design.md mechanism 2).
+    const token = ++state.liveFrameToken
+    state.term.write('', () => {
+      if (token !== state.liveFrameToken) return
+      if (state.selectedId !== sessionId || state.mode !== 'live' || !state.term) {
+        releaseLiveStream(sessionId)
+        return
+      }
+      resetVisibleTerminal()
+      state.term.write(frame.data || '', refreshTerminal)
+      const out = state.liveStream.frame(sessionId, frame.through)
+      for (const data of out.writes) {
+        enqueueLiveWrite({ sessionId, hd: state.hd, data, acked: true })
+      }
+      if (out.gap) resyncLiveStream(sessionId)
+      else scheduleLiveTailCheck(sessionId)
+    })
+  }
+
+  // One chunk of the selected live session's output, placed by its stream
+  // position: held while a frame is coming, dropped when the screen has it,
+  // cut when it partly has it, a resync when bytes before it never came.
+  function takeLiveChunk(chunk) {
+    const len = chunk.data.byteLength
+    const r = state.liveStream.take(chunk)
+    if (r.action === 'write' || r.action === 'other') {
+      enqueueLiveWrite({ sessionId: chunk.sessionId, hd: chunk.hd, data: r.data, ackBytes: len })
+      if (r.action === 'write') scheduleLiveTailCheck(chunk.sessionId)
+      return
+    }
+    // Held chunks are acked now: the engine's flow limit must not wait on a
+    // frame that itself waits on the engine.
+    ackSessionData(chunk.sessionId, len)
+    if (r.action === 'gap') resyncLiveStream(chunk.sessionId)
+  }
+
+  // No frame after all (the session restores, or the open failed): what was
+  // held is written as it came.
+  function releaseLiveStream(sessionId) {
+    for (const data of state.liveStream.release(sessionId)) {
+      enqueueLiveWrite({ sessionId, hd: state.hd, data, acked: true })
+    }
+  }
+
+  // Output went missing between the engine and the screen (U1): repaint the
+  // session from a fresh frame. One resync at a time; a gap meanwhile is
+  // folded into it (its chunks are held).
+  function resyncLiveStream(sessionId) {
+    if (state.liveResync) return
+    if (state.selectedId !== sessionId || state.mode !== 'live') return
+    state.liveResyncs++
+    state.liveStream.hold(sessionId)
+    const resync = api
+      .invoke('session.open', { sessionId })
+      .then((opened) => {
+        if (state.selectedId !== sessionId || state.mode !== 'live') return
+        if (opened.frame && opened.frame.data) {
+          renderLiveFrame(opened.frame, { preserveGrid: isJoinedSession() })
+        } else releaseLiveStream(sessionId)
+      })
+      .catch((err) => {
+        releaseLiveStream(sessionId)
+        showError(err)
+      })
+      .finally(() => {
+        if (state.liveResync === resync) state.liveResync = null
+      })
+    state.liveResync = resync
+  }
+
+  // A lost last chunk has no later chunk to show the gap: once the output
+  // has been quiet for a moment, compare what was written with the engine's
+  // position; still short a moment later (nothing was on its way), resync.
+  function scheduleLiveTailCheck(sessionId) {
+    if (state.liveTailTimer) window.clearTimeout(state.liveTailTimer)
+    state.liveTailTimer = window.setTimeout(() => {
+      state.liveTailTimer = 0
+      checkLiveTail(sessionId).catch(() => {})
+    }, LIVE_TAIL_CHECK_MS)
+  }
+
+  async function checkLiveTail(sessionId) {
+    const stream = state.liveStream
+    const live = () =>
+      state.selectedId === sessionId &&
+      state.mode === 'live' &&
+      stream.sessionId === sessionId &&
+      stream.anchored &&
+      !stream.holding &&
+      !state.liveResync
+    if (!live()) return
+    const written = stream.written
+    const opened = await api.invoke('session.open', { sessionId, frame: false })
+    if (!live() || !Number.isFinite(opened.position) || opened.position <= written) return
+    await sleep(LIVE_TAIL_CHECK_MS)
+    if (!live() || stream.written !== written) return
+    resyncLiveStream(sessionId)
   }
 
   async function renameSession() {
@@ -4183,8 +4392,10 @@
     state.playerReady = false
     state.playbackPlaying = false
     configureScrubber({ value: SCRUBBER_STEPS, startTs: Date.now(), endTs: Date.now() })
+    if (state.mode === 'live') state.liveStream.hold(sessionId)
     const opened = await api.invoke('session.open', { sessionId })
     if (sessionId !== state.selectedId) return
+    if (!(opened.active && opened.frame)) releaseLiveStream(sessionId)
     if (opened.active && opened.frame) {
       renderLiveFrame(opened.frame, { preserveGrid: isJoinedSession() })
     } else {
@@ -4197,7 +4408,10 @@
     setStatus('history deleted')
   }
 
-  async function extendSession() {
+  // `options.keepFocus` (only `true` counts: a click handler passes its event)
+  // resumes without taking the focus from the search box (261114 R15).
+  async function extendSession(options) {
+    const keepFocus = !!(options && options.keepFocus === true)
     if (!state.selectedId) return
     const current = state.sessions.find((s) => s.sessionId === state.selectedId)
     if (!canExtendSession(current)) return
@@ -4221,7 +4435,7 @@
       // `extend: false`: a command that died before the list refreshed is
       // inactive again here, and selecting it with the default would extend
       // it again, and again - the retry loop the failure note replaces.
-      await selectSession(revived, { extend: false })
+      await selectSession(revived, { extend: false, keepFocus })
       if (state.failedStart && state.failedStart.sessionId === sessionId) {
         showFailedStartNote(sessionId)
       } else {
@@ -4672,6 +4886,44 @@
       return
     }
     renderFrame(frame)
+  }
+
+  // |<< and >>| (261114 R11): the first frame, by time (so time collapse
+  // does not matter); the end is live for a running session, else the last
+  // frame.
+  async function jumpTo(where) {
+    if (!state.selectedId) return
+    const running = !!(state.currentSession && state.currentSession.active)
+    if (where === 'end' && running) {
+      if (state.mode !== 'live') await goLive()
+      return
+    }
+    cancelPendingSeek()
+    stopPlaybackClock()
+    clearPlaybackWrites()
+    if (state.mode === 'live') {
+      if (where !== 'start' || !running) return
+      await enterPlaybackMode(state.selectedId)
+    }
+    if (state.mode !== 'playback' || !state.playerReady || !state.timeline.length) return
+    const sessionId = state.selectedId
+    const frameAt =
+      where === 'start' ? state.timeline[0] : state.timeline[state.timeline.length - 1]
+    const frame = await api.invoke('player.seek', { sessionId, tsMs: frameAt.tsMs })
+    if (sessionId !== state.selectedId) return
+    renderFrame(frame)
+  }
+
+  // >>| flashes with Live (R12): every running animation of both buttons
+  // starts at the document timeline's origin, so they stay in phase whatever
+  // restarted them (a class toggle, the toolbar shown again, a theme change).
+  function syncLiveBeaconPhase() {
+    for (const el of [els.goLive, els.jumpEnd]) {
+      if (!el || typeof el.getAnimations !== 'function') continue
+      for (const animation of el.getAnimations()) {
+        if (animation.startTime !== 0) animation.startTime = 0
+      }
+    }
   }
 
   function beginScrub() {
@@ -5167,6 +5419,7 @@
     const sessionId = state.selectedId
     const chunks = []
     let bytes = 0
+    let acks = 0
     let hd = state.hd
     while (state.liveWrites.queue.length) {
       const packet = state.liveWrites.queue[0]
@@ -5175,6 +5428,7 @@
       state.liveWrites.queue.shift()
       chunks.push(packet.data)
       bytes += packet.data.byteLength
+      acks += liveAckBytes(packet)
       hd = !!packet.hd
     }
     if (!chunks.length) {
@@ -5186,7 +5440,7 @@
     state.liveWrites.active = true
     state.hd = hd
     state.term.write(concatUint8Arrays(chunks, bytes), () => {
-      ackSessionData(sessionId, bytes)
+      if (acks) ackSessionData(sessionId, acks)
       if (version !== state.liveWrites.version) return
       state.liveWrites.active = false
       drainLiveWrites()
@@ -5200,8 +5454,16 @@
     state.liveWrites.active = false
     if (!ack) return
     for (const packet of queued) {
-      if (packet && packet.sessionId) ackSessionData(packet.sessionId, packet.data.byteLength)
+      const bytes = packet ? liveAckBytes(packet) : 0
+      if (packet && packet.sessionId && bytes) ackSessionData(packet.sessionId, bytes)
     }
+  }
+
+  // The bytes a live write acks when xterm has parsed it: what the engine
+  // sent (a cut chunk acks its whole length), nothing when acked already.
+  function liveAckBytes(packet) {
+    if (packet.acked) return 0
+    return Number.isFinite(packet.ackBytes) ? packet.ackBytes : packet.data.byteLength
   }
 
   function concatUint8Arrays(chunks, totalBytes) {
@@ -5345,6 +5607,8 @@
     els.playback.hidden = !hasSession && !hasPendingLiveReveal
     els.stepBack.disabled = !canStepBack
     els.stepForward.disabled = !canUseOpenPlayer
+    if (els.jumpStart) els.jumpStart.disabled = !(canStepBack && state.timeline.length)
+    if (els.jumpEnd) els.jumpEnd.disabled = !(canGoLive || canUseOpenPlayer)
     els.playPause.disabled = !canUseOpenPlayer && !hasPendingLiveReveal
     els.speed.disabled = !canUseOpenPlayer
     els.goLive.disabled = !canGoLive
@@ -5406,12 +5670,18 @@
     els.goLive.classList.toggle('live-joined', liveRole === 'live-joined')
     els.goLive.classList.toggle('live-host', liveRole === 'live-host')
     els.goLive.classList.toggle('live-beacon', canGoLive)
+    if (els.jumpEnd) {
+      els.jumpEnd.classList.toggle('live-on', isLive && hasSession)
+      els.jumpEnd.classList.toggle('live-joined', liveRole === 'live-joined')
+      els.jumpEnd.classList.toggle('live-host', liveRole === 'live-host')
+      els.jumpEnd.classList.toggle('live-beacon', canGoLive)
+    }
     els.totalTime.classList.toggle('live-total', isLive && isActiveSession)
     const isLiveInputShared = isInputShared && isLive && isActiveSession
     els.inputMode.classList.toggle('input-shared', isLiveInputShared && !joined)
     els.inputMode.classList.toggle('input-shared-viewer', isLiveInputShared && joined)
-    setButtonLabel(els.fontSizeDecrease, 'fa-minus', 'Font')
-    setButtonLabel(els.fontSizeIncrease, 'fa-plus', 'Font')
+    setButtonLabel(els.fontSizeDecrease, 'fa-minus', 'A')
+    setButtonLabel(els.fontSizeIncrease, 'fa-plus', 'A')
     els.fontSizeDecrease.title = 'Decrease terminal font size'
     els.fontSizeIncrease.title = 'Increase terminal font size'
     // R12: a locked size fixes the grid; the font follows the window.
@@ -5447,6 +5717,7 @@
         hasSession && isPlayback && !!current && !!current.active
       )
     }
+    syncLiveBeaconPhase()
   }
 
   // The dot screen is sized in device pixels (see .offline-session in
@@ -9027,6 +9298,127 @@
     }
     if (state.term) state.term.focus()
     else if (els.search) els.search.blur()
+    syncSearchMode()
+  }
+
+  // ---- Search mode (261114 R8-R10) -----------------------------------------
+  // On while the box has the focus or holds text: `.searching` on `.app`, the
+  // Esc hint in the empty box, the blue "x" in place of the magnifying glass,
+  // and the arrow-key cursor's green border.
+  function searchModeOn() {
+    return !!(els.search && (document.activeElement === els.search || els.search.value))
+  }
+
+  function syncSearchMode() {
+    const on = searchModeOn()
+    if (els.app) els.app.classList.toggle('searching', on)
+    if (els.search) {
+      els.search.placeholder =
+        document.activeElement === els.search ? 'Search (Esc to exit)' : 'Search (Ctrl+Shift+F)'
+    }
+    const icon = document.getElementById('searchIcon')
+    if (icon) {
+      icon.classList.toggle('fa-magnifying-glass', !on)
+      icon.classList.toggle('fa-circle-xmark', on)
+      if (on) {
+        icon.setAttribute('role', 'button')
+        icon.setAttribute('title', 'Close search (Esc)')
+        icon.removeAttribute('aria-hidden')
+        icon.setAttribute('aria-label', 'Close search')
+      } else {
+        icon.removeAttribute('role')
+        icon.removeAttribute('title')
+        icon.removeAttribute('aria-label')
+        icon.setAttribute('aria-hidden', 'true')
+      }
+    }
+    if (!on && (state.searchCursor || state.searchAnchorId)) {
+      state.searchCursor = null
+      const hadAnchor = !!state.searchAnchorId
+      state.searchAnchorId = null
+      if (hadAnchor) renderSessions()
+    }
+    markSearchCursor()
+  }
+
+  // The rows as drawn, each with its section (the heading above it, as
+  // debugSearchSessions reads it): a session listed twice is two stops.
+  function sessionRowsInOrder() {
+    const sectionOf = {
+      'Current session': 'current',
+      'Session name matches': 'name',
+      'Session buffer matches': 'buffer',
+      'Other - unmatched sessions': 'other'
+    }
+    let section = 'name'
+    const rows = []
+    for (const el of els.sessions ? els.sessions.children : []) {
+      if (el.classList.contains('session-section-title')) {
+        const text = el.textContent.replace(/\s+/g, ' ').trim()
+        section = sectionOf[text] || text
+      } else if (el.classList.contains('session-row')) {
+        rows.push({ el, section, id: el.dataset.sessionId })
+      }
+    }
+    return rows
+  }
+
+  function searchCursorIndex(rows) {
+    const cursor = state.searchCursor
+    if (cursor) {
+      const at = rows.findIndex((row) => row.section === cursor.section && row.id === cursor.id)
+      if (at >= 0) return at
+    }
+    return rows.findIndex((row) => row.id === state.selectedId)
+  }
+
+  // The green border goes on one row: the cursor's, else the selected
+  // session's first row (the top "Current session" row while searching).
+  function markSearchCursor() {
+    const rows = sessionRowsInOrder()
+    const at = searchCursorIndex(rows)
+    rows.forEach((row, index) => row.el.classList.toggle('search-cursor', index === at))
+  }
+
+  function sessionEntryById(id) {
+    const lists = [state.sessions, state.unfilteredSessions]
+    for (const list of lists) {
+      const found = (list || []).find((session) => session.sessionId === id)
+      if (found) return found
+    }
+    const bm = state.bufferMatches
+    if (bm && bm.sessions && bm.sessions.get(id)) return bm.sessions.get(id)
+    const kept = state.currentSession
+    return kept && kept.sessionId === id ? kept : null
+  }
+
+  // Up/Down (and Ctrl+PgUp/PgDn, R14) in search mode: the cursor moves one row (staying at either end)
+  // and its session is selected, the focus kept in the box. The "Current
+  // session" section keeps the session it showed when the arrows began, so
+  // the list does not reorder under the cursor (design.md R10).
+  async function moveSearchSelection(delta) {
+    const rows = sessionRowsInOrder()
+    if (!rows.length) return
+    const at = searchCursorIndex(rows)
+    const next = at < 0 ? (delta > 0 ? 0 : -1) : Math.max(0, Math.min(rows.length - 1, at + delta))
+    if (next < 0 || next === at) return
+    const target = rows[next]
+    const session = sessionEntryById(target.id)
+    if (!session) return
+    if (!state.searchAnchorId && state.selectedId) state.searchAnchorId = state.selectedId
+    state.searchCursor = { section: target.section, id: target.id }
+    markSearchCursor()
+    target.el.scrollIntoView({ block: 'nearest' })
+    if (session.sessionId === state.selectedId) return
+    // An offline session is only looked at, never resumed, from the keyboard
+    // walk (261114 R15): the usual hint offers ^R, which the box handles.
+    await selectSession(session, { keepFocus: true, extend: false })
+    if (session.sessionId === state.selectedId) {
+      if (isOfflineResumable()) showResumeHint()
+      else dismissToast('resume-hint')
+    }
+    const drawn = sessionRowsInOrder()[searchCursorIndex(sessionRowsInOrder())]
+    if (drawn) drawn.el.scrollIntoView({ block: 'nearest' })
   }
 
   function updateSearchCount() {
@@ -9175,6 +9567,8 @@
     if (inFlight > 0) return
     bm.rows = bm.rows.filter((row) => row.id !== sessionId)
     const count = answer && !answer.cancelled && !answer.gone ? Number(answer.count) || 0 : 0
+    // An engine before 261114 sends no `hidden`: the row reads as before.
+    const hidden = count > 0 && Number.isFinite(answer.hidden) ? answer.hidden : 0
     if (count > 0 && isBufferSearchable(bm.sessions.get(sessionId))) {
       const order = bm.order.has(sessionId) ? bm.order.get(sessionId) : -1
       // Most matches first; ties keep the session list's order.
@@ -9182,7 +9576,7 @@
         (row) => row.count < count || (row.count === count && row.order > order)
       )
       if (at < 0) at = bm.rows.length
-      bm.rows.splice(at, 0, { id: sessionId, count, order })
+      bm.rows.splice(at, 0, { id: sessionId, count, hidden, order })
     }
     renderSessions()
   }
@@ -9252,7 +9646,10 @@
     els.sessions.append(title)
     for (const row of bm.rows) {
       const session = bm.sessions.get(row.id)
-      if (session) els.sessions.append(buildSessionRow(session, { matchCount: row.count }))
+      if (!session) continue
+      els.sessions.append(
+        buildSessionRow(session, { matchCount: row.count, hiddenCount: row.hidden })
+      )
     }
     if (bm.rows.length) return
     const note = document.createElement('div')
@@ -11041,6 +11438,87 @@
     return color
   }
 
+  function debugSearchMode() {
+    const icon = document.getElementById('searchIcon')
+    const rows = sessionRowsInOrder()
+    const at = rows.findIndex((row) => row.el.classList.contains('search-cursor'))
+    return {
+      on: !!(els.app && els.app.classList.contains('searching')),
+      focused: document.activeElement === els.search,
+      activeElement: document.activeElement
+        ? document.activeElement.id || document.activeElement.tagName
+        : null,
+      value: els.search ? els.search.value : null,
+      caret: els.search ? [els.search.selectionStart, els.search.selectionEnd] : null,
+      placeholder: els.search ? els.search.placeholder : null,
+      iconClass: icon ? icon.className : null,
+      iconTitle: icon ? icon.getAttribute('title') : null,
+      iconColor: icon ? window.getComputedStyle(icon).color : null,
+      blue: debugCssVarColor('--accent-blue-border'),
+      logoGreen: debugCssVarColor('--logo-green'),
+      // getComputedStyle does not report -webkit- pseudo-elements, so this
+      // reads the stylesheet rule that hides the native cancel button.
+      cancelButtonHidden: debugSearchCancelHidden(),
+      selectedId: state.selectedId || null,
+      anchorId: state.searchAnchorId || null,
+      toasts: Array.from(state.toasts.keys()),
+      cursor: state.searchCursor || null,
+      cursorRow: at >= 0 ? { index: at, section: rows[at].section, id: rows[at].id } : null,
+      rows: rows.map((row) => ({ section: row.section, id: row.id }))
+    }
+  }
+
+  function debugSearchCancelHidden() {
+    for (const sheet of Array.from(document.styleSheets)) {
+      let rules = []
+      try {
+        rules = Array.from(sheet.cssRules || [])
+      } catch {
+        continue
+      }
+      for (const rule of rules) {
+        if (
+          rule.selectorText &&
+          rule.selectorText.includes('#search::-webkit-search-cancel-button') &&
+          rule.style.display === 'none'
+        ) {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
+  // The logo screen as text: the terminal's visible rows (source 'screen',
+  // the default), or devLogoText's lines with the escapes removed ('dev').
+  function debugLogoText(source) {
+    const plain = (line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    let lines
+    const cols = state.term ? state.term.cols : STARTUP_LOGO_COLS
+    if (source === 'dev') {
+      lines = plain(devLogoText(cols)).split('\r\n')
+    } else {
+      const buffer = state.term ? state.term.buffer.active : null
+      lines = []
+      if (buffer) {
+        for (let y = 0; y < state.term.rows; y++) {
+          const line = buffer.getLine(buffer.viewportY + y)
+          lines.push(line ? line.translateToString(true) : '')
+        }
+      }
+    }
+    return {
+      source: source === 'dev' ? 'dev' : 'screen',
+      cols,
+      logoCols: STARTUP_LOGO_COLS,
+      startupLogoActive: !!state.startupLogoActive,
+      rows: lines.map((text, row) => {
+        const trimmed = text.trim()
+        return { row, text: trimmed, col: trimmed ? text.indexOf(trimmed) : -1 }
+      })
+    }
+  }
+
   function debugStyleOf(selector) {
     const el = selector ? document.querySelector(selector) : null
     if (!el) return { found: false, selector: selector || null }
@@ -11066,7 +11544,19 @@
       title: el.title || '',
       cursor: styles.cursor,
       opacity: Number(styles.opacity),
-      pointerEvents: styles.pointerEvents
+      pointerEvents: styles.pointerEvents,
+      // 261114_live-output-and-fixes kit (R6/R7).
+      fontFamily: styles.fontFamily,
+      ariaLabel: el.getAttribute('aria-label'),
+      // R8-R13: borders, enabled state and the animations' clocks.
+      borderWidth: styles.borderTopWidth,
+      borderColor: styles.borderTopColor,
+      disabled: !!el.disabled,
+      animationClocks: animations.map((a) => ({
+        name: a.animationName || null,
+        startTime: a.startTime,
+        currentTime: a.currentTime
+      }))
     }
   }
 
@@ -11287,12 +11777,23 @@
     if (command === 'playback-state') return debugPlaybackState()
     if (command === 'popup-shows') return debugTakePopupShows()
     if (command === 'style-of') return debugStyleOf(request.selector)
+    // The 261114_live-output-and-fixes kit's R8-R13 commands: pure reads.
+    if (command === 'search-mode') return debugSearchMode()
+    if (command === 'logo-text') return debugLogoText(request.source)
     // The 261111_buffer-search kit's commands: pure reads.
     if (command === 'search-state') return debugSearchState()
     // The 261113_ui-polish kit's commands: reads, and the duration formatter.
     if (command === 'size-lock-state') return debugSizeLockState()
     if (command === 'duration-format') return { text: formatDuration(Number(request.ms)) }
     if (command === 'buffer-search-log') return debugTakeBufferSearchLog()
+    // The 261114_live-output-and-fixes kit's commands.
+    if (command === 'live-stream-state') return debugLiveStreamState()
+    if (command === 'live-drop-next') {
+      const chunks = Number(request.chunks)
+      state.liveDropNext = Number.isFinite(chunks) ? Math.max(0, Math.floor(chunks)) : 1
+      return debugLiveStreamState()
+    }
+    if (command === 'live-seam') return debugLiveSeam(String(request.prefix || ''))
     if (command === 'key-probe') return debugKeyProbe(request.action, request)
     if (command === 'selection-log') {
       debugStartSelectionLog()
@@ -11301,6 +11802,51 @@
       return { logging: debugKit.logging, events }
     }
     throw new Error(`Unknown debug renderer command: ${command}`)
+  }
+
+  function debugLiveStreamState() {
+    return {
+      selectedId: state.selectedId,
+      mode: state.mode,
+      stream: state.liveStream.snapshot(),
+      resyncs: state.liveResyncs,
+      resyncing: !!state.liveResync,
+      dropNext: state.liveDropNext,
+      writesQueued: state.liveWrites.queue.length,
+      writing: state.liveWrites.active
+    }
+  }
+
+  // The seam check (261114 R1-R3, from delivery-probe/dup2.sh): every line of
+  // the terminal's buffers (normal with its scrollback, then the alternate
+  // screen) that starts with `prefix` and a number; which numbers show more
+  // than once and which between the first and the last are missing.
+  function debugLiveSeam(prefix) {
+    const out = { prefix, lines: 0, first: null, last: null, dups: [], missing: [] }
+    if (!state.term || !prefix) return out
+    const seen = new Map()
+    const buffers = [state.term.buffer.normal, state.term.buffer.alternate]
+    for (const buffer of buffers) {
+      for (let row = 0; row < buffer.length; row++) {
+        const line = buffer.getLine(row)
+        if (!line) continue
+        const text = line.translateToString(true)
+        if (!text.startsWith(prefix)) continue
+        const n = Number.parseInt(text.slice(prefix.length), 10)
+        if (!Number.isFinite(n)) continue
+        out.lines++
+        seen.set(n, (seen.get(n) || 0) + 1)
+      }
+    }
+    const numbers = [...seen.keys()].sort((a, b) => a - b)
+    if (!numbers.length) return out
+    out.first = numbers[0]
+    out.last = numbers[numbers.length - 1]
+    for (const n of numbers) if (seen.get(n) > 1) out.dups.push(n)
+    for (let n = out.first; n <= out.last && out.missing.length < 50; n++) {
+      if (!seen.has(n)) out.missing.push(n)
+    }
+    return out
   }
 
   window.__zbtermDebugTerminalDisplay = () => debugTerminalDisplay()

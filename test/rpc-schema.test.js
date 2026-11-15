@@ -55,7 +55,8 @@ test('EVENT_DATA round trips session:data (pty source)', (t) => {
       kind: null,
       cols: null,
       rows: null,
-      data: Buffer.from('hi')
+      data: Buffer.from('hi'),
+      end: null
     }
   )
 })
@@ -82,7 +83,8 @@ test('EVENT_DATA round trips session:data (socket source)', (t) => {
       kind: null,
       cols: null,
       rows: null,
-      data: Buffer.from('yo')
+      data: Buffer.from('yo'),
+      end: null
     }
   )
 })
@@ -102,7 +104,8 @@ test('EVENT_DATA round trips player:data (richer shape, multi-byte-boundary payl
       kind: 0,
       cols: 80,
       rows: 24,
-      data
+      data,
+      end: null
     },
     {
       name: 'player:data',
@@ -114,7 +117,8 @@ test('EVENT_DATA round trips player:data (richer shape, multi-byte-boundary payl
       kind: 0,
       cols: 80,
       rows: 24,
-      data
+      data,
+      end: null
     }
   )
 })
@@ -133,7 +137,8 @@ test('EVENT_DATA round trips a null data payload (player:end-adjacent non-DATA p
       kind: 1,
       cols: null,
       rows: null,
-      data: null
+      data: null,
+      end: null
     },
     {
       name: 'player:data',
@@ -145,7 +150,8 @@ test('EVENT_DATA round trips a null data payload (player:end-adjacent non-DATA p
       kind: 1,
       cols: null,
       rows: null,
-      data: null
+      data: null,
+      end: null
     }
   )
 })
@@ -248,4 +254,46 @@ test('worker and lifecycle both wire events from the shared schema constants', (
     /for \(const name of EVENT_DATA_NAMES\)/.test(lifecycle),
     'lifecycle subscribes to binary events by iterating EVENT_DATA_NAMES'
   )
+})
+
+// 261114_live-output-and-fixes: session:data's stream position.
+test('EVENT_DATA carries session:data end, and decodes a body without it', (t) => {
+  roundTrip(
+    t,
+    FrameKind.EVENT_DATA,
+    0,
+    {
+      name: 'session:data',
+      sessionId: 's1',
+      hd: false,
+      source: 'pty',
+      data: Buffer.from('hi'),
+      end: 70002
+    },
+    {
+      name: 'session:data',
+      sessionId: 's1',
+      hd: false,
+      source: 'pty',
+      seq: null,
+      tsMs: null,
+      kind: null,
+      cols: null,
+      rows: null,
+      data: Buffer.from('hi'),
+      end: 70002
+    }
+  )
+  // A body as a core before 261114 wrote it: no trailing `end` field.
+  const full = encodeFrame(FrameKind.EVENT_DATA, 0, {
+    name: 'session:data',
+    sessionId: 's1',
+    hd: false,
+    source: 'pty',
+    data: Buffer.from('hi')
+  })
+  const old = full.subarray(0, full.byteLength - 1)
+  const decoded = decodeFrame(old)
+  t.is(decoded.body.end, null, 'no end: null')
+  t.alike(decoded.body.data, Buffer.from('hi'), 'the data still decodes')
 })

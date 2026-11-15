@@ -28,6 +28,14 @@ const SNAPSHOT_BYTES = 256 * 1024
 // session.searchBuffer reads a mirror this many logical lines at a time, then
 // yields, so several searches and the live output interleave in the worker.
 const BUFFER_SEARCH_SLICE = 500
+// Stream positions (261114, design A): `session:data` carries `end`, frames
+// `through`, session state `position`. ZBTERM_NO_STREAM_POS=1 leaves all three
+// out, as a core before 261114 does; it exists for the U2 check only.
+const STREAM_POSITIONS = !(
+  typeof process === 'object' &&
+  process.env &&
+  process.env.ZBTERM_NO_STREAM_POS === '1'
+)
 const SNAPSHOT_MS = 30 * 1000
 const FLOW_LIMIT = 1024 * 1024
 // The core's own backlog: output recorded but not yet written to the live
@@ -685,31 +693,40 @@ class SessionEngine extends EventEmitter {
   async openSession(sessionId, opts = {}) {
     if (this.sessions.has(sessionId)) {
       const runtime = this.sessions.get(sessionId)
-      return await this._sessionState(sessionId, runtime)
+      return await this._sessionState(sessionId, runtime, opts)
     }
     if (this.remoteSessions.has(sessionId)) {
       const remote = this.remoteSessions.get(sessionId)
       const withFrame = opts.frame !== false
-      if (withFrame) await remote.mirrorQueue.catch(() => {})
       if (remote.timelineQueue) await remote.timelineQueue.catch(() => {})
       await this._refreshRemoteTimelineFromDisk(remote)
       remote.store.playbackLength = await this._remoteAvailableLength(remote)
+      const availability = await remoteAvailabilitySummary(remote)
+      // The frame last, right after the mirror catches up, with the stream
+      // position it holds (261114 R3: the viewer core's own count).
+      let frame = null
+      if (withFrame) {
+        await remote.mirrorQueue.catch(() => {})
+        frame = remote.mirror
+          ? {
+              ...remote.mirror.snapshot(this._remoteKnownLength(remote)),
+              hd: !!remote.hd
+            }
+          : remote.frame
+        if (frame && remote.mirror && STREAM_POSITIONS) {
+          frame = { ...frame, through: remote.mirrorBytes || 0 }
+        }
+      }
       return {
         sessionId,
         info: remote.store.info,
         active: remote.active,
         timeline: remote.store.timeline,
         length: remote.store.playbackLength,
-        availability: await remoteAvailabilitySummary(remote),
+        availability,
         hd: !!remote.hd,
-        frame: !withFrame
-          ? null
-          : remote.mirror
-            ? {
-                ...remote.mirror.snapshot(this._remoteKnownLength(remote)),
-                hd: !!remote.hd
-              }
-            : remote.frame
+        position: STREAM_POSITIONS ? remote.bytesSeen || 0 : undefined,
+        frame
       }
     }
     const entry = await this.catalog.get(sessionId)
@@ -1256,9 +1273,10 @@ class SessionEngine extends EventEmitter {
     const query = typeof args.query === 'string' ? args.query : ''
     const searchKey = args.searchKey === null ? '' : String(args.searchKey)
     const seq = Number.isFinite(args.seq) ? args.seq : null
-    const answer = (count, flags = {}) => ({
+    const answer = (count, flags = {}, hidden = 0) => ({
       sessionId,
       count,
+      hidden,
       cancelled: !!flags.cancelled,
       gone: !!flags.gone
     })
@@ -1288,7 +1306,9 @@ class SessionEngine extends EventEmitter {
     const buffers = [term.buffer.normal]
     if (term.buffer.active.type === 'alternate') buffers.push(term.buffer.alternate)
     let count = 0
+    let hidden = 0
     for (const buffer of buffers) {
+      const before = count
       let row = 0
       for (;;) {
         const slice = scanBuffer(buffer, query, { from: row, lines: BUFFER_SEARCH_SLICE, limit: 0 })
@@ -1314,8 +1334,11 @@ class SessionEngine extends EventEmitter {
           row = slice.next
         }
       }
+      // A full-screen program's terminal shows the alternate screen only;
+      // the normal buffer's matches are behind it (261114 R5).
+      if (buffers.length > 1 && buffer === term.buffer.normal) hidden += count - before
     }
-    return answer(count)
+    return answer(count, {}, hidden)
   }
 
   ack(sessionId, bytes = 0) {
@@ -1833,10 +1856,14 @@ class SessionEngine extends EventEmitter {
     runtime.mirrorBacklog += data.byteLength
     if (record) runtime.appendBacklog += data.byteLength
     this._updateFlow(sessionId, runtime)
+    // `end`: the stream position after this chunk (261114, design A), so the
+    // renderer can tell which bytes a frame (`through`) already holds.
+    runtime.bytesSeen += data.byteLength
     this.emit('session:data', {
       sessionId,
       source: 'pty',
       hd: !!runtime.hd,
+      end: STREAM_POSITIONS ? runtime.bytesSeen : undefined,
       data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
     })
     if (record) {
@@ -1854,7 +1881,6 @@ class SessionEngine extends EventEmitter {
         this._updateFlow(sessionId, runtime)
       }
     })
-    runtime.bytesSeen += data.byteLength
     if (record) this._maybeSnapshot(sessionId)
   }
 
@@ -2250,15 +2276,20 @@ class SessionEngine extends EventEmitter {
     }
   }
 
-  async _sessionState(sessionId, runtime) {
+  async _sessionState(sessionId, runtime, opts = {}) {
     // While an extended session restores its history the live mirror holds
     // nothing worth painting; answer at once with no frame and let the caller
     // repaint on `session:restored` rather than hang until the replay ends.
+    // The frame and its stream position (`through`) are taken in one
+    // synchronous step after the last await (261114, design A): output that
+    // arrives while availability is read must be either in the frame or
+    // after `through`, never neither. Chunks still queued for the mirror go
+    // in as a raw tail, as in buildLiveBootstrap.
+    const availability = await availabilitySummary(runtime.store)
     let frame = null
-    if (!runtime.restoring) {
+    if (!runtime.restoring && opts.frame !== false) {
       await runtime.mirrorQueue
-      frame = runtime.mirror.snapshot(runtime.store.log.length)
-      frame.hd = runtime.hd
+      if (!runtime.restoring) frame = this._liveFrame(runtime)
     }
     return {
       sessionId,
@@ -2267,10 +2298,25 @@ class SessionEngine extends EventEmitter {
       restoring: !!runtime.restoring,
       timeline: runtime.store.timeline,
       length: runtime.store.log.length,
-      availability: await availabilitySummary(runtime.store),
+      availability,
       hd: runtime.hd,
+      // Every byte emitted so far: a renderer that wrote less after a quiet
+      // spell lost the tail (U1).
+      position: STREAM_POSITIONS ? runtime.bytesSeen : undefined,
       frame
     }
+  }
+
+  // Synchronous: the mirror's screen plus the chunks not yet written to it,
+  // and the stream position that holds (every byte emitted so far).
+  _liveFrame(runtime) {
+    const frame = runtime.mirror.snapshot(runtime.store.log.length)
+    if (runtime.mirrorPending && runtime.mirrorPending.length) {
+      frame.data += Buffer.concat(runtime.mirrorPending).toString('utf8')
+    }
+    frame.hd = runtime.hd
+    if (STREAM_POSITIONS) frame.through = runtime.bytesSeen
+    return frame
   }
 
   identity() {
@@ -2664,6 +2710,11 @@ class SessionEngine extends EventEmitter {
     const remote = this.remoteSessions.get(sessionId)
     if (!remote) return
     remote.hd = !!opts.hd
+    // This core's own stream position for the joined session (261114 R3):
+    // `bytesSeen` when a chunk is emitted, `mirrorBytes` once the mirror
+    // holds it (a frame's `through`).
+    remote.bytesSeen = (remote.bytesSeen || 0) + data.byteLength
+    const end = remote.bytesSeen
     if (remote.mirror) {
       // The mirror is serialised when a caller asks for the screen
       // (openSession, _currentRemoteFrame), never per chunk: a snapshot of
@@ -2672,11 +2723,19 @@ class SessionEngine extends EventEmitter {
       remote.mirrorQueue = remote.mirrorQueue
         .then(() => remote.mirror.write(data.toString('utf8')))
         .catch((err) => this.emit('engine:error', EngineError.from(err).toJSON()))
+        .then(() => {
+          remote.mirrorBytes = end
+        })
+    } else {
+      remote.mirrorQueue = remote.mirrorQueue.then(() => {
+        remote.mirrorBytes = end
+      })
     }
     this.emit('session:data', {
       sessionId,
       source: 'socket',
       hd: !!opts.hd,
+      end: STREAM_POSITIONS ? end : undefined,
       data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
     })
   }

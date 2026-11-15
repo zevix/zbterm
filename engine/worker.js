@@ -86,7 +86,8 @@ engine.on('session:data', (payload) => {
     sessionId: payload.sessionId,
     hd: !!payload.hd,
     source: payload.source || null,
-    data: toBuffer(payload.data)
+    data: toBuffer(payload.data),
+    end: Number.isFinite(payload.end) ? payload.end : null
   })
 })
 engine.on('player:data', (payload) => {

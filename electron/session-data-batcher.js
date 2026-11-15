@@ -43,7 +43,10 @@ function createSessionDataBatcher({
       items.length === 1
         ? first.data
         : Buffer.concat(items.map((item) => Buffer.from(item.data || [])))
-    send({ ...first, data })
+    // A joined item ends where its last chunk ended (261114: the stream
+    // position `end`, when the core sends one).
+    const last = items[items.length - 1]
+    send(last.end === undefined ? { ...first, data } : { ...first, end: last.end, data })
   }
 
   function push(data) {

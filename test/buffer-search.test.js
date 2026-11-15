@@ -224,7 +224,7 @@ test('searchBuffer counts a live session, normal buffer plus the shown alt scree
     searchKey: 'w',
     seq: 1
   })
-  t.alike(answer, { sessionId, count: 200, cancelled: false, gone: false })
+  t.alike(answer, { sessionId, count: 200, hidden: 0, cancelled: false, gone: false })
 
   await push(engine, pty, sessionId, '\x1b[?1049h\x1b[Hneedle in less\r\n')
   answer = await engine.invoke('session.searchBuffer', {
@@ -234,6 +234,7 @@ test('searchBuffer counts a live session, normal buffer plus the shown alt scree
     seq: 2
   })
   t.is(answer.count, 201, 'normal buffer (200) plus the alt screen (1)')
+  t.is(answer.hidden, 200, 'the normal buffer is behind the alt screen: hidden (261114 R5)')
   await push(engine, pty, sessionId, '\x1b[?1049l')
   answer = await engine.invoke('session.searchBuffer', {
     sessionId,
@@ -242,6 +243,7 @@ test('searchBuffer counts a live session, normal buffer plus the shown alt scree
     seq: 3
   })
   t.is(answer.count, 200, 'alt screen left: its text is gone with it')
+  t.is(answer.hidden, 0, 'nothing hidden on the normal screen')
 
   answer = await engine.invoke('session.searchBuffer', {
     sessionId,
@@ -251,7 +253,7 @@ test('searchBuffer counts a live session, normal buffer plus the shown alt scree
   })
   t.alike(
     answer,
-    { sessionId, count: 0, cancelled: false, gone: false },
+    { sessionId, count: 0, hidden: 0, cancelled: false, gone: false },
     'all whitespace: no search'
   )
 })
@@ -325,6 +327,7 @@ test('searchBuffer: ended, pending and unknown sessions answer gone', async (t) 
     {
       sessionId,
       count: 0,
+      hidden: 0,
       cancelled: false,
       gone: true
     },
@@ -332,7 +335,7 @@ test('searchBuffer: ended, pending and unknown sessions answer gone', async (t) 
   )
   t.alike(
     await engine.invoke('session.searchBuffer', { sessionId: 'no-such-session', query: 'x' }),
-    { sessionId: 'no-such-session', count: 0, cancelled: false, gone: true },
+    { sessionId: 'no-such-session', count: 0, hidden: 0, cancelled: false, gone: true },
     'unknown: gone, not an error'
   )
   // A joined session before its bootstrap has no mirror yet.
@@ -381,7 +384,7 @@ test('searchBuffer reads in slices: a newer seq cancels the older one for its ke
   })
   t.alike(
     await first,
-    { sessionId, count: 0, cancelled: true, gone: false },
+    { sessionId, count: 0, hidden: 0, cancelled: true, gone: false },
     'seq 1 stopped at its first yield'
   )
   t.is(stale.cancelled, true, 'a request older than the newest is cancelled at once')
@@ -441,7 +444,7 @@ test('searchBuffer answers gone when the mirror is disposed or repainted between
   const restoring = runtime.mirror.restore({ cols: 120, rows: 40, data: 'repainted needle\r\n' })
   t.alike(
     await scan,
-    { sessionId, count: 0, cancelled: false, gone: true },
+    { sessionId, count: 0, hidden: 0, cancelled: false, gone: true },
     'repainted mid-scan: gone'
   )
   await restoring
@@ -459,7 +462,7 @@ test('searchBuffer answers gone when the mirror is disposed or repainted between
   old.dispose()
   t.alike(
     await scan,
-    { sessionId, count: 0, cancelled: false, gone: true },
+    { sessionId, count: 0, hidden: 0, cancelled: false, gone: true },
     'disposed mid-scan: gone'
   )
 })
@@ -523,7 +526,7 @@ test('searchBuffer reads a joined session in the copy the viewer holds', async (
   })
   t.alike(
     answer,
-    { sessionId, count: 10, cancelled: false, gone: false },
+    { sessionId, count: 10, hidden: 0, cancelled: false, gone: false },
     'the viewer counts its remote.mirror'
   )
   t.ok(viewer.remoteSessions.get(sessionId).mirror, 'it is the joined copy (remote.mirror)')

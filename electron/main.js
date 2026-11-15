@@ -864,10 +864,11 @@ function wireDebugServerEvents(server) {
   debugServerEventsWired = true
   const engine = lifecycle.engine
   const record = (name) => (data) => server.recordEvent(name, data)
-  engine.on('session:data', ({ sessionId, data }) => {
+  engine.on('session:data', ({ sessionId, data, end }) => {
     server.recordEvent('session:data', {
       sessionId,
-      bytes: data ? data.byteLength : 0
+      bytes: data ? data.byteLength : 0,
+      end: Number.isFinite(end) ? end : null
     })
   })
   engine.on('session:exit', record('session:exit'))

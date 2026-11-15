@@ -1,0 +1,46 @@
+# source me. Node app + private state dir; never the user's real stores.
+_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export UB_REPO="${UB_REPO:-$(git -C "$_here" rev-parse --show-toplevel)}"
+# zbterm has no .venv; the ubitron one is used only for safe_delete.
+export UB_PY="${UB_PY:-/ubitron/dev/.venv/bin/python}"
+# The state dir lives under the agent scratch root, so `safe_delete` can remove it. A script
+# (non-interactive shell) that created it removes it on a clean exit and keeps it, saying where,
+# on any other exit. A dir handed in through UBITRON_TEST_STATE_DIR, or one made by an
+# interactive `source`, is the caller's. A check script must not set its own `trap … EXIT`.
+if [ -z "${UBITRON_TEST_STATE_DIR:-}" ]; then
+  _ub_root="${UB_ACCEPT_TMP:-/tmp/claude-$(id -u)/accept}"; mkdir -p "$_ub_root"
+  export UBITRON_TEST_STATE_DIR="$(mktemp -d "$_ub_root/XXXXXXXX")"
+  case $- in *i*) ;; *)
+    _ub_state_cleanup() {
+      local rc=$?
+      # lib.sh::stop_app ends the app's own uisolate session first.
+      declare -F stop_app >/dev/null && stop_app || true
+      if [ "$rc" = 0 ]; then "$UB_PY" -m ubitron.envs.safe_delete "$UBITRON_TEST_STATE_DIR" >/dev/null
+      else echo "kept state dir (exit $rc): $UBITRON_TEST_STATE_DIR" >&2; fi
+      [ -d "$ACCEPT_LOG_DIR" ] && echo "logs kept: $ACCEPT_LOG_DIR" >&2
+      return "$rc"
+    }
+    trap _ub_state_cleanup EXIT ;;
+  esac
+fi
+# The logs sit beside the state dir, "<state dir>.logs", and are never deleted here
+export ACCEPT_LOG_DIR="${ACCEPT_LOG_DIR:-$UBITRON_TEST_STATE_DIR.logs}"; mkdir -p "$ACCEPT_LOG_DIR"
+# need <path-or-command> "<why>": a precondition of this host. Missing → exit 75
+# "cannot run here", which run_all.sh reports as CANNOT RUN (a FAIL, never a skip).
+# Use it at the top of a check script, never in this file (it is sourced by shells).
+need() {
+  [ -e "$1" ] || command -v "$1" >/dev/null 2>&1 \
+    || { echo "cannot run here: $1 missing ($2)" >&2; exit 75; }
+}
+# Project environment. The packaged app under test (repackage after every renderer or engine change):
+export ZBUI_OUT="${ZBUI_OUT:-/tmp/claude-$(id -u)/zblive/out}"
+export ZBUI_APP="${ZBUI_APP:-$ZBUI_OUT/ZBTerm-linux-x64/ZBTerm}"
+# Scratch HOME and storage, inside the state dir; a short TMPDIR (SSH-agent socket limit).
+export ZBUI_HOME="$UBITRON_TEST_STATE_DIR/home" ZBUI_STORAGE="$UBITRON_TEST_STATE_DIR/storage"
+export ZBUI_TMP="${ZBUI_TMP:-/tmp/zblv-k}"; mkdir -p "$ZBUI_HOME" "$ZBUI_STORAGE" "$ZBUI_TMP"
+# The packaged build carries no sidecar (baseline.md); the app finds it through this.
+export ZXTERM_CORE_BIN="${ZXTERM_CORE_BIN:-/zp/zdata/zeev/github/zbterm/npm/zxterm-core-linux-x64/zxterm-core}"
+# start_app / stop_app / cmd / state / key live in ../../261110_ui-chrome/acceptance/lib.sh, reused
+# unchanged. Helpers: ../../261113_ui-polish/acceptance/lib_up.sh (reused unchanged) and ./lib_lo.sh (this kit).
+export ZBUI_LIB="$_here/../../261110_ui-chrome/acceptance/lib.sh"
+export ZBUI_LIB_UP="$_here/../../261113_ui-polish/acceptance/lib_up.sh"

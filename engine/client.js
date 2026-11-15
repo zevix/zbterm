@@ -539,12 +539,15 @@ class EngineClient extends EventEmitter {
 
   _onEventData(body) {
     if (body.name === 'session:data') {
-      this.emit('session:data', {
+      const event = {
         sessionId: body.sessionId,
         source: body.source,
         hd: body.hd,
         data: body.data
-      })
+      }
+      // The stream position (261114); left out when the worker sent none.
+      if (Number.isFinite(body.end)) event.end = body.end
+      this.emit('session:data', event)
       return
     }
     if (body.name === 'player:data') {

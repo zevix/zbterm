@@ -151,6 +151,7 @@ const EventData = {
     OptionalUint.preencode(state, m.cols)
     OptionalUint.preencode(state, m.rows)
     OptionalBuffer.preencode(state, m.data)
+    OptionalUint.preencode(state, m.end)
   },
   encode(state, m) {
     c.uint.encode(state, EVENT_DATA_NAMES.indexOf(m.name))
@@ -163,6 +164,7 @@ const EventData = {
     OptionalUint.encode(state, m.cols)
     OptionalUint.encode(state, m.rows)
     OptionalBuffer.encode(state, m.data)
+    OptionalUint.encode(state, m.end)
   },
   decode(state) {
     const nameIndex = c.uint.decode(state)
@@ -177,7 +179,10 @@ const EventData = {
     const cols = OptionalUint.decode(state)
     const rows = OptionalUint.decode(state)
     const data = OptionalBuffer.decode(state)
-    return { name, sessionId, hd, source, seq, tsMs, kind, cols, rows, data }
+    // `end` (261114, session:data's stream position) comes last and is read
+    // only when there are bytes left, so a body without it still decodes.
+    const end = state.start < state.end ? OptionalUint.decode(state) : null
+    return { name, sessionId, hd, source, seq, tsMs, kind, cols, rows, data, end }
   }
 }
 

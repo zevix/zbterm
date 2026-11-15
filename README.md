@@ -63,8 +63,13 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   session list by name and highlights every match in the selected session's
   buffer, scrollback and full-screen programs included, with the count in the
   box; Enter and Shift+Enter step to the next and previous match and scroll it
-  into view, and Esc clears the box, the highlights and the filter and returns
-  to the terminal. In playback it searches the frame on screen and follows
+  into view, and Esc (or the blue "x" at the box's right end, shown while the
+  box has the focus or holds text) clears the box, the highlights and the
+  filter and returns to the terminal. Up and Down (or Ctrl+PgUp and Ctrl+PgDn)
+  select the previous and next session in the list, marked with a green
+  border, while the focus stays in the box; an ended session reached this way
+  is only shown, not resumed, with the "Press ^R to resume the session" hint,
+  and Ctrl+R in the box resumes it. In playback it searches the frame on screen and follows
   each seek. While the side pane is shown, the box is as wide as the pane and,
   under the name matches, a "Session buffer matches" section lists every live
   session (own or joined) whose buffer holds the text, most matches first,
@@ -75,7 +80,10 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - A green dot on the identity button means an identity is set up, an orange one
   that it is not; the app version is the last item of the settings menu
 - New viewers see the live view immediately; history downloads in the background with a visual indicator
-- Host can look back through history while viewers keep watching the live output
+- Host can look back through history while viewers keep watching the live output.
+  The history toolbar reads |<< |< ▶ >| >>|: |<< jumps to the first frame, |< and
+  >| step one frame, and >>| goes live (flashing with the Live button while the
+  live output runs) or, for an ended session, to its last frame
 - High-res mode for more frequent screen updates, togglable at any time
 - Encryption of data at rest and in transit
 - Ended sessions can be resumed (extended) at any time by the host: Ctrl+R in an
@@ -617,6 +625,7 @@ commands.
 | `ZBTERM_DEBUG` | app | `1` enables verbose packaged debug logging (same as `--debug`). |
 | `ZBTERM_DEBUG_SERVER` | app | `1` starts the debug REST API (same as `--debug-server`). |
 | `ZBTERM_DEBUG_SERVER_PORT` | app | Port for the debug REST API. |
+| `ZBTERM_NO_STREAM_POS` | engine | `1` makes the core leave out the live stream positions (`session:data` `end`, a frame's `through`), as a core before 2026-11-14 did; only for testing that the app still works against one. |
 | `ZBTERM_DEVTOOLS` | app | `1` opens renderer devtools on startup (same as `--devtools`). |
 | `ZBTERM_RELAY_PUBLIC_KEY` | app (viewer/host) | Pin a specific relay instead of resolving one via the registry. |
 | `ZBTERM_RELAY_FALLBACK_MS` | app (viewer) | Delay before racing a relay connection alongside hole-punching. Default `5000`. |
