@@ -85,3 +85,30 @@ Open items:
 - The user's approval of R1–R7 in `design.md`.
 - The verifier report.
 - The user's "done".
+
+## 2026-11-15, R14–R15 built and checked
+
+Code in `renderer/app.js` (capture `keydown`: Ctrl+PgUp/PgDn in the box call `moveSearchSelection`;
+`extendSession({ keepFocus })`; the search walk selects with `{ keepFocus: true, extend: false }` and
+shows or dismisses the `resume-hint` toast; `search-mode` reports `toasts`), README updated, lint passes.
+
+`R14_search_resume.sh` first failed on its check, not the app: after Ctrl+R resumed b, the last
+`on_row` required the result rows to be unchanged, but b's resumed output ("r14-b-resumed") matches
+the query, so a "Session buffer matches" row for b is legitimately appended. Cursor, selection,
+focus, caret and value were all as required. The check now compares the earlier rows as a prefix
+after the resume (unchanged rows everywhere else); its `Asserts:` line and `design.md` say so.
+No app change.
+
+Full kit `run_all.sh` under uisolate: all 13 PASS (R1–R6, R8, R10, R11, R13, R14, U1, U2;
+logs `/tmp/claude-1000/accept/EkncczCS.logs`).
+
+## 2026-11-15, done
+
+The user approved everything still open ("ok all approved, done great work"):
+
+- R1–R7 in `design.md`.
+- The R10 anchor: "Current session" stays on the session the walk started from.
+- The looser check after the R14 resume (the earlier rows kept as a prefix).
+
+The user closed the project. No separate verifier report was written: the user's own test and
+approval replaced it. Nothing is committed yet.
