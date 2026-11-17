@@ -347,6 +347,30 @@ test('viewer treats a host that presents no claim as unknown and joins anyway', 
 // harness
 // ---------------------------------------------------------------------------
 
+// 261115 (R42): a verified-only link refuses a requester with no verified
+// identity after the identity gate, before any member or epoch, and admits a
+// verified one as usual.
+test('a verified-only link refuses a viewer with no claim and admits a verified one', async (t) => {
+  const refused = await hostHarness(t, { link: { verifiedOnly: true } })
+  const outcome = await refused.join({ identityClaim: null, authKey: null })
+  t.is(outcome.type, 'error', 'the unidentified peer is denied')
+  t.is(outcome.code, CODES.E_AUTH)
+  t.is(outcome.message, 'This link admits only verified identities')
+  t.is(refused.calls.putMember, 0, 'no member record was written')
+  t.is(refused.calls.rotateEpoch, 0, 'no epoch rotation happened')
+
+  const h = await hostHarness(t, { link: { verifiedOnly: true } })
+  const viewer = await identityFor(h.viewerDevice, 'alice')
+  h.resolverKeys = [viewer.publishedKey]
+  const admitted = await h.join({
+    identityClaim: viewer.claim,
+    authKey: viewer.authKeyHex,
+    respond: (challenge) => viewer.sign(challenge, h.hostDevice, h.viewerDevice)
+  })
+  t.is(admitted.type, 'confirm', 'a verified viewer joins')
+  t.is(h.calls.putMember, 1)
+})
+
 async function hostHarness(t, opts = {}) {
   const hostDevice = await device(await temp())
   const viewerDevice = await device(await temp())
@@ -369,7 +393,8 @@ async function hostHarness(t, opts = {}) {
     maxViewers: 8,
     caps: VIEW_LIVE,
     autoJoin: true,
-    revoked: false
+    revoked: false,
+    ...opts.link
   }
   const runtime = {
     inputMode: 'host',

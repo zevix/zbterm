@@ -820,6 +820,11 @@ async function chooseDirectory(evt, args = {}) {
 }
 
 function handleAppInvoke(method, args = {}) {
+  if (method === 'app.quit') {
+    // The renderer's Ctrl+Q popup (261115 R2), after the user chose Quit.
+    setImmediate(() => requestAppQuit('shortcut:quit'))
+    return true
+  }
   if (method === 'app.info') {
     const port =
       debugServerEnabled && Number.isFinite(debugServerPortFlag) && debugServerPortFlag > 0
@@ -1573,19 +1578,19 @@ function installAppMenu() {
   Menu.setApplicationMenu(null)
 }
 
-// The shortcuts the removed menu used to carry: Ctrl+Q quits and
-// Ctrl+Shift+I toggles DevTools. Matched on the exact chord and swallowed
-// before the page sees it, as the menu accelerators were; every other key
-// (Ctrl+R reverse-search included) still reaches the terminal.
+// The shortcut the removed menu used to carry: Ctrl+Shift+I toggles
+// DevTools, matched on the exact chord and swallowed before the page sees it,
+// as the menu accelerator was. Ctrl+Q is no longer quit here: the page gets
+// it, sends it to the terminal (0x11) when the terminal has the focus, and
+// otherwise asks (Quit / Cancel / Send ^Q, 261115 R1-R3) and quits through
+// the `app.quit` invoke. Every other key (Ctrl+R reverse-search included)
+// still reaches the terminal.
 function installAppShortcuts(win) {
   if (isMac) return
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return
     const key = String(input.key || '').toLowerCase()
-    if (key === 'q' && !input.shift) {
-      event.preventDefault()
-      requestAppQuit('shortcut:quit')
-    } else if (key === 'i' && input.shift) {
+    if (key === 'i' && input.shift) {
       event.preventDefault()
       win.webContents.toggleDevTools()
     }
@@ -1682,6 +1687,13 @@ ipcMain.handle('app:setIceServers', (evt, text) => {
     source: resolved.source,
     count: resolved.servers.length
   }))
+})
+
+// The renderer's "ZBTerm relay access key" setting (preload `app.setRelayKey`,
+// 261115 R18), kept by the lifecycle so a restarted worker gets it again.
+ipcMain.handle('app:setRelayKey', (evt, key) => {
+  const text = typeof key === 'string' ? key.trim() : ''
+  return lifecycle.setRelayKey(text).then(() => ({ relayKey: text || null }))
 })
 
 ipcMain.handle('clipboard:writeText', (evt, text) => {

@@ -61,15 +61,17 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   right; Ctrl+Shift+F focuses it (it is never sent to the program in the
   terminal, and does nothing while a dialog is open). Its text filters the
   session list by name and highlights every match in the selected session's
-  buffer, scrollback and full-screen programs included, with the count in the
+  buffer, scrollback and full-screen programs included (past 2000 matching
+  rows, those within three screens of the view), with the count in the
   box; Enter and Shift+Enter step to the next and previous match and scroll it
   into view, and Esc (or the blue "x" at the box's right end, shown while the
   box has the focus or holds text) clears the box, the highlights and the
   filter and returns to the terminal. Up and Down (or Ctrl+PgUp and Ctrl+PgDn)
   select the previous and next session in the list, marked with a green
   border, while the focus stays in the box; an ended session reached this way
-  is only shown, not resumed, with the "Press ^R to resume the session" hint,
-  and Ctrl+R in the box resumes it. In playback it searches the frame on screen and follows
+  is only shown, not resumed, with the "Press ^R or Enter to resume the
+  session" hint, and Ctrl+R in the box (or Enter, while that hint shows)
+  resumes it. In playback it searches the frame on screen and follows
   each seek. While the side pane is shown, the box is as wide as the pane and,
   under the name matches, a "Session buffer matches" section lists every live
   session (own or joined) whose buffer holds the text, most matches first,
@@ -86,8 +88,31 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   live output runs) or, for an ended session, to its last frame
 - High-res mode for more frequent screen updates, togglable at any time
 - Encryption of data at rest and in transit
-- Ended sessions can be resumed (extended) at any time by the host: Ctrl+R in an
-  offline session, or the Extend button. The new shell starts on a fresh line
+- Ctrl+PgUp and Ctrl+PgDn outside the search box switch to the previous and
+  next session in the list, scrolling the list so the selected one stays in
+  view; an ended session reached that way is only shown, not resumed, with
+  the same hint
+- Drag a session to another place in the list: over a row's left icon a drag
+  handle shows. Pressing it lifts the row out of the list; it follows the
+  mouse anywhere in the window, a bold dashed line marks the gap it will land
+  in (its old place is one of them), and on release it flies into that gap.
+  The line always shows, in the nearest gap of the row's own group (pinned or
+  not), even with the pointer outside the list; only Escape sends it back. A moved session
+  keeps its new place (it gets a manual sort time between its new
+  neighbours'), across restarts. Pinned sessions are reordered among
+  themselves
+- F2 edits the selected session (as its row's Edit button), from anywhere in
+  the window; the settings menu's "Map F2 to edit profile" (on by default) turns it off,
+  leaving F2 to the terminal
+- Ctrl+1 to Ctrl+9 select the first nine pinned sessions, in pin order; each
+  pin shows its number. The settings menu's "Map Ctrl+1 to Ctrl+9 to pinned
+  profiles" (on by default) turns it off, leaving the keys to the terminal
+- While searching, every section heading but "Current session" has a
+  (hide)/(show) link that folds its rows away for the rest of the run
+- Ctrl+Q in the terminal is sent to the program like any other key (^Q);
+  anywhere else it asks: Quit, Cancel, or "Send ^Q to the terminal"
+- Ended sessions can be resumed (extended) at any time by the host: Ctrl+R (or
+  Enter) in an offline session, or the Extend button. The new shell starts on a fresh line
   under the old screen; a full-screen program redraws in place
 - Unrecorded sessions: untick "Record session" in the New or Copy dialog and
   the session runs live with nothing of its output stored. It cannot be
@@ -129,9 +154,11 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   - [Freenet](#freenet)
 - [Setting Up a Relay (Headless VPS)](#relay-setup)
   - [1. Run the relay](#relay-run)
-  - [2. Publish it to the registry](#relay-publish)
-  - [3. Firewall](#relay-firewall)
-  - [Rotating or replacing the relay](#relay-rotate)
+  - [2. The two keys](#relay-keys)
+  - [3. Rotating the access key](#relay-rotate)
+  - [4. Firewall](#relay-firewall)
+  - [5. Run it as a service](#relay-systemd)
+  - [The official relay and the registry](#relay-publish)
   - [Abuse considerations](#relay-abuse)
 - [Debug Server](#debug-server)
   - [Endpoints](#debug-endpoints)
@@ -352,6 +379,7 @@ server's `POST /sessions/:sessionId/share`):
 | `type`        | `'single'` \| `'group'`   | `'single'`                  | `single` links are consumed after one viewer joins; `group` links allow multiple concurrent viewers. |
 | `maxViewers`  | integer, 1–99             | 1 (`single`) / 99 (`group`) | Cap on concurrent viewers for a `group` link. |
 | `autoJoin`    | boolean                   | `true`                      | Whether a join request is auto-approved or requires host approval (see `share:approval-pending`). |
+| `verifiedOnly` | boolean                   | `false`                     | Admit only a requester whose identity verified (a GitHub claim); one with no claim is refused with reason `unverified`, before any approval prompt. The Share dialog's "Only verified people can join". |
 | `caps`        | bitmask (see below)       | derived from other options  | Explicit permission bitmask; overrides the individual flags below if set. |
 | `sendInput`   | boolean                   | `true`                      | Whether the viewer is granted `SEND_INPUT`. Typing still needs keyboard sharing turned on for the session (`share.setInputMode`). |
 | `quickCatchup`| boolean                   | `true`                      | Whether the viewer gets a fast-forwarded backlog on join. |
@@ -382,14 +410,15 @@ third, publicly reachable box:
   Once offered, hyperdht races the relay and the punch concurrently and
   transparently swaps the live connection over to the direct path if the
   punch succeeds later — the relay is a fallback path, not a replacement.
-- The relay's public key is *not* configured by the user. It's discovered
+- The default relay's key is *not* configured by the user. It's discovered
   automatically via a DHT mutable record — the Holepunch DHT's native
   equivalent of a DNS TXT record. The app ships with a fixed, hardcoded
   lookup address (not a secret) and resolves the current relay's key from it
   at startup, refreshing every 15 minutes.
-- `ZBTERM_RELAY_PUBLIC_KEY` is an escape hatch: set it to skip the registry
-  lookup and pin a specific relay (e.g. your own private one instead of the
-  default).
+- To use your own [private relay](#relay-setup) instead, paste its access key
+  into the settings menu's "ZBTerm relay access key…" (empty = the default
+  relay). `ZBTERM_RELAY_PUBLIC_KEY` still wins over the setting: it
+  skips the registry lookup and pins a specific relay.
 
 Check `share.diagnostics()` (or `GET /share/diagnostics` on the debug server)
 for `relayPublicKey` / `relayFallbackMs` to confirm what's resolved, plus
@@ -428,6 +457,10 @@ of the shared default. It needs to run on a box with a real public IP (a
 VPS, not behind NAT) — a machine behind a router/CGNAT can't usefully act as
 a relay for others.
 
+The relay is one program, `zbterm-relay`, with two keys: a **relay secret**
+that never leaves the box, and a public **access key** derived from it that
+you hand to the people who should use the relay.
+
 ### 1. Run the relay <a name="relay-run"></a>
 
 `relay/server.js` is plain Node (no Electron), so you don't need a full app
@@ -449,95 +482,175 @@ npm run build:relay -- --all --jobs 4      # up to 4 targets at once
 ```
 
 Output goes to `out/relay/zbterm-relay-<version>-<platform>-<arch>` (e.g.
-`zbterm-relay-1.0.19-linux-x64`), plus a matching
-`zbterm-relay-registry-publish-<version>-<platform>-<arch>` for the
-[registry publisher](#relay-publish) below. Each is a single self-contained
-binary — no `node`, no `node_modules` needed on the target machine.
+`zbterm-relay-1.6.1-linux-x64`): a single self-contained binary — no
+`node`, no `node_modules` needed on the target machine. The examples below
+call it `zbterm-relay`.
 
-With no `ZBTERM_RELAY_SEED` set, it generates one and prints it once:
+On its first start it creates both keys and prints the one line you need:
 
 ```
-No ZBTERM_RELAY_SEED set - generated a new one:
-  ZBTERM_RELAY_SEED=<64 hex chars>
-ZBTerm relay listening on UDP port 49737
-  ZBTERM_RELAY_PUBLIC_KEY=<64 hex chars>
+[info] Created a new relay secret in /home/relay/.zbterm/relay-secret.
+[info] Created a new access salt in /home/relay/.zbterm/relay-access.
+ZBTerm relay v1.6.1 listening on UDP port 49737
+ZBTerm relay access key: <64 hex chars>
+  (paste it into ZBTerm: settings menu, "ZBTerm relay access key…")
+Caps: 64 total sessions, 4 per peer, 6h max lifetime
+Registry: not publishing (ZBTERM_REGISTRY_SEED is not set) - this relay and its access key stay private.
 ```
 
-Save `ZBTERM_RELAY_SEED` and pass it on every restart — it's the relay's
-identity; without it, the relay gets a new public key each restart. Keep the
-process running under systemd/pm2/similar.
-
-Relevant env vars (all optional):
-
-| Variable | Default | Meaning |
-| -------- | ------- | ------- |
-| `ZBTERM_RELAY_SEED` | random, printed once | 32-byte hex seed for the relay's identity keypair. |
-| `ZBTERM_RELAY_PORT` | `49737` | Fixed UDP port to bind — pin this so you have one deterministic port for the firewall rule. |
-| `ZBTERM_RELAY_MAX_SESSIONS` | `64` | Global cap on concurrent accepted connections. |
-| `ZBTERM_RELAY_MAX_SESSIONS_PER_PEER` | `4` | Cap on concurrent sessions from a single remote identity. |
-| `ZBTERM_RELAY_MAX_SESSION_MS` | `21600000` (6h) | Force-closes any single relayed session past this duration. |
+Send the access key to whoever should use the relay. In ZBTerm they paste it
+into the settings menu item **"ZBTerm relay access key…"** (below
+"STUN/TURN servers…"); leaving it empty means the default relay, and
+`ZBTERM_RELAY_PUBLIC_KEY` still wins over the setting. That dialog and the
+Share dialog show a status line for the relay in use. Later versions will
+add authorized users on top of the access key.
 
 The relay logs accept/reject/timeout events and a periodic stats summary
 (active sessions, matched/pending pairings, active streams) every 5 minutes.
 It never sees decrypted terminal data — it only forwards the already
 noise-encrypted stream between two peers.
 
-### 2. Publish it to the registry <a name="relay-publish"></a>
+### 2. The two keys <a name="relay-keys"></a>
 
-For ZBTerm clients to discover your relay automatically, publish its
-public key to the DHT registry record clients look up:
+| Key | Variable | File | Meaning |
+| --- | -------- | ---- | ------- |
+| Relay secret | `ZBTERM_RELAY_SEED` | `~/.zbterm/relay-secret` | 32 bytes as 64 hex characters. The relay's root secret; never leaves the box, back it up like a password. |
+| Access salt | `ZBTERM_RELAY_ACCESS_SALT` | `~/.zbterm/relay-access` | 32 bytes as 64 hex characters. Changing it (rotation) changes the access key. |
+
+The relay listens on a key pair derived from both (`sha256("zbterm-relay-access-v1"
+|| secret || salt)` as the hyperdht key pair seed); its public key is the
+**access key**. Only someone who holds the access key can reach the relay.
+
+For each key, `zbterm-relay`:
+
+- uses the variable when it is set (it must be 64 hex characters, or the
+  relay stops with an error). If the file also exists and holds a different
+  value, the variable wins for this run, the file is left as it is, and a
+  `[note]` line says so; the same value prints nothing.
+- otherwise reads the file (64 hex characters; surrounding whitespace or a
+  newline is fine). A file that fails this check stops the relay with an
+  error naming it — it is never overwritten; fix or remove it.
+- otherwise generates the key, writes the file (mode 0600, `~/.zbterm` mode
+  0700) and prints an `[info]` line saying where. If it cannot write there
+  (e.g. a read-only `HOME`), it runs with the generated key anyway and prints
+  an `[error]` that it was not saved: the access key will change on the next
+  restart.
+
+Two commands look without changing anything (neither writes a file nor
+touches the network):
 
 ```sh
-ZBTERM_REGISTRY_SEED=<registry-secret> node relay/registry-publish.js <relay-public-key-from-step-1>
+zbterm-relay --print-key   # prints "ZBTerm relay access key: <key>"; fails if a key is missing
+zbterm-relay --check       # says where each key comes from, prints the access key, exit 0 if usable
 ```
 
-`ZBTERM_REGISTRY_SEED` is the secret that controls what the registry
-record points at — treat it like a password, never commit it, and don't put
-it in the app. It's separate from `ZBTERM_RELAY_SEED`. The script
-re-publishes every 20 minutes (DHT-stored records aren't permanent) and,
-on restart, reads back the current `seq` before continuing, so a restart
-doesn't get shadowed by a stale higher-seq record. Keep it running alongside
-`relay/server.js`.
+`zbterm-relay --help` lists the commands; `--version` prints the version.
 
-If you'd rather not touch the shared default registry at all, skip this step
-and instead set `ZBTERM_RELAY_PUBLIC_KEY` directly on your ZBTerm
-host/viewer processes, pointing at your relay's public key from step 1.
+Other variables (all optional):
 
-### 3. Firewall <a name="relay-firewall"></a>
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `ZBTERM_RELAY_PORT` | `49737` | Fixed UDP port to bind — pin this so you have one deterministic port for the firewall rule. |
+| `ZBTERM_RELAY_MAX_SESSIONS` | `64` | Global cap on concurrent accepted connections. |
+| `ZBTERM_RELAY_MAX_SESSIONS_PER_PEER` | `4` | Cap on concurrent sessions from a single remote identity. |
+| `ZBTERM_RELAY_MAX_SESSION_MS` | `21600000` (6h) | Force-closes any single relayed session past this duration. |
 
-Only `relay/server.js` needs anything opened — it's the one process in this
-setup that must be dialable from the internet:
+### 3. Rotating the access key <a name="relay-rotate"></a>
 
-- Open **inbound UDP** on the port from step 1 (`49737` by default) on the
-  VPS's OS firewall (`ufw`/`iptables`/`firewalld`).
+Too busy, or the key went somewhere it shouldn't? Rotate it and send the new
+key only to who should use it:
+
+```sh
+zbterm-relay --rotate-access-key
+```
+
+This writes a fresh salt to `~/.zbterm/relay-access` (atomically, mode 0600)
+and prints the new `ZBTerm relay access key:` line. A running relay watches
+that file: within a few seconds it listens on the new key, closes the old
+one and prints the new key line. Relayed sessions already running carry on;
+new connections to the old key fail. If the file is changed to something
+invalid, the running relay keeps its current key and prints an error.
+
+The relay secret is not touched (it is created if missing). If
+`ZBTERM_RELAY_ACCESS_SALT` is set, the file is still written, but a note
+says the variable overrides it for any relay started with it — such a relay
+does not switch.
+
+### 4. Firewall <a name="relay-firewall"></a>
+
+The relay is the one process in this setup that must be dialable from the
+internet:
+
+- Open **inbound UDP** on its port (`49737` by default) on the VPS's OS
+  firewall (`ufw`/`iptables`/`firewalld`).
 - If there's a separate cloud security-group layer (AWS/GCP/DigitalOcean/
   Hetzner console etc.), open the same UDP port there too — it's a different
   firewall from the OS one.
 
-`relay/registry-publish.js` needs **no firewall changes** — it only makes
-outbound DHT queries, like any regular ZBTerm client.
+When the DHT reports the relay's node as firewalled, it prints on start:
 
-### Rotating or replacing the relay <a name="relay-rotate"></a>
+```
+[warn] The DHT reports this node as firewalled: UDP port 49737 is not reachable from outside, so this relay will not work for others. Open inbound UDP on that port (OS firewall and any cloud security group) on a host with a public IP.
+```
 
-Run a new `relay/server.js` with a new seed, then re-run
-`registry-publish.js` with the new public key (same `ZBTERM_REGISTRY_SEED`
-as before — that's what lets you point the registry at a different relay
-without shipping an app update). Clients pick up the change on their next
-15-minute refresh.
+### 5. Run it as a service <a name="relay-systemd"></a>
+
+A systemd unit (as root, `/etc/systemd/system/zbterm-relay.service`), with
+the keys in the `relay` user's `~/.zbterm`:
+
+```ini
+[Unit]
+Description=ZBTerm relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=relay
+ExecStart=/usr/local/bin/zbterm-relay
+Environment=ZBTERM_RELAY_PORT=49737
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```sh
+systemctl enable --now zbterm-relay
+journalctl -u zbterm-relay | grep 'access key'          # the current access key
+sudo -u relay zbterm-relay --rotate-access-key          # rotate; the service switches by itself
+ufw allow 49737/udp                                     # the UDP port from ZBTERM_RELAY_PORT
+```
+
+### The official relay and the registry <a name="relay-publish"></a>
+
+ZBTerm finds its built-in default relay through a DHT mutable record under a
+fixed registry public key (`engine/backends/pear/index.js::REGISTRY_PUBLIC_KEY`,
+not a secret), refreshed every 15 minutes. Mutable records expire, so the
+official relay re-publishes it: only when `ZBTERM_REGISTRY_SEED` (64 hex,
+the secret that controls that record — treat it like a password, never
+commit it or put it in the app) is set does `zbterm-relay` publish its
+**current** access key there, every 20 minutes and right after a rotation,
+resuming the record's `seq` from the DHT so a restart is not shadowed by an
+older record. It prints which it does:
+
+```
+Registry: publishing the access key under registry key <64 hex> every 20 min.
+Registry: not publishing (ZBTERM_REGISTRY_SEED is not set) - this relay and its access key stay private.
+```
+
+A private relay never sets it: its access key must not become public.
 
 ### Abuse considerations <a name="relay-abuse"></a>
 
-The relay's public key is not a secret — anyone who reads the app source or
-watches DHT traffic can find it (either the default one, or yours if you
-run your own). The underlying `blind-relay` protocol pairs any two peers
-that present a matching token; it has no concept of "is this a ZBTerm
-client" by itself. `relay/server.js`'s `ZBTERM_RELAY_MAX_SESSIONS*` /
-`ZBTERM_RELAY_MAX_SESSION_MS` caps bound the worst case (how many
-connections, from how many identities, for how long) and log activity, but
-they don't prevent unrelated use of your relay — that would need a
-capability-ticket system tying relay usage to genuine ZBTerm invites,
-which isn't implemented yet. If you're running a relay for wider-than-personal
-use, keep an eye on the stats log.
+The default relay's access key is public — anyone can read it from the
+registry record. A private relay's access key is only as private as the
+people you gave it to; rotate it when it leaks. The underlying `blind-relay`
+protocol pairs any two peers that present a matching token; it has no
+concept of "is this a ZBTerm client" by itself. The
+`ZBTERM_RELAY_MAX_SESSIONS*` / `ZBTERM_RELAY_MAX_SESSION_MS` caps bound the
+worst case (how many connections, from how many identities, for how long)
+and log activity. If you're running a relay for wider-than-personal use,
+keep an eye on the stats log.
 
 ## Debug Server <a name="debug-server"></a>
 
@@ -582,7 +695,7 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | `POST /sessions/:sessionId/extend` | Reopen an ended session live (`session.extend`). |
 | `POST /sessions/:sessionId/input` | Send input to a specific session. |
 | `POST /sessions/:sessionId/resize` | Resize (`cols`, `rows`). |
-| `POST /sessions/:sessionId/share` | Create a share link — see [Link Options](#link-options) (`type`, `maxViewers`, `caps`, `autoJoin`, `backend`; `inputMode` first calls `share.setInputMode`). |
+| `POST /sessions/:sessionId/share` | Create a share link — see [Link Options](#link-options) (`type`, `maxViewers`, `caps`, `autoJoin`, `verifiedOnly`, `backend`; `inputMode` first calls `share.setInputMode`). |
 | `GET /sessions/:sessionId/shares` | List share links for a session. |
 | `DELETE /sessions/:sessionId/shares/:linkId` | Revoke a share link. |
 | `POST /sessions/:sessionId/approvals/:requestId/approve` \| `/deny` | Approve/deny a pending join request. |
@@ -629,12 +742,14 @@ commands.
 | `ZBTERM_DEVTOOLS` | app | `1` opens renderer devtools on startup (same as `--devtools`). |
 | `ZBTERM_RELAY_PUBLIC_KEY` | app (viewer/host) | Pin a specific relay instead of resolving one via the registry. |
 | `ZBTERM_RELAY_FALLBACK_MS` | app (viewer) | Delay before racing a relay connection alongside hole-punching. Default `5000`. |
-| `ZBTERM_RELAY_SEED` | `relay/server.js` | Relay's identity seed. |
-| `ZBTERM_RELAY_PORT` | `relay/server.js` | Fixed UDP port to bind. Default `49737`. |
-| `ZBTERM_RELAY_MAX_SESSIONS` | `relay/server.js` | Global concurrent session cap. Default `64`. |
-| `ZBTERM_RELAY_MAX_SESSIONS_PER_PEER` | `relay/server.js` | Per-identity concurrent session cap. Default `4`. |
-| `ZBTERM_RELAY_MAX_SESSION_MS` | `relay/server.js` | Max lifetime of a single relayed session. Default 6h. |
-| `ZBTERM_REGISTRY_SEED` | `relay/registry-publish.js` | Secret controlling the DHT registry record. |
+| `ZBTERM_RELAY_SEED` | `zbterm-relay` (`relay/server.js`) | The relay secret (64 hex); wins over `~/.zbterm/relay-secret`. |
+| `ZBTERM_RELAY_ACCESS_SALT` | `zbterm-relay` | The access salt (64 hex); wins over `~/.zbterm/relay-access`. |
+| `ZBTERM_RELAY_PORT` | `zbterm-relay` | Fixed UDP port to bind. Default `49737`. |
+| `ZBTERM_RELAY_MAX_SESSIONS` | `zbterm-relay` | Global concurrent session cap. Default `64`. |
+| `ZBTERM_RELAY_MAX_SESSIONS_PER_PEER` | `zbterm-relay` | Per-identity concurrent session cap. Default `4`. |
+| `ZBTERM_RELAY_MAX_SESSION_MS` | `zbterm-relay` | Max lifetime of a single relayed session. Default 6h. |
+| `ZBTERM_REGISTRY_SEED` | `zbterm-relay` | Official relay only: the secret controlling the DHT registry record; when set, the relay publishes its current access key there. |
+| `ZBTERM_RELAY_BOOTSTRAP` | `zbterm-relay` | Test-only: comma-separated `host:port` DHT bootstrap nodes (a local hyperdht testnet) instead of the public DHT. |
 
 ## CLI Flags <a name="cli-flags"></a>
 

@@ -179,3 +179,44 @@ function doesNotThrow(t, fn) {
     t.fail(err && err.message ? err.message : err)
   }
 }
+
+// 2026-11-16: a worker IPC pipe that breaks (read ECONNRESET) was an uncaught
+// exception in the main process; it is a worker failure now.
+test('EngineClient treats a broken worker pipe as a worker failure, not an uncaught error', async (t) => {
+  const { Duplex } = require('stream')
+  const spawner = require('../engine/spawn-worker')
+  const original = spawner.spawnWorker
+  let raw = null
+  let destroyed = 0
+  spawner.spawnWorker = () => {
+    raw = new Duplex({ read() {}, write: (data, enc, cb) => cb() })
+    raw.stdout = new EventEmitter()
+    raw.stderr = new EventEmitter()
+    const destroy = raw.destroy.bind(raw)
+    raw.destroy = (err) => {
+      destroyed++
+      return destroy(err)
+    }
+    return raw
+  }
+  t.teardown(() => {
+    spawner.spawnWorker = original
+  })
+  const client = Object.create(EngineClient.prototype)
+  EventEmitter.call(client)
+  client._spawnArgs = { userData: '/data', profilePath: '/p' }
+  client._workerEntrypoint = '/w.js'
+  client._closed = false
+  client._closedByShell = false
+  client._spawnWorker()
+  const exits = []
+  client.on('worker:exit', (e) => exits.push(e))
+  const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+  raw.stderr.emit('error', reset)
+  t.is(exits.length, 0, 'a console pipe error is only logged')
+  raw.destroy(reset)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  t.is(exits.length, 1, 'one worker:exit for the broken IPC pipe')
+  t.ok(exits[0].unexpected && /ECONNRESET/.test(exits[0].status), exits[0].status)
+  t.ok(destroyed >= 1)
+})

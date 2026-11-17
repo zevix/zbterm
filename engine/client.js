@@ -124,6 +124,14 @@ class EngineClient extends EventEmitter {
     // single frame of 16 KiB or more report backpressure on an idle pipe.
     this._pipe = tunePipe(new FramedStream(this._worker))
     this._pipe.on('data', (buf) => this._onFrame(buf))
+    // A pipe that breaks (ECONNRESET when the worker dies or drops its end)
+    // is the worker failing, not the host: with no listener it was an
+    // uncaught exception and the main process's error dialog (2026-11-16).
+    const worker = this._worker
+    this._pipe.on('error', (err) => this._onWorkerPipeError(worker, 'ipc', err))
+    for (const name of ['stdin', 'stdout', 'stderr']) {
+      worker[name]?.on?.('error', (err) => this._onWorkerPipeError(worker, name, err))
+    }
     this._attachWorkerOutput(this._worker)
     this._failureSignaled = false
     this._worker.once('exit', (code, status) => this._onWorkerExit(code, status))
@@ -478,6 +486,21 @@ class EngineClient extends EventEmitter {
       return true
     }
     return false
+  }
+
+  _onWorkerPipeError(worker, name, err) {
+    const message = `worker ${name} pipe: ${(err && (err.code || err.message)) || err}`
+    // An old worker's pipe, or one the shell is closing: nothing to do.
+    if (worker !== this._worker || this._closedByShell) {
+      console.error('engine-client: ignoring', message)
+      return
+    }
+    // Its console output is only forwarded; the IPC pipe is the worker.
+    if (name !== 'ipc') {
+      console.error('engine-client:', message)
+      return
+    }
+    this._signalWorkerFailure(message)
   }
 
   _signalWorkerFailure(message) {

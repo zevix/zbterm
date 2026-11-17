@@ -179,10 +179,15 @@ test('identity badges come from a memoized map, never from the render loop', asy
 
 test('approval dialog swaps the group-link warning for the identity state', async (t) => {
   const js = await fs.promises.readFile(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8')
-  const warning = 'YOU CANT TELL WHO IS REALLY JOINING VIA A GROUP LINK'
+  // 261115 (R42): the shouted "until we add user authentication" line is
+  // gone; the unknown requester gets a plain sentence instead.
+  const warning = "This person hasn't verified an identity. You can't tell who they really are."
   t.ok(js.includes(warning), 'the unknown-requester warning still exists')
+  t.absent(js.includes('YOU CANT TELL'), 'the old warning is gone')
   t.ok(
-    js.includes("status === 'unknown' && request.linkType === 'group'"),
+    js.includes(
+      "status === 'unknown' && request.linkType === 'group' ? UNIDENTIFIED_REQUESTER_WARNING"
+    ),
     'the warning is no longer unconditional for group links'
   )
   t.ok(
@@ -693,7 +698,8 @@ test('buffer-search: the buffer-match section, its cyan in both themes, alternat
   t.is(html.split('--match-cyan: #').length - 1, 2, '--match-cyan in both themes')
   t.ok(html.includes('.session-sub.match-count {\n        color: var(--match-cyan);'), 'cyan count')
   t.ok(html.includes('.session-section-title {'), 'the heading is styled')
-  t.ok(js.includes("title.textContent = 'Session buffer matches'"), 'the heading text')
+  // 2026-11-16 (261115 R38): the heading is built by sessionSectionTitle, with its toggle.
+  t.ok(js.includes("sessionSectionTitle('Session buffer matches')"), 'the heading text')
   t.ok(js.includes("api\n      .invoke('session.searchBuffer', {"), 'one engine call per session')
   t.ok(js.includes('searchKey: state.bufferSearchKey'), 'one searchKey per renderer')
   // The name rows come first; the section follows even "No matching sessions".
@@ -711,11 +717,12 @@ test('buffer-search: the buffer-match section, its cyan in both themes, alternat
     'the section is rendered last'
   )
   t.ok(js.includes('syncSessionBufferSearchShown()'), 'collapse and narrow stop the search')
-  t.ok(
-    js.includes("querySelector('.xterm-screen')"),
-    'alternate-screen matches drawn over the screen'
-  )
-  t.ok(html.includes('.search-mark.current {'), 'the overlay boxes are styled')
+  // Changed 2026-11-16 (261115_quit-pins-reorder R34-R36): both screens'
+  // matches are xterm decorations kept by renderer/search-highlights.js; no
+  // overlay boxes over xterm's screen element.
+  t.ok(html.includes('<script src="search-highlights.js"></script>'), 'the highlighter is loaded')
+  t.absent(html.includes('.search-mark'), 'no overlay boxes')
+  t.ok(js.includes('highlights.refreshLive()'), 'the live rows are redone after a write')
 })
 
 test('buffer-search: a terminal click ends the search and keeps its text; the search sections', async (t) => {
@@ -743,4 +750,52 @@ test('buffer-search: a terminal click ends the search and keeps its text; the se
     'current before name matches'
   )
   t.absent(js.includes('selectedFirst('), 'no reordering of the rows')
+})
+
+test('261115 R41: the dot screens are fainter, history at 70% of offline', async (t) => {
+  const html = await fs.promises.readFile(
+    path.join(__dirname, '..', 'renderer', 'index.html'),
+    'utf8'
+  )
+  const alpha = (name) =>
+    Array.from(html.matchAll(new RegExp(`${name}: rgba\\([^)]*,\\s*([0-9.]+)\\)`, 'g'))).map((m) =>
+      Number(m[1])
+    )
+  const offline = alpha('--offline-dot')
+  const history = alpha('--history-dot')
+  t.is(offline.length, 2, 'offline dot set for both themes')
+  t.is(history.length, 2, 'history dot set for both themes')
+  for (const a of offline) t.is(a, 0.25, 'offline uses the old history opacity')
+  for (const a of history) t.ok(Math.abs(a - 0.25 * 0.7) < 1e-9, 'history is 70% of offline')
+})
+
+test('261115 R38: search section toggles are match cyan, hide dim and underlined', async (t) => {
+  const html = await fs.promises.readFile(
+    path.join(__dirname, '..', 'renderer', 'index.html'),
+    'utf8'
+  )
+  const block = (sel) => {
+    const at = html.indexOf(`${sel} {`)
+    return at < 0 ? '' : html.slice(at, html.indexOf('}', at))
+  }
+  t.ok(block('.session-section-toggle').includes('var(--match-cyan)'), 'cyan like the matches')
+  t.ok(
+    block('.session-section-toggle.hide').includes('text-decoration: underline'),
+    'hide underlined'
+  )
+  t.ok(/opacity: 0\.\d/.test(block('.session-section-toggle.hide')), 'hide dimmer')
+  t.ok(block('.session-section-toggle.show').includes('opacity: 1'), 'show bright')
+})
+
+// 261115 (R42): the Share form's warning follows its options, and the
+// verified-only choice reaches the link.
+test('the share warning follows approval and verified-only, and the option reaches the link', async (t) => {
+  const js = await fs.promises.readFile(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8')
+  t.ok(js.includes('function shareWarning(settings)'), 'one place words the warning')
+  t.ok(js.includes("'Only verified people can join'"), 'the form offers verified-only')
+  t.ok(js.includes('verifiedOnly: !!settings.verifiedOnly,'), 'createLink is told')
+  t.ok(
+    js.includes("unverified: 'this link admits only people with a verified identity'"),
+    'the viewer is told why it was refused'
+  )
 })

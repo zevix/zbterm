@@ -24,6 +24,7 @@
         --control-disabled-bg: #20252a;
         --input-bg: #111316;
         --text: #e7edf1;
+        --drag-handle: #f4f7f9;
         --muted: #9eabb4;
         --soft-text: #bac5cc;
         --border: #31383d;
@@ -52,8 +53,8 @@
         --search-current: #f3c969;
         --search-current-fg: #111316;
         --match-cyan: #4dd9e6;
-        --offline-dot: rgba(0, 0, 0, 0.55);
-        --history-dot: rgba(0, 0, 0, 0.25);
+        --offline-dot: rgba(0, 0, 0, 0.25);
+        --history-dot: rgba(0, 0, 0, 0.175);
         --new-green: #3cc56f;
         --join-blue: #4a9dff;
         --ok: #3cc56f;
@@ -69,6 +70,7 @@
         --control-disabled-bg: #e4e9ee;
         --input-bg: #ffffff;
         --text: #1d252c;
+        --drag-handle: #101418;
         --muted: #60707c;
         --soft-text: #44525d;
         --border: #c9d2db;
@@ -97,8 +99,8 @@
         --search-current: #e08a00;
         --search-current-fg: #ffffff;
         --match-cyan: #00687a;
-        --offline-dot: rgba(255, 255, 255, 0.6);
-        --history-dot: rgba(255, 255, 255, 0.25);
+        --offline-dot: rgba(255, 255, 255, 0.25);
+        --history-dot: rgba(255, 255, 255, 0.175);
         --new-green: #1f9a4e;
         --join-blue: #1677db;
         --ok: #1f9a4e;
@@ -938,6 +940,25 @@
 
       /* Spaced like the panel's own rows (8 px), set off from the summary
          and indented under it (R7). */
+      /* The stamp (the list's template mark) left of the trigger dropdown
+         (261115 R33). */
+      .session-editor-trigger-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .session-editor-trigger-row .session-default-mark {
+        flex: 0 0 auto;
+        font-size: 16px;
+      }
+
+      .session-editor-trigger-row select {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
       .session-editor-advanced-body {
         display: grid;
         gap: 8px;
@@ -1032,6 +1053,13 @@
         display: none;
       }
 
+      /* As tall as the font-size buttons beside it (261115 R32): the bar's
+         flex row stretches them; a fixed 34 px kept the lock shorter. */
+      .topbar-actions .size-lock {
+        height: auto;
+        min-height: 34px;
+      }
+
       .size-lock.locked {
         border-color: var(--accent-blue-border);
       }
@@ -1086,6 +1114,120 @@
 
       .session-icon.input-shared {
         color: #ee8078;
+      }
+
+      /* 261115 R19: the relay line of the relay-key and Share dialogs. */
+      .relay-status {
+        color: var(--muted);
+        font-size: 12px;
+        margin: 8px 0 2px;
+        overflow-wrap: anywhere;
+      }
+
+      /* 261115 R5-R6: over a row's left icon a drag handle takes its place.
+         R44: its hit area reaches past the icon, over the row's left padding
+         and part of the gap to the name, top to bottom, while the icon stays
+         where it was. */
+      .session-handle {
+        display: inline-grid;
+        place-items: center;
+        width: 16px;
+        min-width: 16px;
+        align-self: stretch;
+        box-sizing: content-box;
+        margin: -8px -6px -8px -8px;
+        padding: 8px 6px 8px 8px;
+        border-radius: 6px 0 0 6px;
+      }
+
+      .session-drag {
+        display: none;
+        color: var(--drag-handle);
+        font-size: 13px;
+        line-height: 1;
+      }
+
+      .session-row.draggable .session-handle:hover {
+        cursor: grab;
+      }
+
+      .session-row.draggable .session-handle:hover .session-icon {
+        display: none;
+      }
+
+      .session-row.draggable .session-handle:hover .session-drag {
+        display: inline-block;
+      }
+
+      /* 261115 R23-R27: the drag. The hand stays from the press to the end;
+         the row leaves the list and its ghost follows the pointer above
+         everything; a bold dashed line marks the gap it would land in. */
+      body.session-reordering,
+      body.session-reordering * {
+        cursor: grab !important;
+        user-select: none !important;
+      }
+
+      .session-row.lifted {
+        display: none;
+      }
+
+      .session-row.landing {
+        visibility: hidden;
+      }
+
+      .session-row.session-ghost {
+        position: fixed;
+        z-index: 10000;
+        margin: 0;
+        pointer-events: none;
+        box-sizing: border-box;
+        border-color: var(--drag-handle);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+        transform: scale(1.02);
+        opacity: 0.96;
+      }
+
+      .session-row.session-ghost .session-handle .session-icon {
+        display: none;
+      }
+
+      .session-row.session-ghost .session-handle .session-drag {
+        display: inline-block;
+      }
+
+      .session-row.session-ghost .session-actions {
+        display: none;
+      }
+
+      /* R43: mid-drag, a row under the pointer keeps its marks (the pin
+         numbers change as the gap moves) and shows no hover menu. */
+      body.session-reordering .session-row:hover .session-marks {
+        visibility: visible;
+      }
+
+      body.session-reordering .session-row:hover .session-menu-trigger {
+        opacity: 0;
+      }
+
+      /* R43: the dragged row's pin and number stand out, white in dark mode,
+         black in light (the grip's colour). */
+      .session-row.session-ghost .session-pin-number,
+      .session-row.session-ghost .session-pin-mark {
+        color: var(--drag-handle);
+      }
+
+      .session-drop-line {
+        position: fixed;
+        z-index: 9999;
+        height: 0;
+        margin-top: -2px;
+        border-top: 4px dashed var(--drag-handle);
+        pointer-events: none;
+      }
+
+      .session-drop-line[hidden] {
+        display: none;
       }
 
       .session-icon.live-host {
@@ -1156,6 +1298,15 @@
         line-height: 1;
       }
 
+      /* The pin's Ctrl+N number, left of it (261115 R40). */
+      .session-pin-number {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        margin-right: -4px;
+      }
+
       .session-pin-mark {
         font-size: 11px;
         color: var(--muted);
@@ -1178,29 +1329,6 @@
         white-space: nowrap;
       }
 
-      /* In-session matches on the alternate screen (vim, less), where xterm
-         draws no decorations: boxes over the screen on its cell grid. */
-      .search-overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        pointer-events: none;
-        z-index: 7;
-      }
-
-      .search-mark {
-        position: absolute;
-        background: var(--search-match);
-        opacity: 0.6;
-        border-radius: 2px;
-      }
-
-      .search-mark.current {
-        background: var(--search-current);
-        opacity: 0.55;
-        outline: 1px solid var(--search-current);
-      }
-
       /* A buffer-match row's subtitle: "N matches" (261111_buffer-search R6). */
       .session-sub.match-count {
         color: var(--match-cyan);
@@ -1213,6 +1341,24 @@
         padding: 10px 2px 6px;
         margin-top: 4px;
         border-top: 1px solid var(--border);
+      }
+
+      /* (hide)/(show) after a search section's name (261115 R38): the match
+         cyan, dimmer and underlined while it hides, bright to show again. */
+      .session-section-toggle {
+        color: var(--match-cyan);
+        font-weight: 400;
+        cursor: pointer;
+      }
+
+      .session-section-toggle.hide {
+        opacity: 0.6;
+        text-decoration: underline;
+      }
+
+      .session-section-toggle.show {
+        opacity: 1;
+        text-decoration: none;
       }
 
       .empty {
@@ -1434,6 +1580,7 @@
         color: var(--muted);
         font-size: 11px;
         font-variant-numeric: tabular-nums;
+        margin-right: -4px;
         white-space: nowrap;
         pointer-events: none;
       }
@@ -1482,6 +1629,7 @@
         color: var(--soft-text);
         font-size: 12px;
         font-variant-numeric: tabular-nums;
+        margin-right: -4px;
         white-space: nowrap;
       }
 
@@ -1495,6 +1643,7 @@
         min-width: 86px;
         text-align: left;
         font-variant-numeric: tabular-nums;
+        margin-right: -4px;
       }
 
       /* The uncompressed time over #timeLabel (261110_timeline-fixes R4). */
@@ -1510,6 +1659,7 @@
         padding: 2px 6px;
         font-size: 11px;
         font-variant-numeric: tabular-nums;
+        margin-right: -4px;
         pointer-events: none;
         white-space: nowrap;
       }
@@ -1555,6 +1705,7 @@
         padding: 2px 5px;
         font-size: 11px;
         font-variant-numeric: tabular-nums;
+        margin-right: -4px;
         pointer-events: none;
         white-space: nowrap;
         /* Two lines, both centred (261113_ui-polish R4): clock, then elapsed. */
@@ -2294,6 +2445,20 @@
         line-height: 1.3;
       }
 
+      /* The Share dialog's approval and verified-only lines end in a dot:
+         orange while off, green while on (2026-11-16). */
+      .share-safety-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--warn);
+        flex: none;
+      }
+
+      .share-safety-dot.on {
+        background: var(--ok);
+      }
+
       .modal-check input {
         width: 14px;
         height: 14px;
@@ -2715,6 +2880,7 @@
     <script src="wall-clock.js"></script>
     <script src="time-collapse.js"></script>
     <script src="buffer-search.js"></script>
+    <script src="search-highlights.js"></script>
     <script src="live-stream.js"></script>
     <script src="app.js"></script>
   </body>

@@ -30,7 +30,9 @@ contextBridge.exposeInMainWorld('bridge', {
 contextBridge.exposeInMainWorld('app', {
   // D-11: the "STUN/TURN servers" field; '' hands the choice back to
   // --ice-servers, ZBTERM_ICE_SERVERS or the default list.
-  setIceServers: (list) => ipcRenderer.invoke('app:setIceServers', String(list || ''))
+  setIceServers: (list) => ipcRenderer.invoke('app:setIceServers', String(list || '')),
+  // 261115 R18: the "ZBTerm relay access key" field; '' for the default relay.
+  setRelayKey: (key) => ipcRenderer.invoke('app:setRelayKey', String(key || ''))
 })
 
 contextBridge.exposeInMainWorld('zbterm', {

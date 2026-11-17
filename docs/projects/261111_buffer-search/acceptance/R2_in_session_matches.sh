@@ -205,17 +205,9 @@ jq '.inSession' <<<"$s"
 jq -e '.inSession.buffer == "alternate" and .inSession.total == 3' <<<"$s"
 jq -e '.inSession.decorations == 3' <<<"$s"
 jq -e '.inSession.current.text | contains("three QALTZ")' <<<"$s"
-mark="$(cmd '{"command":"style-of","selector":"#terminal .search-mark.current"}')"
-screen="$(cmd '{"command":"style-of","selector":"#terminal .xterm-screen"}')"
-cols="$(api GET /renderer/layout | jq '.renderer.terminal.cols')"
-jq -c '.rect' <<<"$mark"
-jq -c '.rect' <<<"$screen"
-jq -e -n --argjson m "$mark" --argjson c "$screen" --argjson s "$s" --argjson cols "$cols" '
-  ($s.inSession) as $i
-  | ($c.rect.width / $cols) as $cw | ($c.rect.height / $i.rows) as $ch
-  | $m.found == true
-  and (($m.rect.left - ($c.rect.left + $i.current.col * $cw)) | fabs) <= 2
-  and (($m.rect.top - ($c.rect.top + ($i.current.row - $i.viewportY) * $ch)) | fabs) <= 2
-  and (($m.rect.width - $i.current.len * $cw) | fabs) <= 2
-  and (($m.rect.height - $ch) | fabs) <= 2'
+# Changed 2026-11-16 (261115_quit-pins-reorder R34-R36): the alternate screen's highlights are
+# xterm decorations now, not boxes over the screen; xterm hides decoration elements there (the
+# renderer paints the cells), so the current one is read from the highlighter's records
+# (.inSession.drawnTop, viewport cells): on the current match's row, column and length.
+jq -e '.inSession as $i | $i.drawnTop == [{row: ($i.current.row - $i.viewportY), col: $i.current.col, width: $i.current.len}]' <<<"$s"
 key q

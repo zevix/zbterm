@@ -13,11 +13,12 @@ const { CAP } = require('../types')
 const PearConnection = require('./connection')
 
 // Fallback used when direct connect + hole-punch fails (eg. two peers behind
-// the same NAT). Discovered via a DHT mutable record (see relay/server.js
-// and relay/registry-publish.js) so users never have to configure this
-// themselves - REGISTRY_PUBLIC_KEY is a fixed lookup address, not a secret.
-// ZBTERM_RELAY_PUBLIC_KEY remains as an escape hatch for anyone running their
-// own relay+registry instead of the default one.
+// the same NAT). The default relay is discovered via a DHT mutable record
+// (kept alive by relay/server.js when it runs with ZBTERM_REGISTRY_SEED) so
+// users never have to configure this themselves - REGISTRY_PUBLIC_KEY is a
+// fixed lookup address, not a secret. A private relay's access key, pasted
+// into the "ZBTerm relay access key" setting (setRelayKey), replaces the
+// registry's answer; ZBTERM_RELAY_PUBLIC_KEY wins over both (261115 R18).
 const REGISTRY_PUBLIC_KEY = b4a.from(
   '9fa15b9590a55c63d14069c27d8e8cbc12bd0a0ec0f76e5a79f1c8c57f1e283b',
   'hex'
@@ -75,7 +76,17 @@ class PearBackend extends EventEmitter {
     // other's connection early.
     this._pinnedHostKeys = new Map()
     const relayPublicKeyEnv = process.env.ZBTERM_RELAY_PUBLIC_KEY
-    this._relayPublicKey = relayPublicKeyEnv ? b4a.from(relayPublicKeyEnv, 'hex') : null
+    // The relay key in force (`_relayPublicKey`) is the first of: the env,
+    // the setting, the registry's answer (`_relaySource` says which).
+    this._envRelayKey = isRelayKeyHex(relayPublicKeyEnv) ? b4a.from(relayPublicKeyEnv, 'hex') : null
+    this._settingRelayKey = null
+    this._registryRelayKey = null
+    this._relayPublicKey = null
+    this._relaySource = 'none'
+    // The DHT lookup of the relay key in force (261115 R19): which key it was
+    // for and what it found ('looking' | 'found' | 'not-found').
+    this._relayProbe = { key: null, state: null, at: 0 }
+    this._applyRelayKey()
     this._registryDht = null
     this._registryTimer = null
   }
@@ -97,8 +108,95 @@ class PearBackend extends EventEmitter {
     if (this._started) return Promise.resolve()
     this._started = true
     this._ctx = ctx || {}
-    if (!this._relayPublicKey) this._startRelayRegistryLookup()
+    this._syncRegistryLookup()
     return Promise.resolve()
+  }
+
+  // The "ZBTerm relay access key" setting: 64 hex, or null/'' for the
+  // default relay the registry names. ZBTERM_RELAY_PUBLIC_KEY still wins.
+  setRelayKey(key) {
+    const text = typeof key === 'string' ? key.trim().toLowerCase() : ''
+    this._settingRelayKey = isRelayKeyHex(text) ? b4a.from(text, 'hex') : null
+    this._applyRelayKey()
+    if (this._started) this._syncRegistryLookup()
+    return { relayKey: this._settingRelayKey ? hex(this._settingRelayKey) : null }
+  }
+
+  _applyRelayKey() {
+    const before = this._relayPublicKey ? hex(this._relayPublicKey) : null
+    if (this._envRelayKey) {
+      this._relayPublicKey = this._envRelayKey
+      this._relaySource = 'env'
+    } else if (this._settingRelayKey) {
+      this._relayPublicKey = this._settingRelayKey
+      this._relaySource = 'setting'
+    } else if (this._registryRelayKey) {
+      this._relayPublicKey = this._registryRelayKey
+      this._relaySource = 'registry'
+    } else {
+      this._relayPublicKey = null
+      this._relaySource = this._started ? 'registry' : 'none'
+    }
+    const after = this._relayPublicKey ? hex(this._relayPublicKey) : null
+    if (after !== before) this._relayProbe = { key: null, state: null, at: 0 }
+  }
+
+  // The registry is asked only while neither the env nor the setting names a
+  // relay.
+  _syncRegistryLookup() {
+    const wanted = !this._envRelayKey && !this._settingRelayKey
+    if (wanted && !this._registryTimer) this._startRelayRegistryLookup()
+    if (!wanted && this._registryTimer) {
+      clearInterval(this._registryTimer)
+      this._registryTimer = null
+    }
+  }
+
+  // 261115 R19: where the relay key comes from, whether the relay is on the
+  // DHT (a findPeer for its key, at most once a minute), and whether a
+  // connection was relayed this run.
+  async relayStatus(opts = {}) {
+    this._applyRelayKey()
+    const key = this._relayPublicKey ? hex(this._relayPublicKey) : null
+    const dht = (this._swarm && this._swarm.dht) || null
+    const relaying = dht && dht.stats && dht.stats.relaying ? dht.stats.relaying : null
+    const base = {
+      source: key ? this._relaySource : this._registryTimer ? 'registry' : 'none',
+      relayKey: key,
+      relayed: relaying ? relaying.successes : 0,
+      relayAttempts: relaying ? relaying.attempts : 0
+    }
+    if (!key) {
+      return { ...base, found: this._registryTimer ? 'looking' : null }
+    }
+    const probe = this._relayProbe
+    const fresh = probe.key === key && probe.state && Date.now() - probe.at < 60 * 1000
+    if (!fresh && !(probe.key === key && probe.state === 'looking')) {
+      this._relayProbe = { key, state: 'looking', at: Date.now() }
+      const lookup = this._findRelay(key)
+      if (opts.wait) await lookup
+    }
+    return { ...base, found: this._relayProbe.state }
+  }
+
+  async _findRelay(key) {
+    let found = false
+    try {
+      const dht = (this._swarm && this._swarm.dht) || this._ensureRegistryDht()
+      const query = dht.findPeer(b4a.from(key, 'hex'))
+      for await (const reply of query) {
+        if (reply && reply.peer) {
+          found = true
+          break
+        }
+      }
+      if (found) query.destroy()
+    } catch (err) {
+      this._debug('relay:probe-error', { message: err.message })
+    }
+    if (this._relayProbe.key === key) {
+      this._relayProbe = { key, state: found ? 'found' : 'not-found', at: Date.now() }
+    }
   }
 
   async stop() {
@@ -308,7 +406,8 @@ class PearBackend extends EventEmitter {
       .mutableGet(REGISTRY_PUBLIC_KEY)
       .then((record) => {
         if (!record || !record.value || record.value.length !== 32) return
-        this._relayPublicKey = record.value
+        this._registryRelayKey = record.value
+        this._applyRelayKey()
         this._debug('relay:registry:resolved', { relayPublicKey: hex(record.value) })
       })
       .catch((err) => {
@@ -485,6 +584,10 @@ function swarmDiagnostics(swarm) {
       dht: dht && dht.stats ? dht.stats : null
     }
   }
+}
+
+function isRelayKeyHex(text) {
+  return typeof text === 'string' && /^[0-9a-f]{64}$/i.test(text.trim())
 }
 
 function hex(value) {

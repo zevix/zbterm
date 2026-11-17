@@ -10,7 +10,8 @@
 #   --packaged               out/ZBTerm-linux-<arch>/ - the build that proves the
 #                            Bare sidecar boots; offers to (re)package when it is
 #                            missing or older than the sources
-#   --relay                  node relay/server.js (ZBTERM_RELAY_PORT/_SEED apply)
+#   --relay                  node relay/server.js, zbterm-relay (keys in ~/.zbterm;
+#                            ZBTERM_RELAY_PORT/_SEED/_ACCESS_SALT apply; -- --help)
 #
 # Options:
 #   --out <dir>              packaged build root (default: out, or $ZBTERM_FORGE_OUT_DIR)

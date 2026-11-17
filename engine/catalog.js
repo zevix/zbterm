@@ -66,11 +66,7 @@ class Catalog {
       if (q && !value.name.toLowerCase().includes(q)) continue
       out.push(value)
     }
-    out.sort((a, b) => {
-      const aLastStartedAt = a.lastStartedAt || a.startedAt || 0
-      const bLastStartedAt = b.lastStartedAt || b.startedAt || 0
-      return bLastStartedAt - aLastStartedAt
-    })
+    out.sort((a, b) => sortTime(b) - sortTime(a))
     return out
   }
 
@@ -84,3 +80,13 @@ function catalogKey(startedAt, sessionId) {
 }
 
 module.exports = Catalog
+
+// The time a session is listed by, newest first: its manual `sortAt` (a
+// "pseudo time" in ms set by dragging its row, 261115 R7) when it has one,
+// else the time it last started.
+function sortTime(entry) {
+  if (Number.isFinite(entry.sortAt)) return entry.sortAt
+  return entry.lastStartedAt || entry.startedAt || 0
+}
+
+module.exports.sortTime = sortTime

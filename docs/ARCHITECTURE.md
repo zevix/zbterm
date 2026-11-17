@@ -1200,12 +1200,18 @@ while another join is already past that window may get relay fallback early.
 Direct connection attempts and relay attempts race; direct hole-punching can
 still win and take over the connection.
 
-The relay side lives in `relay/`: `relay/server.js` is a standalone
-`blind-relay` server on one fixed UDP port (`ZBTERM_RELAY_PORT`, default
-49737) with connection caps, and `relay/registry-publish.js` keeps the
-registry record pointing at it, re-publishing every 20 minutes. Both are plain
-Node; `npm run build:relay` (`scripts/build-relay.js`) bundles them into
-standalone executables with `@yao-pkg/pkg`. Running one is described in the
+The relay side lives in `relay/`: `relay/server.js` (`zbterm-relay`) is a
+standalone `blind-relay` server on one fixed UDP port (`ZBTERM_RELAY_PORT`,
+default 49737) with connection caps. It keeps two keys (261115): a relay
+secret that never leaves the box (`~/.zbterm/relay-secret`) and a rotatable
+access salt (`~/.zbterm/relay-access`); it listens on the key pair derived from
+both (`relay/keys.js`), whose public key is the access key users paste into the
+"ZBTerm relay access key" setting. `--rotate-access-key` cuts off holders of
+the old key. Only with `ZBTERM_REGISTRY_SEED` set (the official default relay)
+does it also keep the registry record pointing at its access key,
+re-publishing every 20 minutes. Plain Node; `npm run build:relay`
+(`scripts/build-relay.js`) bundles it into standalone executables with
+`@yao-pkg/pkg`. Running one is described in the
 README's [relay setup](../README.md#relay-setup) section. The Freenet backend
 does not use this relay.
 

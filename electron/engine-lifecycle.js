@@ -39,6 +39,9 @@ class EngineLifecycle {
     // D-11: the ICE servers for new peer connections (./ice-servers.js), or
     // null for the zxterm-core sidecar's own default list.
     this.iceServers = Array.isArray(opts.iceServers) ? opts.iceServers : null
+    // 261115 R18: the "ZBTerm relay access key" setting, null until the
+    // renderer sends it ('' for the default relay).
+    this.relayKey = null
     this.debugServerEnabled = !!opts.debugServerEnabled
 
     this.onEngineStarting = opts.onEngineStarting || (() => {})
@@ -114,6 +117,7 @@ class EngineLifecycle {
     return engine.ready().then(async () => {
       this.engineReady = true
       await this._pushIceServers()
+      await this._pushRelayKey()
     })
   }
 
@@ -122,6 +126,19 @@ class EngineLifecycle {
   async setIceServers(servers) {
     this.iceServers = Array.isArray(servers) ? servers : null
     await this._pushIceServers()
+  }
+
+  async setRelayKey(key) {
+    this.relayKey = typeof key === 'string' ? key : ''
+    await this._pushRelayKey()
+  }
+
+  // An engine older than the method answers with an error: logged, ignored.
+  async _pushRelayKey() {
+    if (!this.engine || !this.engineReady || this.relayKey === null) return
+    await this.engine
+      .invoke('share.setRelayKey', { relayKey: this.relayKey })
+      .catch((err) => console.error('share.setRelayKey failed:', err && err.message))
   }
 
   async _pushIceServers() {
@@ -160,6 +177,7 @@ class EngineLifecycle {
         await this.engine.respawn()
         this.engineReady = true
         await this._pushIceServers()
+        await this._pushRelayKey()
       } catch (err) {
         await this._giveUpAfterRepeatedCrashes(EngineError.from(err))
       }

@@ -31,8 +31,7 @@ const TARGETS = {
 }
 
 const ENTRYPOINTS = {
-  'zbterm-relay': path.join(ROOT, 'relay', 'server.js'),
-  'zbterm-relay-registry-publish': path.join(ROOT, 'relay', 'registry-publish.js')
+  'zbterm-relay': path.join(ROOT, 'relay', 'server.js')
 }
 
 // macOS executables must be signed (even ad-hoc) or the kernel kills them on

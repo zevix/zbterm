@@ -23,7 +23,8 @@ jq -e '.text | test("\"?u2 tpl\"? is the template for .+\\. It will be restored 
 cmd '{"command":"confirm-answer","ok":true}' >/dev/null
 gone() { ! api GET /sessions | jq -e --arg id "$sid" 'any(.[]; .sessionId == $id)' >/dev/null; }
 wait_until 20 gone
-replace='.text | test("\"?u2 tpl\"? is the deleted template for .+; this profile will replace it")'
+# 2026-11-16 (261115 R37): the wording is now "(hidden or deleted) is the current template".
+replace='.text | test("\"?u2 tpl\"? \\(hidden or deleted\\) is the current template for .+; this profile will replace it")'
 # Reusing the deleted template's name warns, naming the trigger: New ...
 open_dialog '{"command":"click","selector":"#newSession"}' >/dev/null
 set_field name '"u2 tpl"' >/dev/null

@@ -51,6 +51,7 @@ const JOIN_REASONS = Object.freeze({
   BAD_PROOF: 'bad-identity-proof',
   DEVICE_REVOKED: 'device-revoked',
   IDENTITY: 'identity', // the identity gate refused the claim
+  UNVERIFIED: 'unverified', // a verified-only link refused a requester with no verified identity
   UNREACHABLE: 'unreachable', // no host answered before JOIN_TIMEOUT_MS
   NO_ANSWER: 'no-answer', // approval never came before APPROVAL_TIMEOUT_MS
   CLOSED: 'closed', // the connection dropped before the join completed
@@ -117,6 +118,9 @@ class ShareManager extends EventEmitter {
       ...opts.backendOptions
     }
     this._iceServers = null
+    // 261115 R18: the "ZBTerm relay access key" setting (64 hex), '' for the
+    // default relay, null until the host sends it (setRelayKey).
+    this._relayKey = null
     // Every backend activated this run, by id: { backend, listeners }. Each
     // share and each join runs over its own backend, so a Pear share and a
     // Freenet join (or the other way round) run side by side.
@@ -293,6 +297,9 @@ class ShareManager extends EventEmitter {
     // from today). The backend additionally admits any key an active join is
     // dialing - see PearBackend._ensureSwarm.
     backend.setAdmission(() => this.hostShares.size > 0)
+    if (this._relayKey !== null && typeof backend.setRelayKey === 'function') {
+      backend.setRelayKey(this._relayKey)
+    }
     for (const [name, fn] of Object.entries(listeners)) backend.on(name, fn)
     backend
       .start({
@@ -380,6 +387,37 @@ class ShareManager extends EventEmitter {
       if (typeof backend.setIceServers === 'function') backend.setIceServers(this._iceServers)
     }
     return { iceServers: this._iceServers }
+  }
+
+  // 261115 R18: the relay a backend with a relay falls back to; '' (or
+  // anything but 64 hex) hands it back to the default the registry names.
+  setRelayKey(key) {
+    const text = typeof key === 'string' ? key.trim().toLowerCase() : ''
+    this._relayKey = /^[0-9a-f]{64}$/.test(text) ? text : ''
+    for (const { backend } of this._backends.values()) {
+      if (typeof backend.setRelayKey === 'function') backend.setRelayKey(this._relayKey)
+    }
+    return { relayKey: this._relayKey || null }
+  }
+
+  // 261115 R19: the relay line of the settings and Share dialogs. Starts the
+  // backend that has a relay (it looks the relay up) when it is usable;
+  // `{ source: 'none' }` when this build has none.
+  async relayStatus(opts = {}) {
+    let backend = null
+    for (const entry of this._backends.values()) {
+      if (typeof entry.backend.relayStatus === 'function') backend = entry.backend
+    }
+    if (!backend && !this._injected) {
+      const usable = this._registry
+        .resolve(this._selection())
+        .backends.find((item) => item.id === 'pear' && item.state === 'available')
+      if (usable) backend = this._backendNow('pear')
+    }
+    if (!backend || typeof backend.relayStatus !== 'function') {
+      return { source: 'none', relayKey: null, found: null, relayed: 0, relayAttempts: 0 }
+    }
+    return await backend.relayStatus({ wait: !!opts.wait })
   }
 
   async close() {
@@ -533,6 +571,8 @@ class ShareManager extends EventEmitter {
       maxViewers,
       caps,
       autoJoin: opts.autoJoin !== false,
+      // Only a requester whose identity verified may join (both backends).
+      verifiedOnly: opts.verifiedOnly === true,
       createdAt: Date.now(),
       consumed: false,
       revoked: false,
@@ -1113,6 +1153,7 @@ class ShareManager extends EventEmitter {
           canSendInput: hasCap(link.caps, SEND_INPUT),
           viewers: link.viewers,
           autoJoin: link.autoJoin,
+          verifiedOnly: !!link.verifiedOnly,
           revoked: !!link.revoked,
           consumed: !!link.consumed
         })),
@@ -1380,6 +1421,16 @@ class ShareManager extends EventEmitter {
     // recorded as `unknown`.
     if (!(await this._verifyViewerIdentity(share, peer, request, identityKeyHex, deviceKeyHex))) {
       this._debug('host:join-deny', { linkId: request.linkId, reason: 'identity' })
+      return
+    }
+    if (link.verifiedOnly && peer.identityStatus !== 'verified') {
+      this._debug('host:join-deny', { linkId: request.linkId, reason: 'unverified' })
+      this._denyPeer(
+        peer,
+        CODES.E_AUTH,
+        'This link admits only verified identities',
+        JOIN_REASONS.UNVERIFIED
+      )
       return
     }
     if (!link.autoJoin) {
@@ -2483,7 +2534,9 @@ class ShareManager extends EventEmitter {
   // or of members revoked in an earlier run, so it hands such a join to
   // `_onCorePending` and ZBTerm approves it there.
   async _coreAddLink(share, runtime, link) {
-    const gated = link.autoJoin && (await this._joinGateNeeded(runtime))
+    // A verified-only link always asks: the core does not know the option,
+    // so `_onCorePending` refuses the unverified there.
+    const gated = link.autoJoin && (link.verifiedOnly || (await this._joinGateNeeded(runtime)))
     await share.core.request('share.addLink', {
       sessionId: share.sessionId,
       linkId: link.linkId,
@@ -2584,6 +2637,14 @@ class ShareManager extends EventEmitter {
       const link = share.links.get(data.linkId) || (await this._loadLink(runtime, data.linkId))
       if (await this._isRevoked(runtime, data.identityKey, data.deviceKey)) {
         this._debug('host:join-deny', { linkId: data.linkId, reason: 'revoked' })
+        await share.core.request('share.deny', { sessionId: data.sessionId, joinId: data.joinId })
+        return
+      }
+      // The core reports the requester's identity outcome before its pending
+      // event, so it is already in `share.identities`.
+      const identity = share.identities.get(data.joinId)
+      if (link && link.verifiedOnly && !(identity && identity.status === 'verified')) {
+        this._debug('host:join-deny', { linkId: data.linkId, reason: 'unverified' })
         await share.core.request('share.deny', { sessionId: data.sessionId, joinId: data.joinId })
         return
       }

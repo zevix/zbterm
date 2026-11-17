@@ -355,6 +355,8 @@ class SessionEngine extends EventEmitter {
       }
       if (method === 'share.backends') return await this.share.probedBackendsInfo()
       if (method === 'share.setIceServers') return this.share.setIceServers(args.iceServers)
+      if (method === 'share.setRelayKey') return this.share.setRelayKey(args.relayKey)
+      if (method === 'share.relayStatus') return await this.share.relayStatus(args)
       if (method === 'share.createLink') return await this.share.createLink(args.sessionId, args)
       if (method === 'share.listLinks') return await this.share.listLinks(args.sessionId)
       if (method === 'share.revokeLink') {
@@ -1058,6 +1060,15 @@ class SessionEngine extends EventEmitter {
         command: 'command' in patch ? patch.command : current.command
       })
       await this.catalog.update(sessionId, { cwd: next.cwd || null, command: next.command || null })
+      this.emit('session:list-changed', await this.listSessions())
+    }
+    // 261115 R7: the manual sort time (ms) a dragged row gets; null clears it.
+    if ('sortAt' in patch) {
+      const sortAt = patch.sortAt === null ? null : Number(patch.sortAt)
+      if (sortAt !== null && !Number.isFinite(sortAt)) {
+        throw new EngineError(CODES.E_INVALID, 'sortAt must be a number of ms or null')
+      }
+      await this.catalog.update(sessionId, { sortAt })
       this.emit('session:list-changed', await this.listSessions())
     }
     return await this.catalog.get(sessionId)

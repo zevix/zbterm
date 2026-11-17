@@ -232,6 +232,7 @@ function createDebugServer(opts) {
         maxViewers: body.maxViewers,
         caps: body.caps,
         autoJoin: body.autoJoin,
+        verifiedOnly: body.verifiedOnly,
         backend: body.backend
       })
       return { ...link, key: link.uri }

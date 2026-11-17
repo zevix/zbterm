@@ -669,6 +669,41 @@ if (!freenetAvailable()) {
     }
   )
 
+  // 261115 (R42): a verified-only link is registered with the core as one
+  // that asks, and ZBTerm refuses the unverified when the core asks.
+  guarded(
+    'freenet session: a verified-only link refuses an unidentified viewer and admits a verified one',
+    async (t) => {
+      const hostDevice = await authDevice(t)
+      const viewerDevice = await authDevice(t)
+      const alice = await claimFor(viewerDevice, 'alice')
+      const server = await keysServer(t, () => ({
+        status: 200,
+        body: keysBody([alice.published])
+      }))
+      const env = { ZBTERM_GITHUB_KEYS_BASE: server.base }
+      const h = await hostPair(t, { hostDevice, viewerDevice, env })
+      const link = await h.manager.createLink(SESSION, { type: 'group', verifiedOnly: true })
+      const approvals = []
+      h.manager.on('approval:pending', (event) => approvals.push(event))
+
+      const stranger = await viewerOf(t, await authDevice(t), { env })
+      const refused = await join(stranger, link)
+      t.is(refused.status, 'failed', 'an unidentified viewer is refused')
+      t.ok(
+        h.debug.some((e) => e.event === 'host:join-deny' && e.details.reason === 'unverified'),
+        'as unverified'
+      )
+      t.is(h.calls.putMember, 0, 'it is no member')
+      t.is(stranger.registered.length, 0)
+
+      const viewer = await viewerOf(t, viewerDevice, { env })
+      viewer.manager.engine.selfIdentityClaim = alice.claim
+      t.is((await join(viewer, link)).status, 'joined', 'a verified viewer joins')
+      t.alike(approvals, [], 'the host user was never asked (the link joins without asking)')
+    }
+  )
+
   // The identity handshake of the join, on the core (`identity-handshake.test.js`
   // drives the same gate through ShareManager's own Pear path).
   guarded(

@@ -38,7 +38,7 @@
 
   const SCRUBBER_STEPS = 1000
   const TOAST_MS = 6000
-  const RESUME_HINT_TOAST = 'Press ^R to resume the session'
+  const RESUME_HINT_TOAST = 'Press ^R or Enter to resume the session'
   // Touchpad travel (in pixels) that counts as one Alt+wheel frame step.
   const FRAME_STEP_WHEEL_PX = 50
   // A join the share backend gave up on, in words (freenet-backend F9).
@@ -54,8 +54,12 @@
     full: 'the share is full; the host allows no more viewers',
     ended: 'the host is no longer sharing this session',
     'device-revoked': 'the host has revoked this device',
-    'bad-identity-proof': 'the host rejected this device identity proof'
+    'bad-identity-proof': 'the host rejected this device identity proof',
+    unverified: 'this link admits only people with a verified identity'
   }
+  // The approval dialog's line for a group-link requester with no identity.
+  const UNIDENTIFIED_REQUESTER_WARNING =
+    "This person hasn't verified an identity. You can't tell who they really are."
   const JOIN_FAILURE_TEXT = {
     unreachable: 'no host answered; it may be offline, or the invite is no longer valid',
     'no-answer': 'the host did not answer the join request',
@@ -76,7 +80,6 @@
   const IN_SESSION_RESCAN_PLAYBACK_MS = 150
   const IN_SESSION_SEARCH_SLICE = 2000
   const IN_SESSION_SEARCH_LIMIT = 50000
-  const SEARCH_DECORATIONS_MIN_MS = 100
   // Cross-session search (261111_buffer-search R5-R9): the typing debounce,
   // the re-search of a session that became live as its output arrives, the
   // debug log's ring, and the layout under which the list is hidden.
@@ -93,6 +96,8 @@
   const DEVB_STORAGE_KEY = 'zbterm.devb'
   const COPY_ON_SELECT_STORAGE_KEY = 'zbterm.copyOnSelect'
   const CTRL_ZOOM_STORAGE_KEY = 'zbterm.ctrlZoom'
+  const F2_EDIT_STORAGE_KEY = 'zbterm.f2Edit'
+  const PIN_KEYS_STORAGE_KEY = 'zbterm.pinKeys'
   const APP_ZOOM_STORAGE_KEY = 'zbterm.appZoom'
   const APP_ZOOM_LEVEL_STORAGE_KEY = 'zbterm.appZoomLevel'
   // Chromium zoom levels: each step is about 10%, from roughly 58% to 250%.
@@ -111,6 +116,8 @@
   // comma-separated list of ICE URLs; empty leaves the flag, the environment
   // or the built-in list in charge.
   const ICE_SERVERS_STORAGE_KEY = 'zbterm.iceServers'
+  // 261115 R18: the relay access key, install-wide like the ICE servers.
+  const RELAY_KEY_STORAGE_KEY = 'zbterm.relayAccessKey'
   // Per profile, superseded: the session SHIFT+New used to copy. Read once, by
   // the migration to the trigger table's template for that click.
   const DEFAULT_SESSION_PREFERENCE = 'zbterm.defaultSessionId'
@@ -121,6 +128,8 @@
   const TEMPLATE_PREFERENCE_PREFIX = 'newSessionTemplate.'
   // Per profile: pinned session ids, in the order they were pinned.
   const PINNED_SESSIONS_PREFERENCE = 'zbterm.pinnedSessions'
+  const QUIT_POPUP_ID = 'quit'
+  const RELAY_KEY_POPUP_ID = 'relay-key'
   // R11/R12 (261113_ui-polish, Q-8): the terminal size locks, per session id,
   // a profile preference ({ [sessionId]: { rows, cols, from } }).
   const SIZE_LOCKS_PREFERENCE = 'zbterm.sizeLocks'
@@ -283,9 +292,8 @@
     inSessionRescanTimer: null,
     inSessionSearchDirty: false,
     inSessionSearchWired: null,
-    searchDecorationFrame: 0,
-    searchDecorationTimer: null,
-    searchDecorationsAt: 0,
+    // The in-session search's highlights (search-highlights.js) of state.term.
+    searchHighlights: null,
     inSessionRescanRunning: false,
     inSessionRescanAgain: false,
     term: null,
@@ -350,9 +358,15 @@
     devb: initialPreferredDevb(),
     copyOnSelect: true,
     ctrlZoom: true,
+    f2Edit: true,
+    pinKeys: true,
     appZoom: false,
     appZoomLevel: 0,
     pinnedIds: [],
+    pinnedLoaded: false,
+    // The row being dragged to a new place (261115 R6), or null.
+    sessionDrag: null,
+    sessionLastFlight: null,
     // The last left-button drag over the terminal, kept so a drag the remote
     // program swallowed can still be turned into a selection on mouseup.
     selectionDrag: null,
@@ -553,7 +567,10 @@
     applySidePane((await storedAppPreference(SIDE_COLLAPSED_STORAGE_KEY)) === '1')
     applyDevb(await preferredDevb(), false)
     await restoreZoomPreferences()
+    await restoreF2EditPreference()
+    await restorePinKeysPreference()
     await restoreIceServers()
+    await restoreRelayKey()
     applyTimeCollapse(await preferredTimeCollapse(), false)
     wireEvents()
     wireProfilePicker()
@@ -576,6 +593,8 @@
     await loadSessionListPreferences()
     setStatus('starting engine')
     await api.invoke('ping')
+    // The first read can fail while the engine starts: read again now.
+    if (!state.pinnedLoaded) await loadPinnedSessionsPreference()
     await loadShareBackends()
     setStatus('loading sessions')
     // Load the stored peer records once: the render loop reads the memoized
@@ -747,6 +766,8 @@
     devLog(`profile selected ${state.profile.selectedId || ''}`)
     // The profile's engine is ready by the time it is selected.
     restoreProfileSidebarWidth().catch(() => {})
+    // Another profile's pins: re-read before any pin write (261115 R4).
+    state.pinnedLoaded = false
     // At startup boot() loads it once the engine answers; only a later
     // selection needs the list redrawn with the new profile's default.
     if (state.sessions.length) {
@@ -961,6 +982,8 @@
       }
       if (!state.selectedId) return
       if (state.mode !== 'live') {
+        // 261115 R10: Enter in the terminal resumes an offline session, as ^R.
+        if (data === '\r' && isOfflineResumable()) extendSession().catch(showError)
         return
       }
       if (!canInputToTerminal()) {
@@ -1275,6 +1298,12 @@
       if (event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return
       if (event.key === 'Enter') {
         event.preventDefault()
+        // 261115 R10: while the resume toast offers it, Enter resumes the
+        // offline session the walk is on, as ^R does; else it steps matches.
+        if (!event.shiftKey && state.toasts.has('resume-hint') && isOfflineResumable()) {
+          extendSession({ keepFocus: true }).catch(showError)
+          return
+        }
         stepMatch(event.shiftKey ? -1 : 1).catch(showError)
       } else if (event.key === 'Escape' && !event.shiftKey) {
         event.preventDefault()
@@ -1424,6 +1453,37 @@
           if (!event.repeat) guard(() => startNewSession(keyTrigger.id, els.newSession))()
           return
         }
+        const pinKey = pinShortcutKey(event)
+        if (pinKey) {
+          // 261115 R39: Ctrl+N selects the Nth pinned profile, as a click on
+          // its row does; with no Nth pin, or the setting off, the chord is
+          // the terminal's. A dialog owns the window, so it is left alone.
+          const session = pinShortcutSessions()[pinKey - 1]
+          if (session && !sidePaneBlocked()) {
+            event.preventDefault()
+            event.stopPropagation()
+            if (!event.repeat) selectSession(session).catch(showError)
+            return
+          }
+        }
+        if (
+          event.key === 'F2' &&
+          state.f2Edit &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey &&
+          !event.shiftKey
+        ) {
+          // 261115 R29: F2 edits the selected session's profile, as its
+          // row's Edit button does; with the setting off it is the terminal's.
+          const session = selectedSessionEntry()
+          if (session && !session.pending && !sidePaneBlocked()) {
+            event.preventDefault()
+            event.stopPropagation()
+            if (!event.repeat) editSelectedSessionProfile(session).catch(showError)
+            return
+          }
+        }
         if (event.ctrlKey && !event.metaKey && !event.altKey) {
           const appZoom = appZoomKey(event)
           if (appZoom !== null) {
@@ -1437,6 +1497,15 @@
             event.preventDefault()
             event.stopPropagation()
             zoomLiveFontSize(zoomDelta).catch(showError)
+            return
+          }
+          if (!event.shiftKey && String(event.key).toLowerCase() === 'q') {
+            // 261115 R1-R3: in the terminal Ctrl+Q is an ordinary key (xterm
+            // sends 0x11); anywhere else it asks before quitting.
+            if (terminalHasFocus()) return
+            event.preventDefault()
+            event.stopPropagation()
+            if (!event.repeat) showQuitPopup().catch(showError)
             return
           }
           if (!event.shiftKey && String(event.key).toLowerCase() === 'r' && isOfflineResumable()) {
@@ -1716,7 +1785,6 @@
     updateActiveToggle()
     const realIds = new Set(sessions.map((session) => session.sessionId))
     state.pendingJoins = state.pendingJoins.filter((join) => !realIds.has(join.sessionId))
-    await prunePinnedSessions(realIds)
     state.sessions = withPinnedFirst([...state.pendingJoins, ...sessions])
     state.unfilteredSessions = unfiltered ? withPinnedFirst(unfiltered) : null
     ingestSessionIdentities(state.sessions)
@@ -1728,19 +1796,32 @@
     await Promise.all([loadTemplates(), loadPinnedSessionsPreference(), loadSizeLocks()])
   }
 
+  // The pins are read per profile. Until a read answered (the engine still
+  // starting, a profile being switched) `pinnedLoaded` is false and nothing
+  // writes them: a pin or an unpin then re-reads first, so it never saves a
+  // list built on an empty or another profile's one (261115 R4).
   async function loadPinnedSessionsPreference() {
+    state.pinnedLoaded = false
     let saved = null
     try {
-      saved = api ? await api.invoke('preference.get', { key: PINNED_SESSIONS_PREFERENCE }) : null
-    } catch {}
+      if (!api) return
+      saved = await api.invoke('preference.get', { key: PINNED_SESSIONS_PREFERENCE })
+    } catch {
+      return
+    }
     let ids = []
     try {
       ids = JSON.parse(saved || '[]')
     } catch {}
     state.pinnedIds = Array.isArray(ids) ? ids.filter((id) => typeof id === 'string' && id) : []
+    state.pinnedLoaded = true
   }
 
   async function setPinnedIds(ids) {
+    if (!state.pinnedLoaded) {
+      await loadPinnedSessionsPreference()
+      if (!state.pinnedLoaded) throw new Error('pinned sessions not loaded yet')
+    }
     state.pinnedIds = ids
     await api.invoke('preference.set', {
       key: PINNED_SESSIONS_PREFERENCE,
@@ -1760,12 +1841,35 @@
     return [...pinned, ...sessions.filter((session) => !pinnedSet.has(session))]
   }
 
-  // A pin for a session that no longer exists is dropped, but only when the
-  // list is unfiltered - a search hiding a session must not unpin it.
-  async function prunePinnedSessions(realIds) {
-    if (state.query || state.activeOnly) return
-    const kept = state.pinnedIds.filter((id) => realIds.has(id))
-    if (kept.length !== state.pinnedIds.length) await setPinnedIds(kept).catch(() => {})
+  // A pin of a session missing from the list is kept, only hidden
+  // (withPinnedFirst): a list can be empty or partial for a while - a new app
+  // version's first start, a profile switch - and pruning it then lost every
+  // pin for good (261115 R4). A pin goes when the user unpins it or deletes
+  // the session.
+
+  // The pinned sessions Ctrl+1..Ctrl+9 reach, in pin order (R39): pins of a
+  // session the app knows, joins still pending left out, at most nine.
+  function pinShortcutSessions() {
+    const out = []
+    for (const id of state.pinnedIds) {
+      const session = sessionEntryById(id)
+      if (session && !session.pending) out.push(session)
+      if (out.length === 9) break
+    }
+    return out
+  }
+
+  function pinShortcutNumber(session) {
+    if (!state.pinKeys || !session) return 0
+    return pinShortcutSessions().findIndex((s) => s.sessionId === session.sessionId) + 1
+  }
+
+  function pinShortcutKey(event) {
+    if (!state.pinKeys || !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+      return 0
+    }
+    const match = /^Digit([1-9])$/.exec(event.code || '')
+    return match ? Number(match[1]) : 0
   }
 
   function isPinnedSession(session) {
@@ -1773,6 +1877,7 @@
   }
 
   async function togglePinSession(session) {
+    if (!state.pinnedLoaded) await loadPinnedSessionsPreference()
     const next = isPinnedSession(session)
       ? state.pinnedIds.filter((id) => id !== session.sessionId)
       : [...state.pinnedIds, session.sessionId]
@@ -2045,7 +2150,7 @@
   }
 
   function hiddenCopyWarning(name, triggers) {
-    return `"${name}" is the deleted template for new sessions when you ${triggerVerbs(triggers)}; this profile will replace it.`
+    return `"${name}" (hidden or deleted) is the current template for new sessions when you ${triggerVerbs(triggers)}; this profile will replace it.`
   }
 
   function confirmHiddenCopyName(name, triggers) {
@@ -2729,6 +2834,7 @@
       els.sessions.append(buildSessionRow(current))
     }
     if (searching && rows.length) els.sessions.append(sessionSectionTitle('Session name matches'))
+    const nameHidden = searching && searchSectionHidden('Session name matches')
     if (!rows.length && !current && !(searching && crossSessionShown())) {
       const empty = document.createElement('div')
       empty.className = 'empty'
@@ -2736,7 +2842,7 @@
         state.query || state.activeOnly ? 'No matching sessions' : 'No sessions yet'
       els.sessions.append(empty)
     }
-    for (const session of rows) els.sessions.append(buildSessionRow(session))
+    if (!nameHidden) for (const session of rows) els.sessions.append(buildSessionRow(session))
     renderSessionBufferSection()
     if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)
     markSearchCursor()
@@ -2756,6 +2862,7 @@
     const other = all.filter((session) => !session.pending && !shown.has(session.sessionId))
     if (!other.length) return
     els.sessions.append(sessionSectionTitle('Other - unmatched sessions'))
+    if (searchSectionHidden('Other - unmatched sessions')) return
     for (const session of other) {
       const row = buildSessionRow(session)
       row.classList.add('unmatched')
@@ -2818,11 +2925,53 @@
     }, SESSION_REORDER_GUARD_MS)
   }
 
+  // A section heading. Every section but "Current session" carries a
+  // (hide)/(show) link after its name (261115 R38): a hidden section keeps
+  // its heading and drops its rows, so the arrows skip them too. Hidden
+  // sections stay hidden for the rest of the run, across searches.
+  const SEARCH_SECTION_KEYS = {
+    'Session name matches': 'name',
+    'Session buffer matches': 'buffer',
+    'Other - unmatched sessions': 'other'
+  }
+
+  function searchSectionHidden(text) {
+    const key = SEARCH_SECTION_KEYS[text]
+    return !!(key && state.hiddenSearchSections && state.hiddenSearchSections.has(key))
+  }
+
   function sessionSectionTitle(text) {
     const title = document.createElement('div')
     title.className = 'session-section-title'
-    title.textContent = text
+    title.dataset.title = text
+    const key = SEARCH_SECTION_KEYS[text]
+    if (!key) {
+      title.textContent = text
+      return title
+    }
+    const hidden = searchSectionHidden(text)
+    const toggle = document.createElement('a')
+    toggle.className = `session-section-toggle ${hidden ? 'show' : 'hide'}`
+    toggle.href = '#'
+    toggle.tabIndex = -1
+    toggle.dataset.section = key
+    toggle.textContent = hidden ? '(show)' : '(hide)'
+    // The search box keeps the focus; the click toggles only.
+    toggle.addEventListener('mousedown', (event) => event.preventDefault())
+    toggle.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      toggleSearchSection(key)
+    })
+    title.append(document.createTextNode(`${text} `), toggle)
     return title
+  }
+
+  function toggleSearchSection(key) {
+    const hidden = state.hiddenSearchSections || (state.hiddenSearchSections = new Set())
+    if (hidden.has(key)) hidden.delete(key)
+    else hidden.add(key)
+    renderSessions()
   }
 
   // One row of the session list: icon, name, subtitle, marks, identity
@@ -2847,7 +2996,7 @@
       : `${status}${joined}${shared} · ${formatTime(session.startedAt)} · ${formatBytes(session.sizeBytes || 0)}`
     const matchCount = Number.isFinite(options.matchCount) ? options.matchCount : null
     row.innerHTML = `
-    <i class="fa-solid ${liveIcon.icon} session-icon ${liveIcon.state}" aria-hidden="true"></i>
+    <span class="session-handle"><i class="fa-solid ${liveIcon.icon} session-icon ${liveIcon.state}" aria-hidden="true"></i></span>
     <span class="session-main">
       <span class="session-title"><span class="session-name"></span></span>
       <span class="session-sub${matchCount === null ? '' : ' match-count'}"></span>
@@ -2873,6 +3022,15 @@
       marks.append(sessionMark('fa-stamp session-default-mark', `Template when you ${verbs}`))
     }
     if (isPinnedSession(session)) {
+      // Its Ctrl+N number, left of the pin, while the keys are mapped (R40).
+      const number = pinShortcutNumber(session)
+      if (number) {
+        const key = document.createElement('span')
+        key.className = 'session-pin-number'
+        key.textContent = String(number)
+        key.title = `Ctrl+${number}`
+        marks.append(key)
+      }
       marks.append(sessionMark('fa-thumbtack session-pin-mark', 'Pinned'))
     }
     if (marks.childElementCount) {
@@ -2887,7 +3045,405 @@
       row.querySelector('.session-main').append(identity)
     }
     renderSessionActions(session, row.querySelector('.session-actions'))
+    if (canDragSessionRow(session, options)) wireSessionDrag(row, session)
+    adoptDraggedRow(row, session)
     return row
+  }
+
+  // ---- Reorder by dragging (261115 R5-R8, U2, R23-R27) ---------------------
+  // Over the row's left icon a drag handle shows (CSS, `.draggable`). Pressing
+  // it and moving the pointer lifts the row out of the list: a copy of it (the
+  // ghost) follows the pointer anywhere in the window, above everything, and
+  // the hand cursor stays until the drag ends (R23, R24). A bold dashed line
+  // marks the gap the row would land in, its own old place included (R25,
+  // R26). Letting go flies the ghost into that gap and puts the row back
+  // there (R27); off the row's group, Escape, or a cancel flies it home.
+  // Among the pinned rows the pin order changes, among the others the row
+  // gets a manual sort time (`sortAt`) between its new neighbours'. Not while
+  // searching (the list is not the list's order then).
+  const SORT_EDGE_MS = 42 * 60 * 1000
+  const SESSION_FLY_MS = 180
+  const SESSION_DRAG_SLOP = 3
+
+  function canDragSessionRow(session, options) {
+    return !session.pending && !searchIsOn() && !Number.isFinite(options.matchCount)
+  }
+
+  function sessionSortTime(session) {
+    if (Number.isFinite(session.sortAt)) return session.sortAt
+    return session.lastStartedAt || session.startedAt || 0
+  }
+
+  function wireSessionDrag(row, session) {
+    row.classList.add('draggable')
+    const handle = row.querySelector('.session-handle')
+    const grip = document.createElement('i')
+    grip.className = 'fa-solid fa-grip-vertical session-drag'
+    grip.setAttribute('aria-hidden', 'true')
+    handle.append(grip)
+    handle.title = 'Drag to reorder'
+    handle.addEventListener('click', (event) => event.stopPropagation())
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || state.sessionDrag) return
+      event.preventDefault()
+      event.stopPropagation()
+      startSessionDrag(row, session, event)
+    })
+  }
+
+  function startSessionDrag(row, session, event) {
+    const drag = {
+      id: session.sessionId,
+      pinned: isPinnedSession(session),
+      row,
+      startX: event.clientX,
+      startY: event.clientY,
+      lifted: false,
+      flying: false,
+      target: null,
+      ghost: null,
+      line: null,
+      grab: null,
+      home: null,
+      homeRect: null
+    }
+    // The hand from the press on (R23), wherever the pointer goes.
+    document.body.classList.add('session-reordering')
+    const move = (ev) => {
+      if (drag.flying) return
+      drag.lastX = ev.clientX
+      drag.lastY = ev.clientY
+      if (!drag.lifted) {
+        const dist = Math.hypot(ev.clientX - drag.startX, ev.clientY - drag.startY)
+        if (dist <= SESSION_DRAG_SLOP) return
+        liftSessionRow(drag)
+      }
+      moveSessionGhost(drag, ev.clientX, ev.clientY)
+      autoScrollSessions(ev.clientY)
+      drag.target = sessionDropTarget(drag, ev.clientX, ev.clientY)
+      drawSessionDropLine(drag)
+      previewPinNumbers(drag, drag.target ? drag.target.at : drag.home)
+    }
+    const up = (ev) => {
+      if (drag.flying) return
+      if (!drag.lifted) {
+        finishSessionDrag(drag)
+        return
+      }
+      moveSessionGhost(drag, ev.clientX, ev.clientY)
+      drag.target = sessionDropTarget(drag, ev.clientX, ev.clientY)
+      landSessionRow(drag, drag.target).catch(showError)
+    }
+    const cancel = () => {
+      if (drag.flying) return
+      if (drag.lifted) landSessionRow(drag, null).catch(showError)
+      else finishSessionDrag(drag)
+    }
+    const key = (ev) => {
+      if (ev.key !== 'Escape') return
+      ev.preventDefault()
+      ev.stopPropagation()
+      cancel()
+    }
+    // The click a drag's release makes lands nowhere.
+    const click = (ev) => {
+      if (!drag.lifted) return
+      ev.preventDefault()
+      ev.stopPropagation()
+    }
+    document.addEventListener('pointermove', move, true)
+    document.addEventListener('pointerup', up, true)
+    document.addEventListener('pointercancel', cancel, true)
+    document.addEventListener('keydown', key, true)
+    document.addEventListener('click', click, true)
+    window.addEventListener('blur', cancel)
+    drag.cleanup = () => {
+      document.removeEventListener('pointermove', move, true)
+      document.removeEventListener('pointerup', up, true)
+      document.removeEventListener('pointercancel', cancel, true)
+      document.removeEventListener('keydown', key, true)
+      window.removeEventListener('blur', cancel)
+      // After the release's click has gone by.
+      setTimeout(() => document.removeEventListener('click', click, true), 0)
+      document.body.classList.remove('session-reordering')
+      if (drag.ghost) drag.ghost.remove()
+      if (drag.line) drag.line.remove()
+      drag.row.classList.remove('lifted')
+    }
+    state.sessionDrag = drag
+  }
+
+  // The row leaves the list (its neighbours close up) and its ghost, a copy
+  // the same size, takes its place on a layer above the window.
+  function liftSessionRow(drag) {
+    const rect = drag.row.getBoundingClientRect()
+    drag.lifted = true
+    drag.homeRect = { left: rect.left, width: rect.width }
+    drag.grab = { dx: drag.startX - rect.left, dy: drag.startY - rect.top }
+    drag.size = { width: rect.width, height: rect.height }
+    const ghost = drag.row.cloneNode(true)
+    ghost.classList.add('session-ghost')
+    ghost.classList.remove('selected-cursor', 'drop-before', 'drop-after')
+    ghost.removeAttribute('id')
+    ghost.setAttribute('aria-hidden', 'true')
+    ghost.style.width = `${rect.width}px`
+    ghost.style.height = `${rect.height}px`
+    ghost.style.left = `${rect.left}px`
+    ghost.style.top = `${rect.top}px`
+    document.body.append(ghost)
+    drag.ghost = ghost
+    const line = document.createElement('div')
+    line.className = 'session-drop-line'
+    line.hidden = true
+    document.body.append(line)
+    drag.line = line
+    drag.row.classList.add('lifted')
+    drag.home = sessionDropGroup(drag).indexOf(drag.id)
+  }
+
+  // R43: while a pinned row is dragged, every pin's Ctrl+N number (the
+  // ghost's too) is the one it would have if the row were let go at gap `at`
+  // now; back home (Escape, its own gap) they are the old ones again. A pin
+  // pushed past the ninth loses its number, one pulled into the nine gets one.
+  function previewPinNumbers(drag, at) {
+    if (!drag.pinned || !state.pinKeys || !Number.isInteger(at)) return
+    const others = sessionDropGroup(drag).filter((id) => id !== drag.id)
+    const order = [...others.slice(0, at), drag.id, ...others.slice(at)]
+    const shown = new Set(order)
+    const numbers = new Map()
+    for (const id of [...order, ...state.pinnedIds.filter((id) => !shown.has(id))]) {
+      const session = sessionEntryById(id)
+      if (!session || session.pending) continue
+      numbers.set(id, numbers.size + 1)
+      if (numbers.size === 9) break
+    }
+    for (const id of others) setRowPinNumber(sessionRowEl(id), numbers.get(id) || 0)
+    setRowPinNumber(drag.row, numbers.get(drag.id) || 0)
+    setRowPinNumber(drag.ghost, numbers.get(drag.id) || 0)
+  }
+
+  function setRowPinNumber(row, number) {
+    const pin = row && row.querySelector('.session-pin-mark')
+    if (!pin) return
+    let key = row.querySelector('.session-pin-number')
+    if (!number) {
+      if (key) key.remove()
+      return
+    }
+    if (!key) {
+      key = document.createElement('span')
+      key.className = 'session-pin-number'
+      pin.before(key)
+    }
+    key.textContent = String(number)
+    key.title = `Ctrl+${number}`
+  }
+
+  // Free in the window, never out of it (R24).
+  function moveSessionGhost(drag, x, y) {
+    if (!drag.ghost) return
+    const maxLeft = Math.max(0, window.innerWidth - drag.size.width)
+    const maxTop = Math.max(0, window.innerHeight - drag.size.height)
+    const left = Math.min(Math.max(0, x - drag.grab.dx), maxLeft)
+    const top = Math.min(Math.max(0, y - drag.grab.dy), maxTop)
+    drag.ghost.style.left = `${left}px`
+    drag.ghost.style.top = `${top}px`
+  }
+
+  // Near the list's top or bottom edge the list scrolls, so a long list can
+  // be crossed in one drag.
+  function autoScrollSessions(y) {
+    const box = els.sessions.getBoundingClientRect()
+    const edge = 28
+    if (y < box.top + edge && y > box.top - edge) els.sessions.scrollTop -= 12
+    else if (y > box.bottom - edge && y < box.bottom + edge) els.sessions.scrollTop += 12
+  }
+
+  // The ids of the dragged row's group (pinned or not), in list order, the
+  // dragged one included.
+  function sessionDropGroup(drag) {
+    return Array.from(els.sessions.querySelectorAll('.session-row.draggable'))
+      .filter((el) => !el.classList.contains('session-ghost'))
+      .filter((el) => isPinnedSession(sessionEntryById(el.dataset.sessionId)) === drag.pinned)
+      .map((el) => el.dataset.sessionId)
+  }
+
+  function sessionRowEl(id) {
+    for (const el of els.sessions.querySelectorAll('.session-row.draggable')) {
+      if (el.dataset.sessionId === id) return el
+    }
+    return null
+  }
+
+  // The nearest element above (dir -1) or below (+1) `el` that is drawn: a
+  // row, a section title, a note; the lifted row and the ghost are skipped.
+  function shownSessionNeighbour(el, dir) {
+    let next = el ? (dir < 0 ? el.previousElementSibling : el.nextElementSibling) : null
+    while (
+      next &&
+      (next.classList.contains('lifted') ||
+        next.classList.contains('session-ghost') ||
+        !next.getClientRects().length)
+    ) {
+      next = dir < 0 ? next.previousElementSibling : next.nextElementSibling
+    }
+    return next
+  }
+
+  // The y of the gap between `above` and `below` (either may be missing).
+  function sessionGapY(above, below, box) {
+    const a = above ? above.getBoundingClientRect().bottom : null
+    const b = below ? below.getBoundingClientRect().top : null
+    if (a !== null && b !== null) return (a + b) / 2
+    if (a !== null) return a + 3
+    if (b !== null) return b - 3
+    return box.top + 3
+  }
+
+  // The gap of the dragged row's group nearest the pointer, counted among the
+  // group's other rows (the dragged row is out of the list): `at` 0 is above
+  // the first of them. There is always one, wherever the pointer is in the
+  // window (R31): above the group, `at` 0; below it, the last gap; a row alone
+  // in its group has its own place. The row's own old place is a gap like the
+  // others (R26). The line is kept inside the list's box, so it shows.
+  function sessionDropTarget(drag, x, y) {
+    const box = els.sessions.getBoundingClientRect()
+    const ids = sessionDropGroup(drag)
+    const others = ids.filter((id) => id !== drag.id)
+    const rows = others.map((id) => sessionRowEl(id))
+    let at = others.length
+    for (let i = 0; i < rows.length; i++) {
+      const rect = rows[i].getBoundingClientRect()
+      if (y < rect.top + rect.height / 2) {
+        at = i
+        break
+      }
+    }
+    let above
+    let below
+    if (!rows.length) {
+      above = shownSessionNeighbour(drag.row, -1)
+      below = shownSessionNeighbour(drag.row, 1)
+    } else {
+      above = at > 0 ? rows[at - 1] : shownSessionNeighbour(rows[0], -1)
+      below = at < rows.length ? rows[at] : shownSessionNeighbour(rows[rows.length - 1], 1)
+    }
+    const gapY = sessionGapY(above, below, box)
+    const place = drag.homeRect || box
+    return {
+      ids,
+      others,
+      at,
+      home: at === drag.home,
+      y: Math.min(Math.max(gapY, box.top + 2), box.bottom - 2),
+      left: place.left,
+      width: place.width
+    }
+  }
+
+  // R25: one bold dashed line, between the rows, not on them.
+  function drawSessionDropLine(drag) {
+    const line = drag.line
+    if (!line) return
+    const target = drag.target
+    line.hidden = !target
+    if (!target) return
+    line.classList.toggle('home', target.home)
+    line.style.left = `${target.left}px`
+    line.style.width = `${target.width}px`
+    line.style.top = `${Math.round(target.y)}px`
+  }
+
+  // R27: the row goes back into the list at its gap (hidden), the ghost
+  // flies onto it, and then the row shows. No target (Escape, a lost pointer, R31): it flies home.
+  async function landSessionRow(drag, target) {
+    drag.flying = true
+    if (drag.line) drag.line.hidden = true
+    const others = sessionDropGroup(drag).filter((id) => id !== drag.id)
+    const at = target ? target.at : drag.home
+    previewPinNumbers(drag, at)
+    const moved = !!target && !target.home
+    const anchor = at < others.length ? sessionRowEl(others[at]) : null
+    const after = !anchor && others.length ? sessionRowEl(others[others.length - 1]) : null
+    if (moved) {
+      if (anchor) anchor.before(drag.row)
+      else if (after) after.after(drag.row)
+    }
+    drag.row.classList.add('landing')
+    drag.row.classList.remove('lifted')
+    const to = drag.row.getBoundingClientRect()
+    const ghost = drag.ghost
+    const from = ghost ? ghost.getBoundingClientRect() : to
+    state.sessionLastFlight = {
+      id: drag.id,
+      moved,
+      from: { left: from.left, top: from.top },
+      to: { left: to.left, top: to.top },
+      ms: SESSION_FLY_MS,
+      at: Date.now()
+    }
+    if (ghost) {
+      const reduce =
+        window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const animation = ghost.animate(
+        [
+          { left: `${from.left}px`, top: `${from.top}px` },
+          { left: `${to.left}px`, top: `${to.top}px` }
+        ],
+        {
+          duration: reduce ? 0 : SESSION_FLY_MS,
+          easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+          fill: 'forwards'
+        }
+      )
+      await Promise.race([
+        animation.finished.catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, SESSION_FLY_MS + 120))
+      ])
+    }
+    drag.row.classList.remove('landing')
+    // The user moved this row: the R13 guard is for rows that move by themselves.
+    state.sessionRowPositions = sessionRowPositions()
+    finishSessionDrag(drag)
+    if (moved) await dropSessionRow(drag, { others, at })
+  }
+
+  function finishSessionDrag(drag) {
+    if (state.sessionDrag === drag) state.sessionDrag = null
+    if (drag.cleanup) drag.cleanup()
+  }
+
+  // The list may be drawn again mid-drag (a refresh): the new row of the
+  // dragged session stays out of the list (or hidden while the ghost lands),
+  // and the drag goes on with it.
+  function adoptDraggedRow(row, session) {
+    const drag = state.sessionDrag
+    if (!drag || !drag.lifted || drag.id !== session.sessionId) return
+    row.classList.add(drag.flying ? 'landing' : 'lifted')
+    drag.row = row
+  }
+
+  async function dropSessionRow(drag, target) {
+    const { others, at } = target
+    if (drag.pinned) {
+      // R8: the pin order, for the pins on show; pins of sessions not listed
+      // now keep their places after them.
+      const order = [...others.slice(0, at), drag.id, ...others.slice(at)]
+      const shown = new Set(order)
+      await setPinnedIds([...order, ...state.pinnedIds.filter((id) => !shown.has(id))])
+      await refreshSessions()
+      return
+    }
+    // R7: newest first, so above is later and below is earlier.
+    const above = at > 0 ? sessionEntryById(others[at - 1]) : null
+    const below = at < others.length ? sessionEntryById(others[at]) : null
+    let sortAt
+    if (above && below) sortAt = Math.floor((sessionSortTime(above) + sessionSortTime(below)) / 2)
+    else if (below) sortAt = sessionSortTime(below) + SORT_EDGE_MS
+    else if (above) sortAt = sessionSortTime(above) - SORT_EDGE_MS
+    else return
+    await api.invoke('session.update', { sessionId: drag.id, sortAt })
+    await refreshSessions()
   }
 
   // "12 matches (2 + 10 hidden history matches)", or "N matches" when
@@ -3005,6 +3561,23 @@
       if (row.dataset.sessionId === sessionId) {
         return row.querySelector('.session-action[data-action="delete"]')
       }
+    }
+    return null
+  }
+
+  async function editSelectedSessionProfile(session) {
+    const row = revealSessionRow(session.sessionId)
+    const anchor = row && row.querySelector('.session-action[data-action="edit"]')
+    await editSessionProfile(session, anchor || row || els.sessions)
+  }
+
+  // The first row of that session (in search it may show twice), scrolled
+  // into the list's view when it is out of it (261115 R28).
+  function revealSessionRow(sessionId) {
+    for (const row of els.sessions.querySelectorAll('.session-row')) {
+      if (row.dataset.sessionId !== sessionId) continue
+      row.scrollIntoView({ block: 'nearest' })
+      return row
     }
     return null
   }
@@ -3326,8 +3899,17 @@
         // slot, so the grid's gap never reached them (261113_ui-polish R7).
         const body = document.createElement('div')
         body.className = 'session-editor-advanced-body'
-        body.append(label, triggerSelect, skip.label)
+        // The stamp, as on a template's row, then the dropdown (R33).
+        const triggerRow = document.createElement('div')
+        triggerRow.className = 'session-editor-trigger-row'
+        const stamp = document.createElement('i')
+        stamp.className = 'fa-solid fa-stamp session-default-mark'
+        stamp.setAttribute('aria-hidden', 'true')
+        triggerRow.append(stamp, triggerSelect)
+        body.append(label, triggerRow, skip.label)
         advanced.append(summary, body)
+        // A template opens with Advanced shown, so its role is visible (R37).
+        if (options.mode === 'edit' && triggerSelect.value) advanced.open = true
         panel.insertBefore(advanced, actionsRow)
       }
       overlay.append(panel)
@@ -3614,7 +4196,7 @@
       ctrlPair,
       templateMenuItems(),
       collapsedPaneItems(),
-      [stunTurnMenuItem()],
+      [stunTurnMenuItem(), relayKeyMenuItem()],
       [{ kind: 'info', label: `ZBTerm v${state.appVersion || '?'}` }]
     ].filter((group) => group.length)
     return groups.flatMap((group, index) => (index ? [{ kind: 'separator' }, ...group] : group))
@@ -3626,6 +4208,134 @@
       label: 'STUN/TURN servers…',
       toggle: editIceServers
     }
+  }
+
+  function relayKeyMenuItem() {
+    return {
+      kind: 'field',
+      label: 'ZBTerm relay access key…',
+      toggle: () => editRelayKey().catch(showError)
+    }
+  }
+
+  // 261115 R18, U4: the access key a private relay prints ("ZBTerm relay
+  // access key: <64 hex>"), stored install-wide and pushed to the main
+  // process, which hands it to the engine (again after a worker restart).
+  // Empty means the default relay; anything else but 64 hex is refused.
+  async function editRelayKey() {
+    closeSettingsMenu()
+    let value = (await storedAppPreference(RELAY_KEY_STORAGE_KEY)) || ''
+    let warning = ''
+    for (;;) {
+      const values = await showModal({
+        title: 'ZBTerm relay access key (empty = default relay)',
+        okText: 'Save',
+        cancelText: 'Cancel',
+        popupId: RELAY_KEY_POPUP_ID,
+        fields: [{ placeholder: '64 hex characters, as the relay prints it', value }],
+        warning,
+        badge: relayStatusLine()
+      })
+      if (!values) return
+      const text = relayKeyFromPaste(values[0])
+      if (text === null) {
+        value = String(values[0] || '')
+        warning = 'Not a relay access key: it is 64 hex characters (0-9, a-f). Nothing was saved.'
+        setStatus('relay access key refused')
+        continue
+      }
+      persistAppPreference(RELAY_KEY_STORAGE_KEY, text)
+      await pushRelayKey(text)
+      setStatus(text ? 'relay access key saved' : 'relay: default')
+      return
+    }
+  }
+
+  // The key alone, or the relay's whole line pasted ("ZBTerm relay access
+  // key: <key>"); '' for empty; null when it is not a key.
+  function relayKeyFromPaste(raw) {
+    const text = String(raw || '').trim()
+    if (!text) return ''
+    const key = text
+      .replace(/^.*access key:\s*/i, '')
+      .trim()
+      .toLowerCase()
+    return /^[0-9a-f]{64}$/.test(key) ? key : null
+  }
+
+  async function pushRelayKey(text) {
+    const app = window.app
+    if (!app || typeof app.setRelayKey !== 'function') return
+    try {
+      await app.setRelayKey(text)
+    } catch (err) {
+      console.warn('setRelayKey failed:', err && err.message ? err.message : err)
+    }
+  }
+
+  async function restoreRelayKey() {
+    const saved = (await storedAppPreference(RELAY_KEY_STORAGE_KEY)) || ''
+    if (saved) await pushRelayKey(saved)
+  }
+
+  // 261115 R19: one line, filled when the engine answers and again once the
+  // DHT lookup ends: where the key comes from, found or not, used or not.
+  function relayStatusLine() {
+    const line = document.createElement('div')
+    line.className = 'relay-status'
+    line.textContent = 'Relay: …'
+    const fill = async (wait) => {
+      let status = null
+      try {
+        status = await api.invoke('share.relayStatus', { wait })
+      } catch {
+        status = null
+      }
+      if (!line.isConnected && wait) return
+      line.textContent = relayStatusText(status)
+      line.dataset.found = (status && status.found) || ''
+      line.dataset.source = (status && status.source) || ''
+    }
+    fill(false)
+      .then(() => fill(true))
+      .catch(() => {})
+    return line
+  }
+
+  function relayStatusText(status) {
+    if (!status) return 'Relay: unknown (the engine did not answer)'
+    // No default relay to name (none published, or not found): just N/A
+    // (2026-11-16, the user).
+    if (status.source === 'registry' && !status.relayKey && status.found !== 'found') {
+      return 'Relay (default): N/A'
+    }
+    const short = status.relayKey
+      ? `${status.relayKey.slice(0, 8)}…${status.relayKey.slice(-4)}`
+      : ''
+    const source =
+      status.source === 'env'
+        ? `ZBTERM_RELAY_PUBLIC_KEY ${short}`
+        : status.source === 'setting'
+          ? `your access key ${short}`
+          : status.source === 'registry'
+            ? status.relayKey
+              ? `the default relay ${short}`
+              : 'the default relay'
+            : 'none'
+    const found =
+      status.found === 'looking'
+        ? 'looking it up'
+        : status.found === 'found'
+          ? 'found'
+          : status.found === 'not-found'
+            ? 'not found'
+            : ''
+    const used = status.relayed
+      ? `used for ${status.relayed} connection${status.relayed === 1 ? '' : 's'} this run`
+      : 'not used this run'
+    return ['Relay: ' + source, found, status.source === 'none' ? '' : used]
+      .filter(Boolean)
+      .join(' · ')
   }
 
   function settingsPreferenceItems() {
@@ -3641,6 +4351,18 @@
         label: 'Copy on select',
         checked: state.copyOnSelect,
         toggle: toggleCopyOnSelect
+      },
+      {
+        kind: 'check',
+        label: 'Map Ctrl+1 to Ctrl+9 to pinned profiles',
+        checked: state.pinKeys,
+        toggle: togglePinKeys
+      },
+      {
+        kind: 'check',
+        label: 'Map F2 to edit profile',
+        checked: state.f2Edit,
+        toggle: toggleF2Edit
       },
       {
         kind: 'check',
@@ -3918,7 +4640,45 @@
     const currentIndex = selectable.findIndex((session) => session.sessionId === state.selectedId)
     const nextIndex =
       currentIndex === -1 ? 0 : (currentIndex + delta + selectable.length) % selectable.length
-    await selectSession(selectable[nextIndex])
+    // As the search walk (261114 R15, 261115 R9): an offline session is shown,
+    // not resumed; the toast offers ^R or Enter.
+    const next = selectable[nextIndex]
+    await selectSession(next, { extend: false })
+    if (next.sessionId === state.selectedId) revealSessionRow(next.sessionId)
+    if (next.sessionId === state.selectedId) {
+      if (isOfflineResumable()) showResumeHint()
+      else dismissToast('resume-hint')
+    }
+  }
+
+  function terminalHasFocus() {
+    return !!(
+      document.activeElement &&
+      els.terminal &&
+      els.terminal.contains(document.activeElement)
+    )
+  }
+
+  // 261115 R1, R2, U1: Ctrl+Q away from the terminal. One popup at a time;
+  // "Send ^Q" needs a live session to write to.
+  async function showQuitPopup() {
+    if (state.popupResolvers.has(QUIT_POPUP_ID)) return
+    const session = selectedSessionEntry()
+    const live = !!(state.selectedId && state.mode === 'live' && session && session.active)
+    const choice = await showModal({
+      title: 'Quit ZBTerm?',
+      okText: 'Quit',
+      danger: true,
+      popupId: QUIT_POPUP_ID,
+      extraButtons: [{ text: 'Send ^Q to the terminal', value: 'send', disabled: !live }]
+    })
+    if (choice === 'send') {
+      const sessionId = state.selectedId
+      if (sessionId) await api.invoke('session.input', { sessionId, data: '\x11' })
+      if (state.term) state.term.focus()
+      return
+    }
+    if (choice === true) await api.invoke('app.quit')
   }
 
   // The single funnel every profile creation goes through (design *Refuses*):
@@ -4549,6 +5309,7 @@
       type: settings.type,
       maxViewers: settings.type === 'group' ? settings.maxViewers : 1,
       autoJoin: autoJoinOverride === false ? false : !settings.requireApproval,
+      verifiedOnly: !!settings.verifiedOnly,
       ...(settings.backend ? { backend: settings.backend } : {})
     })
     // The first share activates its backend for the life of the core.
@@ -4730,9 +5491,7 @@
         claimed: !!(peer.provider && peer.provider !== 'unknown')
       },
       warning:
-        status === 'unknown' && request.linkType === 'group'
-          ? 'WARNING: until we add user authentication, YOU CANT TELL WHO IS REALLY JOINING VIA A GROUP LINK'
-          : '',
+        status === 'unknown' && request.linkType === 'group' ? UNIDENTIFIED_REQUESTER_WARNING : '',
       popupId: approvalPopupId(request.sessionId, request.requestId),
       ...approvalAnchor(request.sessionId)
     })
@@ -6202,6 +6961,33 @@
     return await storedBooleanPreference(SHARE_AUTO_COPY_STORAGE_KEY, false)
   }
 
+  // What the Share form warns about, by its options: who can get in, and
+  // whether the host sees who they are first. Danger only when a group link
+  // lets anyone in, unseen and unverified.
+  function shareWarning(settings) {
+    const group = settings.type === 'group'
+    if (settings.verifiedOnly) {
+      return {
+        text: settings.requireApproval
+          ? "Only people who prove a GitHub identity can ask to join, and you'll see who each one is before you approve."
+          : "Only people who prove a GitHub identity can join. They join without your approval; you'll see who each one is.",
+        danger: false
+      }
+    }
+    if (settings.requireApproval) {
+      return {
+        text: `${group ? 'Anyone with this link' : 'Whoever opens this link'} can ask to join. You'll see each person's verified GitHub identity before you approve. People who stay unidentified can't be told apart, so approve them only if you know who to expect.`,
+        danger: false
+      }
+    }
+    return {
+      text: group
+        ? 'Anyone with this link joins right away, without your approval. Some may be unidentified.'
+        : 'Whoever opens this link first joins right away, without your approval, and may be unidentified.',
+      danger: group
+    }
+  }
+
   // The Share wizard's option form (link type, max users, approval, Auto
   // Copy, warning) without its buttons, so the New/Copy editor can embed it.
   // `settings` is updated in place; `onChange` runs after a type is picked.
@@ -6210,6 +6996,7 @@
       type: 'single',
       maxViewers: 2,
       requireApproval: false,
+      verifiedOnly: false,
       autoCopy: false,
       ...initial
     }
@@ -6290,8 +7077,23 @@
       )
       approvalToggle.input.addEventListener('change', () => {
         settings.requireApproval = approvalToggle.input.checked
+        syncWarning()
       })
       root.append(approvalToggle.label)
+
+      const verifiedToggle = preferenceCheckbox(
+        'Only verified people can join',
+        !!settings.verifiedOnly
+      )
+      verifiedToggle.label.classList.add('share-verified-only')
+      verifiedToggle.input.addEventListener('change', () => {
+        settings.verifiedOnly = verifiedToggle.input.checked
+        syncWarning()
+      })
+      root.append(verifiedToggle.label)
+      // A dot at the end of each of the two safety lines: orange off, green on.
+      shareSafetyDot(approvalToggle)
+      shareSafetyDot(verifiedToggle)
 
       const autoCopyToggle = preferenceCheckbox('Auto Copy', settings.autoCopy)
       autoCopyToggle.input.addEventListener('change', () => {
@@ -6301,9 +7103,12 @@
       root.append(autoCopyToggle.label)
 
       const warning = document.createElement('div')
-      warning.className = `share-warning${settings.type === 'group' ? ' share-warning-danger' : ''}`
-      warning.textContent =
-        'WARNING: until we add user authentication, YOU CANT TELL WHO IS REALLY JOINING VIA A GROUP LINK'
+      const syncWarning = () => {
+        const { text, danger } = shareWarning(settings)
+        warning.className = `share-warning${danger ? ' share-warning-danger' : ''}`
+        warning.textContent = text
+      }
+      syncWarning()
       root.append(warning)
     }
 
@@ -6386,6 +7191,9 @@
 
       const body = document.createElement('div')
       panel.append(body)
+
+      // 261115 R19: the relay this share would fall back to.
+      panel.append(relayStatusLine())
 
       const actions = document.createElement('div')
       actions.className = 'modal-actions'
@@ -7335,6 +8143,20 @@
     return uri.startsWith(ZBTERM_JOIN_PREFIX) ? uri : ''
   }
 
+  function shareSafetyDot(toggle) {
+    const dot = document.createElement('span')
+    dot.className = 'share-safety-dot'
+    dot.setAttribute('aria-hidden', 'true')
+    const sync = () => {
+      dot.classList.toggle('on', toggle.input.checked)
+      dot.title = toggle.input.checked ? 'On: safer' : 'Off: less safe'
+    }
+    toggle.input.addEventListener('change', sync)
+    sync()
+    toggle.label.classList.add('share-safety')
+    toggle.label.append(dot)
+  }
+
   function preferenceCheckbox(text, checked) {
     const label = document.createElement('label')
     label.className = 'modal-check'
@@ -7478,7 +8300,20 @@
       ok.textContent = options.okText || 'OK'
       ok.disabled = identityBlocked
 
-      actions.append(cancel, ok)
+      // Buttons between Cancel and OK (the quit popup's "Send ^Q"); each
+      // resolves with its own value.
+      const extras = (Array.isArray(options.extraButtons) ? options.extraButtons : []).map(
+        (spec) => {
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.className = 'text-btn'
+          button.textContent = spec.text
+          button.disabled = !!spec.disabled
+          button.dataset.value = String(spec.value)
+          return button
+        }
+      )
+      actions.append(cancel, ...extras, ok)
       panel.append(actions)
       overlay.append(panel)
       document.body.append(overlay)
@@ -7511,6 +8346,9 @@
       }
 
       cancel.addEventListener('click', () => close(cancelValue()))
+      extras.forEach((button, index) => {
+        button.addEventListener('click', () => close(options.extraButtons[index].value))
+      })
       overlay.addEventListener('pointerdown', (event) => {
         if (event.target === overlay) close(cancelValue())
       })
@@ -8576,6 +9414,8 @@
   function applyTheme(theme, persist = false) {
     state.theme = theme
     document.documentElement.dataset.theme = theme
+    // The highlights carry their colours: made again in the new ones (R34).
+    if (state.searchHighlights) state.searchHighlights.hl.recolor()
     if (persist) {
       window.localStorage.setItem(THEME_STORAGE_KEY, theme)
       if (api) {
@@ -8678,6 +9518,31 @@
     const next = !state.appZoom
     applyAppZoom(next, true)
     if (next && state.ctrlZoom) applyCtrlZoom(false, true)
+  }
+
+  // Map F2 to edit profile (261115 R29, R30): a keyboard habit, install-wide like Ctrl -/+;
+  // on unless turned off.
+  async function restoreF2EditPreference() {
+    const saved = await storedAppPreference(F2_EDIT_STORAGE_KEY)
+    state.f2Edit = !(saved === '0' || saved === 'false')
+  }
+
+  function toggleF2Edit() {
+    state.f2Edit = !state.f2Edit
+    persistAppPreference(F2_EDIT_STORAGE_KEY, state.f2Edit ? '1' : '0')
+  }
+
+  // Map Ctrl+1 to Ctrl+9 to pinned profiles (261115 R39, R40): as F2, an
+  // install-wide habit, on unless turned off. The list redraws for the numbers.
+  async function restorePinKeysPreference() {
+    const saved = await storedAppPreference(PIN_KEYS_STORAGE_KEY)
+    state.pinKeys = !(saved === '0' || saved === 'false')
+  }
+
+  function togglePinKeys() {
+    state.pinKeys = !state.pinKeys
+    persistAppPreference(PIN_KEYS_STORAGE_KEY, state.pinKeys ? '1' : '0')
+    renderSessions()
   }
 
   async function restoreZoomPreferences() {
@@ -9144,11 +10009,12 @@
       count: result.count,
       matches: result.matches,
       index: -1,
-      marker: null,
-      decorations: old ? old.decorations : []
+      marker: null
     }
     if (old) disposeQuietly(old.marker)
     state.bufferSearch = bs
+    const highlights = searchHighlights()
+    if (highlights) highlights.setMatches(query, bs.matches)
     if (keep) {
       bs.index = bs.matches.findIndex((match) => match.row === keep.row && match.col === keep.col)
     }
@@ -9181,7 +10047,9 @@
       if (options.reveal) revealBufferRow(match.row)
     }
     updateSearchCount()
-    drawSearchDecorations()
+    const highlights = searchHighlights()
+    const place = match ? { ...match, row: bs.marker ? bs.marker.line : match.row } : null
+    if (highlights) highlights.setCurrent(place)
   }
 
   // Scrolls the terminal so buffer row `row` is on screen (centred when it
@@ -9231,10 +10099,8 @@
     state.inSessionRescanTimer = null
     const bs = state.bufferSearch
     state.bufferSearch = null
-    if (bs) {
-      disposeQuietly(bs.marker)
-      for (const item of bs.decorations || []) disposeQuietly(item)
-    }
+    if (bs) disposeQuietly(bs.marker)
+    if (state.searchHighlights) state.searchHighlights.hl.clear()
     updateSearchCount()
   }
 
@@ -9354,7 +10220,7 @@
     const rows = []
     for (const el of els.sessions ? els.sessions.children : []) {
       if (el.classList.contains('session-section-title')) {
-        const text = el.textContent.replace(/\s+/g, ' ').trim()
+        const text = el.dataset.title || el.textContent.replace(/\s+/g, ' ').trim()
         section = sectionOf[text] || text
       } else if (el.classList.contains('session-row')) {
         rows.push({ el, section, id: el.dataset.sessionId })
@@ -9640,10 +10506,8 @@
   function renderSessionBufferSection() {
     const bm = state.bufferMatches
     if (!bm || !crossSessionShown()) return
-    const title = document.createElement('div')
-    title.className = 'session-section-title'
-    title.textContent = 'Session buffer matches'
-    els.sessions.append(title)
+    els.sessions.append(sessionSectionTitle('Session buffer matches'))
+    if (searchSectionHidden('Session buffer matches')) return
     for (const row of bm.rows) {
       const session = bm.sessions.get(row.id)
       if (!session) continue
@@ -9664,166 +10528,61 @@
     return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
   }
 
-  // The highlighted pieces in rows [top, bottom): one per row a match covers,
-  // with the matches that touch on a row merged into one run (a 1-character
-  // query can match every cell on screen: one run per row, not one
-  // decoration per cell, keeps typing responsive, U3). The current match is
-  // always its own piece. `shift` moves every match by the rows output
-  // trimmed since the scan.
-  function searchHighlightRuns(bs, top, bottom, cols, shift = 0) {
-    const pieces = []
-    for (let i = 0; i < bs.matches.length; i++) {
-      const match = bs.matches[i]
-      const row = match.row + shift
-      // Newest first: every later match starts above this one.
-      if (row + Math.ceil((match.col + match.len) / cols) <= top) break
-      if (row >= bottom) continue
-      let left = match.len
-      let x = match.col
-      for (let r = row; left > 0 && r < bottom; r++) {
-        const width = Math.min(left, cols - x)
-        if (r >= top && width > 0) pieces.push({ row: r, x, width, current: i === bs.index })
-        left -= width
-        x = 0
-      }
-    }
-    pieces.sort((p, q) => p.row - q.row || p.x - q.x)
-    const runs = []
-    for (const piece of pieces) {
-      const last = runs[runs.length - 1]
-      if (
-        last &&
-        !last.current &&
-        !piece.current &&
-        last.row === piece.row &&
-        last.x + last.width === piece.x
-      ) {
-        last.width += piece.width
-      } else {
-        runs.push({ ...piece })
-      }
-    }
-    return runs
-  }
-
-  // Highlights the matches in the rows on screen; the current one in its own
-  // colour. A match running past the row's end gets a second piece on the
-  // next row. Redone after each scan and step, and on scroll.
-  function drawSearchDecorations() {
-    const bs = state.bufferSearch
+  // The highlighter of the terminal on show (R34-R36): made with the terminal,
+  // and again for a new one.
+  function searchHighlights() {
     const term = state.term
-    if (!bs) return
-    for (const item of bs.decorations) disposeQuietly(item)
-    bs.decorations = []
-    if (!term || !bs.matches.length) return
-    if (term.buffer.active.type !== 'normal') {
-      drawSearchOverlay(bs, term)
-      return
+    const factory = window.zbtermSearchHighlights
+    if (!term || !factory) return null
+    if (state.searchHighlights && state.searchHighlights.term === term) {
+      return state.searchHighlights.hl
     }
-    const buffer = term.buffer.active
-    const top = buffer.viewportY
-    const plain = searchColorToken('--search-match', '#5c4a12')
-    const current = searchColorToken('--search-current', '#f3c969')
-    const currentFg = searchColorToken('--search-current-fg', '#111316')
-    const held = bs.index >= 0 && bs.marker && !bs.marker.isDisposed
-    const shift = held ? bs.marker.line - bs.matches[bs.index].row : 0
-    for (const run of searchHighlightRuns(bs, top, top + term.rows, term.cols, shift)) {
-      const marker = markerAtRow(run.row)
-      if (!marker) continue
-      const decoration = term.registerDecoration({
-        marker,
-        x: run.x,
-        width: run.width,
-        backgroundColor: run.current ? current : plain,
-        ...(run.current ? { foregroundColor: currentFg } : {})
-      })
-      if (decoration) {
-        decoration.onDispose(() => disposeQuietly(marker))
-        bs.decorations.push(decoration)
-      } else {
-        disposeQuietly(marker)
-      }
-    }
-  }
-
-  // xterm draws no decorations on the alternate screen (vim, less):
-  // registerDecoration answers undefined there. Its matches are drawn as boxes
-  // in a layer over the terminal's screen element instead, placed on xterm's
-  // cell grid: the layer is as large as the grid xterm sized the screen to
-  // (cols x rows cells, its inline width and height) and each box sits in
-  // percent of it. Each box goes into bs.decorations with a dispose(), like a
-  // decoration.
-  function searchOverlayLayer(term) {
-    const screen = term.element ? term.element.querySelector('.xterm-screen') : null
-    if (!screen) return null
-    let layer = screen.querySelector(':scope > .search-overlay')
-    if (!layer) {
-      layer = document.createElement('div')
-      layer.className = 'search-overlay'
-      layer.setAttribute('aria-hidden', 'true')
-      screen.append(layer)
-    }
-    layer.style.width = screen.style.width || '100%'
-    layer.style.height = screen.style.height || '100%'
-    return layer
-  }
-
-  function drawSearchOverlay(bs, term) {
-    const layer = searchOverlayLayer(term)
-    if (!layer) return
-    const top = term.buffer.active.viewportY
-    const cols = term.cols
-    const rows = term.rows
-    for (const run of searchHighlightRuns(bs, top, top + rows, cols)) {
-      const mark = document.createElement('div')
-      mark.className = run.current ? 'search-mark current' : 'search-mark'
-      mark.style.left = `${(run.x / cols) * 100}%`
-      mark.style.width = `${(run.width / cols) * 100}%`
-      mark.style.top = `${((run.row - top) / rows) * 100}%`
-      mark.style.height = `${100 / rows}%`
-      layer.append(mark)
-      bs.decorations.push({
-        isDisposed: false,
-        element: mark,
-        dispose() {
-          this.isDisposed = true
-          mark.remove()
-        }
-      })
-    }
-  }
-
-  // On scroll and resize: redrawn on the next frame, but not more often than
-  // every SEARCH_DECORATIONS_MIN_MS while output scrolls the screen (F3, U3:
-  // a flood scrolls every frame, and each redraw replaces every highlight).
-  function scheduleSearchDecorations() {
-    if (!state.bufferSearch || state.searchDecorationFrame || state.searchDecorationTimer) return
-    const wait = state.searchDecorationsAt + SEARCH_DECORATIONS_MIN_MS - Date.now()
-    const draw = () => {
-      state.searchDecorationFrame = window.requestAnimationFrame(() => {
-        state.searchDecorationFrame = 0
-        state.searchDecorationsAt = Date.now()
-        drawSearchDecorations()
-      })
-    }
-    if (wait <= 0) {
-      draw()
-      return
-    }
-    state.searchDecorationTimer = setTimeout(() => {
-      state.searchDecorationTimer = null
-      draw()
-    }, wait)
+    if (state.searchHighlights) state.searchHighlights.hl.clear()
+    const hl = factory.createSearchHighlights(term, {
+      scan: window.zbtermScanBuffer,
+      colors: () => ({
+        match: searchColorToken('--search-match', '#5c4a12'),
+        current: searchColorToken('--search-current', '#f3c969'),
+        currentFg: searchColorToken('--search-current-fg', '#111316')
+      }),
+      // The scrollback was cleared under the highlights: a re-scan.
+      onLost: () => noteInSessionBufferChanged()
+    })
+    state.searchHighlights = { term, hl }
+    return hl
   }
 
   function wireInSessionSearch() {
     const term = state.term
     if (!term || state.inSessionSearchWired === term) return
     state.inSessionSearchWired = term
-    term.onWriteParsed(noteInSessionBufferChanged)
-    term.buffer.onBufferChange(noteInSessionBufferChanged)
-    term.onScroll(scheduleSearchDecorations)
-    term.onResize(scheduleSearchDecorations)
+    // After a write, the rows a program can change are redone at once,
+    // before xterm draws them (R35); the count and the rest follow the scan.
+    term.onWriteParsed(() => {
+      const highlights = state.term === term && inSessionQuery() ? searchHighlights() : null
+      if (highlights) highlights.refreshLive()
+      noteInSessionBufferChanged()
+    })
+    // U6: the other screen's highlights go before it draws.
+    term.buffer.onBufferChange(() => {
+      if (state.searchHighlights && state.searchHighlights.term === term) {
+        state.searchHighlights.hl.bufferChanged()
+      }
+      noteInSessionBufferChanged()
+    })
+    // R34: a scroll changes nothing, unless the highlights are capped (R36).
+    term.onScroll(() => {
+      if (state.searchHighlights && state.searchHighlights.term === term) {
+        state.searchHighlights.hl.viewportMoved()
+      }
+    })
+    // Wrapped rows move: the screen is redone at once, the rest by a re-scan.
+    term.onResize(() => {
+      if (state.searchHighlights && state.searchHighlights.term === term) {
+        state.searchHighlights.hl.resized()
+      }
+      noteInSessionBufferChanged()
+    })
   }
 
   // The bottom bar's height (the resizer ends above it) and, collapsed, the
@@ -10544,6 +11303,99 @@
     return top
   }
 
+  // 261115: the list as drawn, for the reorder and pin checks.
+  function debugSessionOrder() {
+    const rows = Array.from(els.sessions.querySelectorAll('.session-row')).map((el) => {
+      const session = sessionEntryById(el.dataset.sessionId)
+      const handle = el.querySelector('.session-handle')
+      const grip = el.querySelector('.session-drag')
+      const icon = el.querySelector('.session-icon')
+      const gripStyle = grip ? window.getComputedStyle(grip) : null
+      return {
+        id: el.dataset.sessionId,
+        name: session ? session.name : null,
+        pinned: isPinnedSession(session),
+        sortAt: session && Number.isFinite(session.sortAt) ? session.sortAt : null,
+        sortTime: session ? sessionSortTime(session) : null,
+        draggable: el.classList.contains('draggable'),
+        handle: handle ? debugRect(handle) : null,
+        grip: gripStyle ? { visible: gripStyle.display !== 'none', color: gripStyle.color } : null,
+        iconVisible: icon ? window.getComputedStyle(icon).display !== 'none' : null,
+        pinNumber: (() => {
+          const key = el.querySelector('.session-pin-number')
+          const pin = el.querySelector('.session-pin-mark')
+          if (!key) return null
+          const a = key.getBoundingClientRect()
+          const b = pin ? pin.getBoundingClientRect() : null
+          return { text: key.textContent, leftOfPin: !!b && a.right <= b.left + 1 }
+        })(),
+        lifted: el.classList.contains('lifted'),
+        rect: debugRect(el)
+      }
+    })
+    const drag = state.sessionDrag
+    const ghost = document.querySelector('.session-ghost')
+    const line = document.querySelector('.session-drop-line')
+    const lineStyle = line && !line.hidden ? window.getComputedStyle(line) : null
+    return {
+      ids: state.sessions.map((session) => session.sessionId),
+      pinned: state.pinnedIds,
+      pinnedLoaded: state.pinnedLoaded,
+      dragging: drag ? drag.id : null,
+      drag: drag
+        ? {
+            id: drag.id,
+            lifted: drag.lifted,
+            flying: drag.flying,
+            home: drag.home,
+            at: drag.target ? drag.target.at : null,
+            atHome: drag.target ? drag.target.home : null,
+            bodyCursor: window.getComputedStyle(document.body).cursor,
+            cursorUnder: (() => {
+              const el = Number.isFinite(drag.lastX)
+                ? document.elementFromPoint(drag.lastX, drag.lastY)
+                : null
+              return el ? window.getComputedStyle(el).cursor : null
+            })(),
+            ghost: ghost
+              ? {
+                  ...debugRect(ghost),
+                  zIndex: window.getComputedStyle(ghost).zIndex,
+                  pinNumber: (() => {
+                    const key = ghost.querySelector('.session-pin-number')
+                    return key
+                      ? { text: key.textContent, color: window.getComputedStyle(key).color }
+                      : null
+                  })(),
+                  pinColor: (() => {
+                    const pin = ghost.querySelector('.session-pin-mark')
+                    return pin ? window.getComputedStyle(pin).color : null
+                  })()
+                }
+              : null,
+            line: lineStyle
+              ? {
+                  ...debugRect(line),
+                  style: lineStyle.borderTopStyle,
+                  width: parseFloat(lineStyle.borderTopWidth)
+                }
+              : null
+          }
+        : null,
+      lastFlight: state.sessionLastFlight,
+      list: debugRect(els.sessions),
+      selectedId: state.selectedId,
+      f2Edit: state.f2Edit,
+      pinKeys: state.pinKeys,
+      hiddenSearchSections: Array.from(state.hiddenSearchSections || []),
+      overlays: document.querySelectorAll('.modal-overlay').length,
+      terminalFocused: terminalHasFocus(),
+      relayStatus: (document.querySelector('.relay-status') || {}).textContent || null,
+      theme: document.documentElement.dataset.theme || null,
+      rows
+    }
+  }
+
   function debugModalState() {
     const overlay = debugTopModalOverlay()
     if (!overlay) return null
@@ -10900,7 +11752,7 @@
   // built yet reads as absent (null, false, 0, []), so a kit fails on its own
   // assertion. The state it reads, when the feature exists:
   //   state.bufferSearch        { query, count, matches: [{ row, col, len }], index
-  //                               (0-based into matches, -1 for none), marker, decorations: [] }
+  //                               (0-based into matches, -1 for none), marker }
   //   state.bufferSearchSeq     the current query's sequence number
   //   state.bufferSearchPending the session.searchBuffer calls not answered yet (Set, Map or count)
   //   state.bufferSearchCross   true while a cross-session search runs for the box's text
@@ -10943,7 +11795,7 @@
     const rows = []
     children.forEach((el, index) => {
       if (el.classList.contains('session-section-title')) {
-        const text = el.textContent.replace(/\s+/g, ' ').trim()
+        const text = el.dataset.title || el.textContent.replace(/\s+/g, ' ').trim()
         headings.push({ text, index })
         section = sectionOf[text] || text
         if (section === 'buffer' && heading === null) {
@@ -10998,7 +11850,22 @@
         .filter((el) => el.classList.contains('session-section-title'))
         .map((el) => {
           const style = window.getComputedStyle(el)
-          return { text: el.textContent.trim(), fontSize: style.fontSize, color: style.color }
+          const toggle = el.querySelector('.session-section-toggle')
+          const link = toggle ? window.getComputedStyle(toggle) : null
+          return {
+            text: el.dataset.title || el.textContent.trim(),
+            fontSize: style.fontSize,
+            color: style.color,
+            toggle: toggle
+              ? {
+                  text: toggle.textContent,
+                  section: toggle.dataset.section,
+                  color: link.color,
+                  opacity: link.opacity,
+                  underline: link.textDecorationLine.includes('underline')
+                }
+              : null
+          }
         }),
       guard: debugReorderGuard()
     }
@@ -11024,32 +11891,31 @@
     }
   }
 
-  // The highlights as drawn (R2): each of the search's decorations whose
-  // element is on screen, as viewport cells read off its rect against the
-  // terminal's screen element, { row, col, width }. xterm makes an element
-  // only for a decoration in the viewport and hides it (display none) when it
-  // scrolls out; the alternate screen's overlay boxes are read the same way.
+  // The highlights as registered in the viewport (R2, R34-R36), from the
+  // highlighter's records, as viewport cells: { drawn: the matches' (bottom
+  // layer) [{ row, col, width }], top: the current match's, cells: the text
+  // each of drawn covers now }. On the alternate screen xterm hides the
+  // decorations' elements (the renderer paints the cells), so their rects
+  // prove nothing; the records are what the renderer paints.
   function debugDrawnSearchMarks(bs, term) {
-    if (!bs || !term || !term.element || !Array.isArray(bs.decorations)) return []
-    const screen = term.element.querySelector('.xterm-screen')
-    if (!screen || !term.cols || !term.rows) return []
-    const grid = screen.getBoundingClientRect()
-    const cellWidth = grid.width / term.cols
-    const cellHeight = grid.height / term.rows
-    if (!cellWidth || !cellHeight) return []
-    const drawn = []
-    for (const item of bs.decorations) {
-      const el = item && !item.isDisposed ? item.element : null
-      if (!el || !el.isConnected || window.getComputedStyle(el).display === 'none') continue
-      const rect = el.getBoundingClientRect()
-      if (!rect.width || !rect.height) continue
-      drawn.push({
-        row: Math.round((rect.top - grid.top) / cellHeight),
-        col: Math.round((rect.left - grid.left) / cellWidth),
-        width: Math.round(rect.width / cellWidth)
-      })
+    const highlights =
+      state.searchHighlights && state.searchHighlights.term === term
+        ? state.searchHighlights.hl
+        : null
+    const out = { drawn: [], top: [], cells: [] }
+    if (!bs || !term || !highlights) return out
+    const buffer = term.buffer.active
+    for (const mark of highlights.drawn(buffer.viewportY, term.rows)) {
+      const cell = { row: mark.row, col: mark.col, width: mark.width }
+      if (mark.layer === 'top') {
+        out.top.push(cell)
+        continue
+      }
+      out.drawn.push(cell)
+      const line = buffer.getLine(buffer.viewportY + mark.row)
+      out.cells.push(line ? line.translateToString(false, mark.col, mark.col + mark.width) : null)
     }
-    return drawn.sort((a, b) => a.row - b.row || a.col - b.col)
+    return out
   }
 
   function debugInSessionSearch() {
@@ -11075,8 +11941,25 @@
       baseY: buffer ? buffer.baseY : null,
       length: buffer ? buffer.length : null,
       rows: term ? term.rows : null,
-      decorations: bs && Array.isArray(bs.decorations) ? bs.decorations.length : 0,
-      drawn: debugDrawnSearchMarks(bs, term),
+      decorations:
+        bs && state.searchHighlights && state.searchHighlights.term === term
+          ? state.searchHighlights.hl.stats().decorations
+          : 0,
+      highlights:
+        state.searchHighlights && state.searchHighlights.term === term
+          ? state.searchHighlights.hl.stats()
+          : null,
+      ...(() => {
+        const marks = debugDrawnSearchMarks(bs, term)
+        return { drawn: marks.drawn, drawnTop: marks.top, drawnCells: marks.cells }
+      })(),
+      // The rows on screen as text, top to bottom.
+      screen:
+        buffer && term
+          ? Array.from({ length: term.rows }, (_, i) =>
+              debugBufferLineText(buffer, buffer.viewportY + i)
+            )
+          : [],
       colors: {
         match: searchColorToken('--search-match', '#5c4a12'),
         current: searchColorToken('--search-current', '#f3c969')
@@ -11545,6 +12428,8 @@
       cursor: styles.cursor,
       opacity: Number(styles.opacity),
       pointerEvents: styles.pointerEvents,
+      visibility: styles.visibility,
+      backgroundColor: styles.backgroundColor,
       // 261114_live-output-and-fixes kit (R6/R7).
       fontFamily: styles.fontFamily,
       ariaLabel: el.getAttribute('aria-label'),
@@ -11779,6 +12664,7 @@
     if (command === 'style-of') return debugStyleOf(request.selector)
     // The 261114_live-output-and-fixes kit's R8-R13 commands: pure reads.
     if (command === 'search-mode') return debugSearchMode()
+    if (command === 'session-order') return debugSessionOrder()
     if (command === 'logo-text') return debugLogoText(request.source)
     // The 261111_buffer-search kit's commands: pure reads.
     if (command === 'search-state') return debugSearchState()
