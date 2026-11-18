@@ -414,6 +414,8 @@ class App {
       durationMs: extra.durationMs || Math.round(1400 / Math.max(1, opts.speed))
     })
     await pause(extra.hold === undefined ? 500 : extra.hold)
+    // With the button still down (a screenshot of the drag, say).
+    if (extra.onHold) await extra.onHold()
     await this.mouse({ type: 'up', x: b.x, y: b.y })
     await pause(extra.after === undefined ? 500 : extra.after)
   }
@@ -426,9 +428,13 @@ class App {
     return (terminal.visibleRows || []).map((row) => row.text).join('\n')
   }
 
+  // `text`: a string, or a RegExp.
   waitTerm(text, timeoutMs = 20000) {
     return waitFor(
-      async () => (await this.termText()).includes(text),
+      async () => {
+        const screen = await this.termText()
+        return text instanceof RegExp ? text.test(screen) : screen.includes(text)
+      },
       `${this.name}: "${text}" in the terminal`,
       timeoutMs
     )

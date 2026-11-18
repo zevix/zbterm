@@ -70,7 +70,7 @@
 
     // The toolkit a plugin builds its controls with (LaunchPlugin.getUI).
     function toolkit(step) {
-      return {
+      const kit = {
         document,
         el,
         button,
@@ -107,11 +107,119 @@
           node.value = value
           node.dispatchEvent(new window.Event('input', { bubbles: true }))
         },
+        // A text field with a list of suggestions under it, filtered by what
+        // is typed. `items()` resolves to [{ value, label?, detail? }] and is
+        // asked once, the first time the list opens. Typing opens the list;
+        // Down moves into it (and opens it), Up and Down walk it, Enter or
+        // Tab takes the suggestion, Escape closes it.
+        combo({ name, placeholder, value, onInput, className, items }) {
+          const input = kit.input({ name, placeholder, value, onInput, className })
+          input.setAttribute('role', 'combobox')
+          input.setAttribute('aria-autocomplete', 'list')
+          input.setAttribute('aria-expanded', 'false')
+          const list = el('div', 'launch-combo-list')
+          list.setAttribute('role', 'listbox')
+          list.hidden = true
+          const wrap = el('div', 'launch-combo', null, [input, list])
+          let loading = null
+          let picking = false
+          const load = () => {
+            if (!loading) {
+              loading = Promise.resolve()
+                .then(() => (items ? items() : []))
+                .then((all) => (Array.isArray(all) ? all : []))
+                .catch(() => [])
+            }
+            return loading
+          }
+          const hide = () => {
+            list.hidden = true
+            input.setAttribute('aria-expanded', 'false')
+          }
+          const pick = (item) => {
+            picking = true
+            kit.setValue(input, item.value)
+            picking = false
+            hide()
+            input.focus()
+          }
+          // `typed`: opened by typing, so a list holding only what is
+          // already there has nothing to offer.
+          const show = async (typed) => {
+            const all = await load()
+            const term = input.value.trim().toLowerCase()
+            const matches = all.filter((item) =>
+              [item.label, item.value, item.detail].some(
+                (text) => text && String(text).toLowerCase().includes(term)
+              )
+            )
+            const pointless = typed && matches.length === 1 && matches[0].value === input.value
+            list.replaceChildren(
+              ...matches.map((item) => {
+                const option = el('button', 'launch-combo-item', null, [
+                  el('span', 'launch-combo-name', item.label || item.value)
+                ])
+                if (item.detail) option.append(el('span', 'launch-combo-detail', item.detail))
+                option.type = 'button'
+                option.tabIndex = -1
+                option.setAttribute('role', 'option')
+                option.dataset.value = item.value
+                option.addEventListener('mousedown', (event) => event.preventDefault())
+                option.addEventListener('click', () => pick(item))
+                option._item = item
+                return option
+              })
+            )
+            list.hidden = !matches.length || pointless || !wrap.contains(document.activeElement)
+            input.setAttribute('aria-expanded', String(!list.hidden))
+            return !list.hidden
+          }
+          input.addEventListener('input', () => {
+            if (!picking) show(true)
+          })
+          input.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              show(false).then((open) => {
+                if (open) list.firstElementChild.focus()
+              })
+            } else if (event.key === 'Escape' && !list.hidden) {
+              // The dialog's own Escape would close the whole dialog.
+              event.preventDefault()
+              event.stopPropagation()
+              hide()
+            }
+          })
+          list.addEventListener('keydown', (event) => {
+            const options = Array.from(list.children)
+            const at = options.indexOf(document.activeElement)
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault()
+              const step = event.key === 'ArrowDown' ? 1 : -1
+              if (at + step < 0) input.focus()
+              else options[Math.min(options.length - 1, at + step)].focus()
+            } else if (event.key === 'Enter' || event.key === 'Tab') {
+              event.preventDefault()
+              event.stopPropagation()
+              if (at >= 0) pick(options[at]._item)
+            } else if (event.key === 'Escape') {
+              event.preventDefault()
+              event.stopPropagation()
+              hide()
+              input.focus()
+            }
+          })
+          wrap.addEventListener('focusout', (event) => {
+            if (!wrap.contains(event.relatedTarget)) hide()
+          })
+          return wrap
+        },
         // Controls side by side, the first one taking the room.
         row: (...children) => el('div', 'launch-row', null, children),
         // Controls one under the other.
         stack: (...children) => el('div', 'launch-stack', null, children)
       }
+      return kit
     }
 
     function render() {

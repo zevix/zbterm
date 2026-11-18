@@ -4,6 +4,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const { spawnSync } = require('child_process')
 
 const BASHRC = `# ZBTerm demo shell
 PS1='\\[\\e[1;32m\\]\${ZBDEMO_WHO:-demo}@laptop\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ '
@@ -36,6 +37,12 @@ env=\${1:-staging}
 printf '\\e[1;34m==>\\e[0m \\e[1mDeploying shop-api 2.4.0 to %s\\e[0m\\n' "$env"
 sleep 0.4; printf '    rolling out  api-1  \\e[32mok\\e[0m\\n'
 sleep 0.4; printf '    rolling out  api-2  \\e[32mok\\e[0m\\n'
+if [ "$env" != staging ]; then
+  sleep 0.4; printf '    rolling out  api-3  \\e[32mok\\e[0m\\n'
+  printf '\\e[1;32mDeployed\\e[0m shop-api 2.4.0 to %s\\n' "$env"
+  exit 0
+fi
+# Staging's third node fails: what the search scene finds.
 sleep 0.5; printf '    rolling out  api-3  \\e[31mERROR\\e[0m health check failed (503)\\n'
 sleep 0.3; printf '\\e[1;31mERROR\\e[0m deploy to %s rolled back\\n' "$env"
 exit 1
@@ -100,6 +107,56 @@ function writeFixtures(home) {
   return project
 }
 
+// The demo's own ~/.ssh, handed to the app with --custom-dot-ssh-path: the
+// SSH step lists these Host names and keys, never the presenter's. ssh is
+// kept inside it too: no agent, only these keys, its own known_hosts (the
+// app adds that one), and a first connection that accepts the host key
+// without asking.
+function writeDotSsh(home) {
+  const dir = path.join(home, '.ssh')
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  for (const name of ['id_ed25519', 'work_ed25519']) {
+    const key = path.join(dir, name)
+    if (fs.existsSync(key)) continue
+    const made = spawnSync(
+      'ssh-keygen',
+      ['-q', '-t', 'ed25519', '-N', '', '-C', `alice@laptop`, '-f', key],
+      { stdio: 'ignore' }
+    )
+    // Without ssh-keygen the list still shows the names.
+    if (made.status !== 0) {
+      fs.writeFileSync(key, '', { mode: 0o600 })
+      fs.writeFileSync(`${key}.pub`, '')
+    }
+  }
+  const config = [
+    "# The demo's ssh config (scripts/demo/fixtures.js)",
+    'Host starwars',
+    '  HostName starwarstel.net',
+    '  User alice',
+    '',
+    'Host build-box',
+    '  HostName 10.20.0.14',
+    '  User deploy',
+    '',
+    'Host staging-db',
+    '  HostName 10.20.0.31',
+    '',
+    'Host git-mirror',
+    '  HostName git.shop.internal',
+    '',
+    'Host *',
+    '  IdentityAgent none',
+    '  IdentitiesOnly yes',
+    `  IdentityFile ${path.join(dir, 'id_ed25519')}`,
+    '  StrictHostKeyChecking accept-new',
+    '  LogLevel ERROR',
+    ''
+  ].join('\n')
+  fs.writeFileSync(path.join(dir, 'config'), config, { mode: 0o600 })
+  return dir
+}
+
 // App-wide settings the demo starts from (the file the app keeps under its
 // own config directory): the logo on the idle screen instead of the
 // developer log, and the dark theme.
@@ -112,4 +169,4 @@ function writeAppPreferences(configHome, productName) {
   )
 }
 
-module.exports = { writeFixtures, writeAppPreferences }
+module.exports = { writeFixtures, writeDotSsh, writeAppPreferences }

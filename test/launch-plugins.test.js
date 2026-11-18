@@ -300,6 +300,81 @@ test('SSH browsing: the ssh call never prompts and never takes a path as an opti
   )
 })
 
+test('a custom ssh directory: its Host names, its keys, and the ssh commands read it', async (t) => {
+  const os = require('os')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dotssh-'))
+  t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(dir, 'conf.d'))
+  fs.writeFileSync(
+    path.join(dir, 'config'),
+    'Host starwars # the film\n  HostName starwarstel.net\n  User alice\nInclude conf.d/*\nHost * !x\n  IdentitiesOnly yes\n'
+  )
+  fs.writeFileSync(
+    path.join(dir, 'conf.d', 'work'),
+    'Host build-box staging-db\n  HostName=10.0.0.5\nMatch all\n  HostName ignored\n'
+  )
+  for (const name of ['id_ed25519', 'id_ed25519.pub', 'work', 'work.pub', 'known_hosts', 'notes']) {
+    fs.writeFileSync(path.join(dir, name), '')
+  }
+
+  t.alike(Ssh.host.hosts({}, { dotSsh: dir }), [
+    { name: 'starwars', hostName: 'starwarstel.net', user: 'alice' },
+    { name: 'build-box', hostName: '10.0.0.5', user: '' },
+    { name: 'staging-db', hostName: '10.0.0.5', user: '' }
+  ])
+  t.alike(Ssh.host.identities({}, { dotSsh: dir, home: '/elsewhere' }), [
+    { name: 'id_ed25519', path: path.join(dir, 'id_ed25519') },
+    { name: 'work', path: path.join(dir, 'work') }
+  ])
+  t.alike(
+    Ssh.host.identities({}, { dotSsh: dir, home: path.dirname(dir) }).map((key) => key.path),
+    [`~/${path.basename(dir)}/id_ed25519`, `~/${path.basename(dir)}/work`],
+    'a key under the home directory reads as ~/...'
+  )
+
+  const probed = Ssh.host.probe({ dotSsh: dir })
+  t.alike(probed.dotSsh, { dir, config: path.join(dir, 'config') })
+  t.is(Ssh.host.probe({}).dotSsh, null, 'without the flag, ssh reads ~/.ssh as always')
+
+  const facts = { platform: 'linux', facts: { ssh: { available: true, dotSsh: probed.dotSsh } } }
+  t.is(
+    launch.compile(steps(ssh('starwars')), facts).command,
+    `ssh -F ${path.join(dir, 'config')} -o UserKnownHostsFile=${path.join(dir, 'known_hosts')} starwars`
+  )
+  t.alike(Ssh._test.dotSshArgs({ dir, config: '' }, 'linux').slice(0, 2), ['-F', '/dev/null'])
+
+  const calls = []
+  await Ssh.host.listDirectory(
+    { host: 'starwars' },
+    {
+      dotSsh: dir,
+      execFile: (file, args, opts, done) => {
+        calls.push(args)
+        done(null, '/home/alice\n', '')
+      }
+    }
+  )
+  t.alike(calls[0].slice(0, 4), [
+    '-F',
+    path.join(dir, 'config'),
+    '-o',
+    `UserKnownHostsFile=${path.join(dir, 'known_hosts')}`
+  ])
+})
+
+test('remote browsing: the field narrows the names shown', (t) => {
+  const { filterTerm } = require('../renderer/plugins/remote-directory.js')._test
+  t.is(filterTerm('', '/home/me'), '')
+  t.is(filterTerm('~', '/home/me'), '')
+  t.is(filterTerm('/home/me', '/home/me'), '', 'the directory itself: everything')
+  t.is(filterTerm('/home/me/', '/home/me'), '')
+  t.is(filterTerm('/home/me/pro', '/home/me'), 'pro', 'typed after the slash')
+  t.is(filterTerm('/home/me/a/b', '/home/me'), '', 'deeper than the list: no narrowing')
+  t.is(filterTerm('/e', '/'), 'e')
+  t.is(filterTerm('pro', '/home/me'), 'pro', 'a bare name')
+  t.is(filterTerm('~/src/zb', '/home/me'), 'zb', 'anything else: its last part')
+})
+
 test('the main process runs only what a plugin declared', async (t) => {
   const env = await pluginHost.env()
   t.is(env.platform, process.platform)

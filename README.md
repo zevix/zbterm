@@ -805,6 +805,7 @@ commands.
 | `--backend <pear\|freenet\|none>` | Limit network sharing to one backend, or `none` for local-only. It only narrows what the build carries. Default: every backend in this build. |
 | `--freenet-node <url>` | The WebSocket URL of the Freenet node the Freenet backend talks to. Wins over `ZBTERM_FREENET_NODE`. Default: `ws://127.0.0.1:7509/v1/contract/command`. |
 | `--ice-servers <list>` | STUN/TURN servers for Freenet's direct connections, comma-separated ICE URLs; `''` for none (host candidates only). Wins over `ZBTERM_ICE_SERVERS`; a non-empty "STUN/TURN servers" setting wins over it. Default: Google and Cloudflare STUN. |
+| `--custom-dot-ssh-path <dir>` | A directory the SSH launch step uses in place of `~/.ssh`: its Host names and keys fill the step's suggestion lists, and the step's `ssh` commands get `-F <dir>/config` and `-o UserKnownHostsFile=<dir>/known_hosts`. Default: `~/.ssh`. |
 | `--no-updates` | Accepted for compatibility with older launchers; has no effect. |
 | `--no-update-check` | Start without the npm registry update check. Default: on for npm installs. |
 | `--debug` | Enable verbose packaged debug logging. Default: off. |

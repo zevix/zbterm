@@ -116,8 +116,11 @@
       if (request.autoKeys !== undefined) st.autoKeys = !!request.autoKeys
       if (!st.on) {
         st.on = true
-        document.addEventListener('mousemove', onMouseMove, true)
-        document.addEventListener('mousedown', onMouseDown, true)
+        // Pointer events, not mouse ones: a control that cancels its
+        // pointerdown (the session list's drag handle) gets no mousemove or
+        // mousedown until the button is up, and the pointer would freeze.
+        document.addEventListener('pointermove', onMouseMove, true)
+        document.addEventListener('pointerdown', onMouseDown, true)
         document.addEventListener('keydown', onKeyDown, true)
         document.addEventListener('wheel', onWheel, { capture: true, passive: true })
         window.addEventListener('resize', placeRing)
@@ -125,8 +128,8 @@
       ui.root.hidden = false
     } else if (st.on) {
       st.on = false
-      document.removeEventListener('mousemove', onMouseMove, true)
-      document.removeEventListener('mousedown', onMouseDown, true)
+      document.removeEventListener('pointermove', onMouseMove, true)
+      document.removeEventListener('pointerdown', onMouseDown, true)
       document.removeEventListener('keydown', onKeyDown, true)
       document.removeEventListener('wheel', onWheel, { capture: true })
       window.removeEventListener('resize', placeRing)

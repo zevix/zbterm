@@ -49,6 +49,10 @@ const CLI_OPTIONS = [
     '--ice-servers <list>',
     "STUN/TURN servers for direct (Freenet) connections, comma-separated ICE URLs; '' for none (default: Google and Cloudflare STUN)"
   ],
+  [
+    '--custom-dot-ssh-path <dir>',
+    'a directory the SSH launch step uses in place of ~/.ssh: its config, known_hosts and keys (default: ~/.ssh)'
+  ],
   ['--no-updates', 'accepted for compatibility; has no effect (the OTA updater was removed)'],
   [
     '--no-update-check',
@@ -222,6 +226,11 @@ const backendLimit = resolveBackendLimit({ flag: cmd.flags.backend, env: process
 // backend talks to (ZBTerm D-34). Handed to the core worker as a spawn
 // argument like the limit above; empty means the backend's default.
 const freenetNode = String(cmd.flags.freenetNode || process.env.ZBTERM_FREENET_NODE || '').trim()
+// --custom-dot-ssh-path: the SSH launch step lists that directory's Host
+// names and keys, and its ssh commands read that config and known_hosts, so
+// a demo or a test never shows (or uses) the real ~/.ssh.
+const customDotSsh = String(cmd.flags.customDotSshPath || '').trim()
+if (customDotSsh) launchPluginHost.configure({ dotSsh: path.resolve(customDotSsh) })
 // D-11: the settings field (pushed by the renderer, app:setIceServers) wins
 // over --ice-servers, which wins over ZBTERM_ICE_SERVERS; the default list
 // otherwise. Applied to new peer connections.

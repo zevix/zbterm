@@ -13,7 +13,7 @@
 const path = require('path')
 const readline = require('readline')
 const lib = require('./lib')
-const { writeFixtures, writeAppPreferences } = require('./fixtures')
+const { writeFixtures, writeDotSsh, writeAppPreferences } = require('./fixtures')
 const { opts, log, pause, sleepRaw, waitFor } = lib
 
 const HELP = `Usage: ./demo.sh [options]
@@ -193,12 +193,42 @@ async function selectedSessionId(app) {
   return (await app.ui()).selectedId
 }
 
-// A session made through the real New dialog.
+// A field of one launch step in the open session dialog (the steps editor,
+// renderer/plugins/steps-editor.js): `cwd` of Change Directory, `command` of
+// Shell Command.
+function stepField(index, name) {
+  return `.session-editor .launch-step[data-index="${index}"] input[name="${name}"]`
+}
+
+async function launchState(app) {
+  return app.cmd('launch-state').catch(() => null)
+}
+
+// "+ Add", then a plugin from its menu.
+async function addStep(app, plugin, title, extra = {}) {
+  const before = ((await launchState(app)) || { steps: [] }).steps.length
+  await app.click('.session-editor .launch-add', { after: 500 })
+  await waitFor(
+    async () => {
+      const state = await launchState(app)
+      return state && state.menuOpen
+    },
+    `${app.name}: the + Add menu`,
+    8000
+  )
+  await pause(extra.menuMs || 900)
+  await app.click(`.session-editor .launch-add-item[data-plugin="${plugin}"]`, { text: title })
+  const field = { cd: 'cwd', shell: 'command', ssh: 'ssh-host', 'ssh-cd': 'remote-cwd' }[plugin]
+  await app.waitRect(stepField(before, field))
+}
+
+// A session made through the real New dialog. A new session's steps are
+// Change Directory (`~/`) and an empty Shell Command (the default shell).
 async function newSessionViaDialog(app, { name, cwd, record }) {
   await app.click('#newSession')
   await app.waitRect('#sessionEditorName')
   await fillField(app, '#sessionEditorName', name)
-  if (cwd) await fillField(app, '#sessionEditorCwd', cwd)
+  if (cwd) await fillField(app, stepField(0, 'cwd'), cwd)
   if (record === false) {
     await app.click('.session-editor-record input', { after: 500 })
   }
@@ -249,10 +279,7 @@ async function partOne(ctx) {
 
   // -- a recorded session --
   await scene('a new session')
-  await alice.caption(
-    'New session',
-    'A session is a profile: a name, a home directory and a command.'
-  )
+  await alice.caption('New session', 'A session is a profile: a name, and the steps that start it.')
   const submitBuild = await newSessionViaDialog(alice, { name: 'build', cwd: '~/shop-api' })
   await alice.say(
     'New session',
@@ -443,7 +470,11 @@ async function partOne(ctx) {
   await alice.drag(
     `${alice.rowSelector(ctx.logs.sessionId)} .session-handle`,
     `${alice.rowSelector(ctx.build.sessionId)}`,
-    { toExtra: { at: [0.3, 0.1] }, durationMs: 1300 / opts.speed }
+    {
+      toExtra: { at: [0.3, 0.1] },
+      durationMs: 1300 / opts.speed,
+      onHold: () => snap('dragging')
+    }
   )
   await pause(1500)
   await snap('reordered')
@@ -521,7 +552,7 @@ async function partOne(ctx) {
   await snap('settings')
   await alice.key('Escape', { badge: 'Esc', after: 700 })
 
-  // -- end and resume --
+  // -- end, compose the launch, resume --
   await scene('end and resume')
   await alice.click(alice.rowSelector(ctx.build.sessionId), { after: 700 })
   await waitFor(
@@ -545,11 +576,52 @@ async function partOne(ctx) {
     'the build session ended',
     15000
   )
-  await pause(1800)
+  await pause(1500)
+  await alice.say(
+    'Launch steps',
+    '<kbd>F2</kbd> opens its profile: let it do the routine by itself.',
+    { ms: 3400 }
+  )
+  await alice.key('F2', { after: 300 })
+  await alice.waitRect(stepField(1, 'command'))
+  await pause(600)
+  await alice.spotlight('.session-editor .launch-steps', { ms: 2600 })
+  await alice.say(
+    'Launch steps',
+    'Steps run top to bottom: a directory, then a command. Empty, it is the default shell.',
+    { ms: 5400 }
+  )
+  await alice.caption('Shell Command', 'This one runs the build.')
+  await fillField(alice, stepField(1, 'command'), './build.sh', { after: 900 })
+  await alice.caption(
+    '+ Add',
+    'Offers what fits after the last step: a command, a directory, or <b>SSH</b> to another machine.'
+  )
+  await addStep(alice, 'shell', 'Shell Command', { menuMs: 3200 })
+  await pause(400)
+  await alice.caption('Another command', 'Deploy to canary once the build has passed.')
+  await alice.type('./deploy.sh canary', { after: 2700 })
+  await alice.say(
+    'Keep the shell',
+    'A launch that ends on a command ends with it. An empty <b>Shell Command</b> at the end keeps a shell open.',
+    { ms: 1800 }
+  )
+  await addStep(alice, 'shell', 'Shell Command')
+  await pause(1600)
+  const composed = await launchState(alice)
+  const command = (composed && composed.launch && composed.launch.command) || ''
+  if (!/\.\/build\.sh && \.\/deploy\.sh canary && exec /.test(command)) {
+    throw new Error(
+      `the launch steps compiled to an unexpected command: ${JSON.stringify(command)}`
+    )
+  }
+  await snap('steps')
+  await alice.click('.session-editor button[type="submit"]', { after: 500 })
+  await waitFor(async () => !(await launchState(alice)), 'the session dialog closed', 8000)
   await alice.say(
     'Resume',
-    '<kbd>Ctrl</kbd>+<kbd>R</kbd> (or <b>Extend</b>) starts a new shell on a fresh line under the old screen, in the same recording.',
-    { ms: 1800 }
+    '<kbd>Ctrl</kbd>+<kbd>R</kbd> (or <b>Extend</b>) starts it again from its steps, on a fresh line under the old screen, in the same recording.',
+    { ms: 2200 }
   )
   await alice.key('Ctrl+R', { after: 400 })
   await waitFor(
@@ -560,8 +632,10 @@ async function partOne(ctx) {
     'the build session resumed',
     20000
   )
-  await pause(1200)
-  await alice.run('echo "back in business"', { after: 1400 })
+  // The old screen already holds a "Build succeeded"; only the canary deploy is new.
+  await alice.waitTerm('Deployed', 40000)
+  await waitPrompt(alice)
+  await alice.say('Resume', 'Built, deployed, and a shell in <b>~/shop-api</b>.', { ms: 3400 })
   await alice.clearCaption()
 }
 
@@ -799,6 +873,10 @@ async function partTwo(ctx) {
   await alice.say('Alice · keyboard', 'One click takes the keyboard back.', { ms: 700 })
   await alice.click('#inputMode', { after: 1500 })
 
+  // -- a session on another machine --
+  await scene('ssh')
+  await sshSession(ctx)
+
   // -- outro --
   await scene('outro')
   await bob.clearCaption()
@@ -812,6 +890,130 @@ async function partTwo(ctx) {
   await bob.card('ZBTerm', 'Record. Replay. Share.', { lines })
   await alice.card('ZBTerm', 'github.com/zevix/zbterm', { lines: ['Thanks for watching'] })
   await pause(6000)
+}
+
+// A session whose launch is one SSH step, shared with a single-use link. The
+// host is starwarstel.net (Host "starwars" in the demo's ssh config), which
+// plays Star Wars in ASCII to anyone who connects, no account needed.
+async function sshSession(ctx) {
+  const { alice, bob } = ctx
+  await bob.clearCaption()
+  await alice.say(
+    'Alice · SSH',
+    'A session can start on another machine. Alice opens one over <b>SSH</b>, and shares it too.',
+    { ms: 2600 }
+  )
+  await alice.click('#newSession')
+  await alice.waitRect('#sessionEditorName')
+  await fillField(alice, '#sessionEditorName', 'star wars', { after: 500 })
+  // The new session's empty Shell Command goes: SSH takes over the terminal.
+  const fresh = await launchState(alice)
+  if (fresh && fresh.steps.length > 1 && fresh.steps[1].plugin === 'shell') {
+    await alice.click('.session-editor .launch-step[data-index="1"] .launch-step-remove', {
+      after: 600
+    })
+  }
+  const at = ((await launchState(alice)) || { steps: [] }).steps.length
+  await addStep(alice, 'ssh', 'SSH', { menuMs: 1500 })
+  await alice.caption(
+    'SSH · host',
+    '<b>user@host</b>, or a Host from the ssh config: typing filters the list.'
+  )
+  await alice.type('st', { after: 3900, delayMs: 220 })
+  await alice.waitRect('.session-editor .launch-combo-item', { text: 'starwars' })
+  await snap('ssh-hosts')
+  await alice.caption(
+    'SSH · host',
+    '<kbd>Down</kbd> walks the list, <kbd>Enter</kbd> takes a name.'
+  )
+  await alice.key('ArrowDown', { after: 1100 })
+  await alice.key('Enter', { after: 900 })
+  await alice.click(stepField(at, 'ssh-identity'), { after: 300 })
+  await alice.key('ArrowDown', { after: 300 })
+  await alice.waitRect('.session-editor .launch-combo-item', { text: 'id_ed25519' })
+  await alice.say(
+    'SSH · identity file',
+    'The keys in the ssh directory, the same way. This host needs none.',
+    { ms: 2200 }
+  )
+  await snap('ssh-keys')
+  await alice.key('Escape', { after: 500 })
+  const composed = await launchState(alice)
+  const command = (composed && composed.launch && composed.launch.command) || ''
+  if (!/^ssh .*starwars$/.test(command)) {
+    throw new Error(`the SSH step compiled to an unexpected command: ${JSON.stringify(command)}`)
+  }
+  await alice.click('.session-editor button[type="submit"]')
+  const session = await alice.waitSession('star wars')
+  await waitFor(
+    async () => (await selectedSessionId(alice)) === session.sessionId,
+    'alice: "star wars" selected'
+  )
+  await alice.say('Alice · SSH', '<b>starwarstel.net</b> plays a film to anyone who connects.', {
+    ms: 2400
+  })
+  await alice.waitTerm(/C\s*E\s*N\s*T\s*U\s*R\s*Y|E\s?p\s?i\s?s\s?o\s?d\s?e/, 45000)
+  await pause(1600)
+
+  await alice.say(
+    'Alice · share',
+    'This time a <b>Single-use</b> link: it lets one viewer in, then it is spent.',
+    { ms: 1600 }
+  )
+  await alice.click('#shareSession')
+  await alice.waitModal((modal) => modal && modal.title === 'Share session', 'share dialog')
+  await alice.click('.modal-overlay .share-option', { text: 'Single-use', after: 1200 })
+  await clickDialogButton(alice, 'Share')
+  await alice.waitModal((modal) => modal && modal.title === 'Share key', 'the share key', 60000)
+  await clickDialogButton(alice, 'Copy', { after: 800 })
+  await clickDialogButton(alice, 'Done', { after: 400 })
+  await alice.clearCaption()
+
+  await bob.say('Bob · join', 'Bob joins the second session the same way.', { ms: 700 })
+  await bob.click('#joinLink')
+  await bob.waitModal((modal) => modal && modal.title === 'Join session', 'join dialog')
+  await clickDialogButton(bob, 'Paste', { after: 700 })
+  await waitFor(
+    async () => {
+      const layout = await bob.api('GET', '/renderer/layout')
+      const modal = layout.renderer && layout.renderer.modal
+      return modal && String(modal.inputValue || '').startsWith('zbterm://join/')
+    },
+    'bob: the pasted link',
+    10000
+  )
+  await clickDialogButton(bob, 'Join', { after: 300 })
+  // A single-use link still asks the host when she wants to be asked.
+  const joined = await waitFor(
+    async () => {
+      const popups = await alice.api('GET', '/popups')
+      if (popups.some((popup) => popup.type === 'share-approval')) {
+        const approve = await alice.rect('.modal-overlay button', { text: 'Approve' })
+        if (approve) await clickDialogButton(alice, 'Approve', { after: 300 }).catch(() => null)
+      }
+      const list = await bob.sessions()
+      return list.find(
+        (entry) =>
+          entry.owner !== 'my' &&
+          !entry.pending &&
+          (!ctx.joined || entry.sessionId !== ctx.joined.sessionId)
+      )
+    },
+    'bob: the joined SSH session',
+    120000,
+    500
+  )
+  if ((await selectedSessionId(bob)) !== joined.sessionId) {
+    await bob.click(bob.rowSelector(joined.sessionId), { after: 400 })
+  }
+  await bob.waitTerm(/<<|C\s*E\s*N\s*T|E\s?p\s?i|r\s?e\s?b\s?e\s?l/i, 60000)
+  await bob.say(
+    'Bob · live',
+    "The film plays on Alice's machine, over her ssh, and reaches Bob end-to-end encrypted.",
+    { ms: 5200 }
+  )
+  await snap('ssh-shared')
+  await pause(4000)
 }
 
 // --- main -------------------------------------------------------------------
@@ -865,6 +1067,8 @@ async function main() {
   try {
     const env = lib.scratchEnv(scratch)
     writeFixtures(env.HOME)
+    // The SSH step lists this directory's hosts and keys, not the presenter's.
+    ctx.launch.args = ['--custom-dot-ssh-path', writeDotSsh(env.HOME)]
     const pkg = require(path.join(lib.ROOT, 'package.json'))
     writeAppPreferences(env.XDG_CONFIG_HOME, pkg.productName || pkg.name)
     log(`scratch directory: ${scratch}`)

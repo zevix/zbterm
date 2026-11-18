@@ -5,9 +5,9 @@ features of [the tour](OVERVIEW.md), with a caption for each. It is the
 rehearsal of the demo video: nothing is recorded, you watch it run.
 
 ```sh
-./demo.sh                 # the whole walk-through, about 5 minutes
-./demo.sh --part 1        # one window: sessions, time travel, search (3 min)
-./demo.sh --part 2        # two windows: invite, approval, live sharing (2 min)
+./demo.sh                 # the whole walk-through, about 6½ minutes
+./demo.sh --part 1        # one window: sessions, time travel, search (3½ min)
+./demo.sh --part 2        # two windows: invite, approval, live sharing, SSH (3 min)
 ./demo.sh --fast          # 4x: a check that every step still works (1.5 min)
 ./demo.sh --step          # stop before each scene; Enter in the terminal goes on
 ./demo.sh --help          # every option
@@ -24,7 +24,7 @@ closes them.
 None of your ZBTerm data. The demo makes `/tmp/zbdemo.XXXXXX` and runs its
 instances on a `HOME`, storage and settings (`XDG_CONFIG_HOME`) there, shared
 by the two, each with its own Electron user data and a free debug-server port.
-Your shell's `ZBTERM_*`, `ELECTRON_*` and `NODE_OPTIONS` variables are not
+Your shell's `ZBTERM_*`, `ELECTRON_*`, `NODE_OPTIONS` and `SSH_AUTH_SOCK` variables are not
 passed on. The directory is removed when the demo ends (`--keep` keeps it; a
 failed run keeps it too and says where). It runs on Linux only: on macOS the
 app keeps its window state and settings under the real
@@ -40,7 +40,9 @@ start there. In the checkout, `demo.sh` regenerates `renderer/vendor/` as
 - **The network.** Part two shares over Pear: the two instances find each
   other through the public Hyperswarm DHT, as two machines would. It needs an
   internet connection, and the join takes from a second to (through the relay
-  fallback) some ten seconds.
+  fallback) some ten seconds. Scene 17 connects to `starwarstel.net`, a
+  public SSH server that plays a film to anyone, as user `alice` and with no
+  key or agent: the demo's own ssh config (below) says so.
 
 ## What you see
 
@@ -66,20 +68,20 @@ themselves, as do Enter, Esc and the arrows where the script names them;
 typing and drags do not. Filling a dialog field flashes a `Ctrl`+`A` badge:
 the script selects the field's old text before typing over it.
 
-### Part one: one window (0:00 – 3:00)
+### Part one: one window (0:00 – 3:50)
 
 | # | Scene | What happens | Keys and gestures |
 | - | ----- | ------------ | ----------------- |
 | 1 | Intro | Title card; the idle screen with the logo. | |
-| 2 | A new session | **+ New**, the dialog (name `build`, home `~/shop-api`), **OK**. `ls`, `./build.sh`, `./deploy.sh staging` run in a real shell. | typing |
+| 2 | A new session | **+ New**, the dialog (name `build`; its first launch step, **Change Directory**, `~/shop-api`), **OK**. `ls`, `./build.sh`, `./deploy.sh staging` run in a real shell. | typing |
 | 3 | Time travel | Alt+wheel steps back through the build; the slider's bubble; a click on the slider; **\|<<** and **>\|**; the compressed-time button folds the 3 s upload wait (the time label's tip shows the uncompressed time); replay; a drag selects text in history and pauses the replay; **Live**. | `Alt`+`Wheel`, drag |
 | 4 | More sessions | **+ New** again: `logs`, with **Advanced** making it the Ctrl+Shift+T template that skips the dialog; `./logs.sh` streams. Ctrl+Shift+T opens a copy at once; F2 renames it `deploy`. Ctrl+PgDn / Ctrl+PgUp walk the list. | `Ctrl`+`Shift`+`T`, `F2`, `Enter`, `Ctrl`+`PgDn`, `Ctrl`+`PgUp` |
-| 5 | Pins and order | Pin `build` and `logs`; Ctrl+2, Ctrl+1 jump; `logs` is dragged above `build`. | `Ctrl`+`2`, `Ctrl`+`1`, drag |
+| 5 | Pins and order | Pin `build` and `logs`; Ctrl+2, Ctrl+1 jump; `logs` is dragged by its icon above `build`, the pointer carrying the lifted row. | `Ctrl`+`2`, `Ctrl`+`1`, drag |
 | 6 | Search | Ctrl+Shift+F, `error`: the list filters, matches light up, the count shows; Enter, Enter, Shift+Enter step; ↓ ↓ ↑ pick sessions under *Session buffer matches*; Esc. | `Ctrl`+`Shift`+`F`, `Enter`, `Shift`+`Enter`, `↓`, `↑`, `Esc` |
 | 7 | The window | Ctrl+Shift+B folds and shows the side pane; Ctrl+= / Ctrl+- resize the font; the theme switch, light and back; the settings menu. | `Ctrl`+`Shift`+`B`, `Ctrl`+`=`, `Ctrl`+`-`, `Esc` |
-| 8 | End and resume | `exit` in `build`: the session becomes a recording. Ctrl+R starts a new shell in it. | `Ctrl`+`R` |
+| 8 | End, compose, resume | `exit` in `build`: the session becomes a recording. F2 opens its launch steps: the empty **Shell Command** gets `./build.sh`; **+ Add** (its menu: Change Directory, Shell Command, SSH) adds a Shell Command `./deploy.sh canary`, and another, empty, so a shell stays open; **OK**. Ctrl+R starts the session again from its steps: it builds, deploys and leaves a prompt in `~/shop-api`. | `F2`, `Ctrl`+`R` |
 
-### Part two: sharing (3:00 – 4:45)
+### Part two: sharing (3:50 – 6:30)
 
 | # | Scene | What happens | Keys and gestures |
 | - | ----- | ------------ | ----------------- |
@@ -91,11 +93,13 @@ the script selects the field's old text before typing over it.
 | 14 | Live | Bob has the live terminal. Alice runs `./build.sh`; both windows show it. | typing |
 | 15 | The viewer in history | Bob steps back with Alt+wheel while Alice runs `./deploy.sh staging`; his view stays in the past while hers moves on; **Live** catches up. | `Alt`+`Wheel` |
 | 16 | Keyboard sharing | Alice: the keyboard button, **Share Keyboard**. Bob types a command into Alice's shell. Alice takes the keyboard back. | typing |
-| 17 | Outro | Closing cards in both windows. | |
+| 17 | SSH | Alice: **+ New** `star wars`, the empty Shell Command deleted, **+ Add** → **SSH**. `st` in the host field lists `starwars` and `staging-db` from the demo's ssh config; ↓, Enter takes `starwars`. ↓ in the identity field lists the demo's two keys; Esc. **OK**: `starwarstel.net` plays Star Wars in ASCII. A **Single-use** link; Bob joins it the same way and watches the film. | typing, `↓`, `Enter`, `Esc` |
+| 18 | Outro | Closing cards in both windows. | |
 
 In the overview's feature list but not in the demo, to keep it short:
-unrecorded sessions, Copy with history, HD, the terminal size lock, the
-row and terminal context menus, single-use links, *Only verified people can
+the Change Remote Directory step and its browser (the demo's SSH host is a
+film, not a shell), unrecorded sessions, Copy with history, HD, the terminal size lock, the
+row and terminal context menus, *Only verified people can
 join* and a verified GitHub identity (the Share dialog and the wizard are
 shown, not used), Freenet, the relay settings, whole-app zoom and the narrow
 layout.
@@ -134,7 +138,13 @@ the side pane is not there.
   (`alice@laptop`, `bob@laptop`; the shells are bash whatever your `$SHELL`
   is) and the `shop-api` project whose `build.sh`, `deploy.sh` and `logs.sh`
   print the same lines on every run (the log's timestamps aside), without the
-  network. It also writes the scratch settings the demo starts from: Developer
+  network. `deploy.sh staging` fails on its third node, which the search scene
+  finds; any other target succeeds. It writes the demo's `~/.ssh` (two
+  fresh keys and a config with four made-up hosts, `starwars` among them),
+  which the app gets as `--custom-dot-ssh-path`: ssh itself finds the real
+  home directory from the user database, not `$HOME`, so without the flag it
+  would read your `~/.ssh`. The config turns off the agent and every key but
+  its own, and accepts the host key on the first connection. It also writes the scratch settings the demo starts from: Developer
   Mode off and the dark theme.
 - `scripts/demo/demo.js` is the script itself: one function per part, one
   `scene()` per row of the tables above. A scene is a list of captions and

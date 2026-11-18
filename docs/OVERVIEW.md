@@ -57,10 +57,10 @@ side pane open) its buttons keep their icons and drop their labels, and at
 
 ## Sessions
 
-A session is a profile (a name, a home directory, a command) plus everything
-its terminal has shown since it started.
+A session is a profile (a name, and the [launch steps](#launch-steps) that
+start it) plus everything its terminal has shown since it started.
 
-- **Start one** with **+ New** (a dialog: Name, Home Directory, Command),
+- **Start one** with **+ New** (a dialog: Name and the launch steps),
   **Ctrl+Shift+T**, or **Shift + "+ New"**. Each of the three has its own
   [template](#pins-order-and-templates); until you set one, the last two start
   a default shell at once.
@@ -88,6 +88,39 @@ its terminal has shown since it started.
   while your session is running and you are on Live.
 - **Size lock** (the padlock) pins the terminal to a size — the current one,
   32 x 120 or 25 x 80 — whatever the window does.
+
+### Launch steps
+
+The New, Copy and Edit dialogs describe how a session starts as a list of
+steps, run top to bottom. A new session has two: **Change Directory** (`~/`)
+and **Shell Command** (empty: your default shell).
+
+| Step | Offered | What it does |
+| ---- | ------- | ------------ |
+| **Change Directory** | on this machine | Where the shell starts (with a folder picker); after a command, a `cd`. |
+| **Shell Command** | anywhere | A command line for the shell of wherever the step runs, here or after SSH. Empty means an interactive shell. |
+| **SSH** | on this machine, once | Runs every later step on another machine: `user@host` or a Host from `~/.ssh/config`, with an optional port and identity file. Both fields suggest as you type: the host field the config's Host names, the identity field the keys in `~/.ssh`. |
+| **Change Remote Directory** | after SSH | A `cd` on the remote machine; **Browse** lists its directories over SSH (with a key or an agent), and what is typed in the field narrows the list. |
+
+- **+ Add** lists the steps that fit after the last one; every step has a
+  delete button, greyed while later steps depend on it (SSH with remote steps
+  after it).
+- Commands run one after the other, joined with `&&`: the first that fails
+  stops the rest. A launch
+  that ends on a command ends when the command does; one that ends on a
+  directory or an empty Shell Command leaves an interactive shell.
+- `cd ~/shop-api` → `./build.sh` → `./deploy.sh canary` → an empty Shell
+  Command builds, deploys and leaves a shell in `~/shop-api`.
+- The suggestion lists open as you type. **↓** moves into the list, **↑**
+  and **↓** walk it, **Enter** or **Tab** takes the name, **Esc** closes it.
+  In the remote browser, a click on a directory steps into it and writes
+  `<it>/` in the field, so the next letters narrow its names.
+- `--custom-dot-ssh-path <dir>` puts another directory in place of `~/.ssh`:
+  the lists come from it, and the SSH step's commands read its `config` and
+  `known_hosts` (`ssh -F <dir>/config`). It is how the demo shows a made-up
+  ssh config instead of yours.
+- An Edit applies at the next start: **Ctrl+R** on an ended session runs its
+  steps again. A template copy carries its steps.
 
 ## Time travel
 
