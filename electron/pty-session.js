@@ -20,6 +20,10 @@ class PtySession extends EventEmitter {
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor'
     }
+    // With no SHELL in the app's own environment the shell above is a
+    // fallback; name it, so a launch that ends in `exec "$SHELL"` (the launch
+    // plugins' interactive ending) has one to run.
+    if (!env.SHELL && process.platform !== 'win32') env.SHELL = shell
     // A session's command runs through the user's shell, so it can carry
     // arguments, pipes and `~` exactly as typed at a prompt.
     this._pty = pty.spawn(shell, commandArgs(opts.command), {

@@ -9,6 +9,29 @@
   const api = window.zbterm
   // renderer/time-collapse.js, loaded before this file.
   const timeCollapse = window.zbtermTimeCollapse
+  // renderer/plugins/, loaded before this file: the launch plugins a session
+  // is composed of, and what they may ask about this machine (the platform,
+  // each plugin's probe), which the main process answers once.
+  const launch = window.zbtermLaunch
+  let launchEnv = {
+    platform: /Windows/.test(window.navigator.userAgent) ? 'win32' : 'linux',
+    facts: {}
+  }
+  let launchEnvLoading = null
+  function loadLaunchEnv() {
+    if (!launchEnvLoading) {
+      launchEnvLoading = Promise.resolve()
+        .then(() => api.invoke('app.launchPlugins.env'))
+        .then((env) => {
+          if (env && env.platform) launchEnv = { platform: env.platform, facts: env.facts || {} }
+          return launchEnv
+        })
+        .catch(() => launchEnv)
+    }
+    return launchEnvLoading
+  }
+  // The open session dialog's step list, for the debug commands.
+  let openStepsEditor = null
 
   if (bridge && bridge.logToFile) {
     bridge.logToFile('=== ZBTerm renderer app.js loaded ===')
@@ -2033,6 +2056,9 @@
       name: pick('name', ''),
       cwd: pick('cwd', ''),
       command: pick('command', ''),
+      // The launch steps `cwd` and `command` were compiled from, or null
+      // (launch.stepsFor ignores steps that no longer compile to those two).
+      steps: pick('steps', null) || null,
       record: pick('record', true) !== false,
       skipDialog: !!pick('skipDialog', false),
       share: pick('share', null) || null
@@ -2059,6 +2085,7 @@
             name: live.name,
             cwd: live.cwd || '',
             command: live.command || '',
+            steps: live.steps || null,
             record: copy.record !== undefined ? copy.record !== false : live.record !== false
           },
           copy
@@ -2171,6 +2198,7 @@
             name: profile.name,
             cwd: profile.cwd || '',
             command: profile.command || '',
+            steps: profile.steps || null,
             record: profile.record !== false
           },
           stored.copy
@@ -2246,6 +2274,7 @@
       name: await templateSessionName(template),
       cwd: profile.cwd,
       command: profile.command,
+      steps: profile.steps,
       record: profile.record,
       restoring: template.live ? null : trigger.id
     })
@@ -2306,7 +2335,8 @@
         sessionId: live.sessionId,
         name: values.name,
         cwd: values.cwd,
-        command: values.command
+        command: values.command,
+        steps: values.steps
       })
       await saveTemplateChoice(live.sessionId, values, await triggersHeldBy(live.sessionId))
       await refreshSessions()
@@ -3606,6 +3636,7 @@
     if (values.launch) {
       patch.cwd = values.cwd
       patch.command = values.command
+      patch.steps = values.steps
     }
     await api.invoke('session.update', patch)
     if (canBeTemplate) await saveTemplateChoice(session.sessionId, values, held)
@@ -3631,7 +3662,13 @@
     const name = await uniqueSessionName(session.name)
     const record = session.record !== false
     if (event && event.shiftKey) {
-      await createSession({ name, cwd: session.cwd, command: session.command, record })
+      await createSession({
+        name,
+        cwd: session.cwd,
+        command: session.command,
+        steps: session.steps,
+        record
+      })
       return
     }
     // Copy has no Advanced section, but its name is still checked (U2).
@@ -3736,8 +3773,8 @@
   // A small popover editor anchored under a row action, left edges aligned.
   // `options.mode` is 'edit', 'new', 'copy' or 'template' (a trigger's
   // template, from the settings menu). Resolves with
-  // { name, cwd, command, launch, record, copyHistory, share, triggerId,
-  // skipDialog } or null when cancelled. `share` is the Share form's settings
+  // { name, cwd, command, steps, launch, record, copyHistory, share,
+  // triggerId, skipDialog } or null when cancelled. `share` is the Share form's settings
   // when "Share session now" was ticked, null when not, undefined in a dialog
   // without it; `triggerId` is the Advanced choice ('' for none), undefined
   // without that section. `options.triggerId`/`skipDialog`/`share` prefill.
@@ -3753,27 +3790,29 @@
       panel.innerHTML = `
         <label class="session-editor-label" for="sessionEditorName">Name:</label>
         <input id="sessionEditorName" class="modal-input" name="name" autocomplete="off" />
-        <label class="session-editor-label session-editor-launch" for="sessionEditorCwd">Home Directory:</label>
-        <span class="session-editor-field session-editor-launch">
-          <input id="sessionEditorCwd" class="modal-input" name="cwd" placeholder="~/" autocomplete="off" />
-          <button type="button" class="text-btn session-editor-browse" title="Browse" aria-label="Browse">
-            <i class="fa-solid fa-folder-open" aria-hidden="true"></i>
-          </button>
-        </span>
-        <label class="session-editor-label session-editor-launch" for="sessionEditorCommand">Command:</label>
-        <input id="sessionEditorCommand" class="modal-input session-editor-launch" name="command" placeholder="default shell" autocomplete="off" />
+        <div class="session-editor-launch session-editor-steps"></div>
         <span class="modal-actions session-editor-actions">
           <button type="submit" class="text-btn mode-pause">OK</button>
           <button type="button" class="text-btn session-editor-cancel">Cancel</button>
         </span>
       `
       const name = panel.querySelector('#sessionEditorName')
-      const cwd = panel.querySelector('#sessionEditorCwd')
-      const command = panel.querySelector('#sessionEditorCommand')
       name.value = session.name || ''
-      cwd.value = session.cwd || '~/'
-      command.value = session.command || ''
-      if (!options.launch) {
+      // The launch: a chain of plugin steps (renderer/plugins/), in place of
+      // the two fields ("Home Directory", "Command") the dialog used to have.
+      let stepsEditor = null
+      if (options.launch) {
+        stepsEditor = window.zbtermCreateStepsEditor({
+          steps: launch.stepsFor(session, launchEnv),
+          env: launchEnv,
+          invoke: (method, args) => api.invoke(method, args),
+          showError
+        })
+        panel.querySelector('.session-editor-steps').replaceWith(stepsEditor.root)
+        openStepsEditor = stepsEditor
+        const editor = stepsEditor
+        loadLaunchEnv().then((env) => editor.setEnv(env))
+      } else {
         panel.querySelectorAll('.session-editor-launch').forEach((element) => element.remove())
       }
       const actionsRow = panel.querySelector('.session-editor-actions')
@@ -3922,19 +3961,11 @@
         if (closed) return
         closed = true
         overlay.remove()
+        if (openStepsEditor === stepsEditor) openStepsEditor = null
         if (row) row.classList.remove('menu-open')
         resolve(value)
       }
 
-      panel.querySelector('.session-editor-browse')?.addEventListener('click', () => {
-        api
-          .invoke('app.chooseDirectory', { defaultPath: cwd.value })
-          .then((chosen) => {
-            if (chosen) cwd.value = chosen
-            cwd.focus()
-          })
-          .catch(showError)
-      })
       panel.querySelector('.session-editor-cancel').addEventListener('click', () => close(null))
       overlay.addEventListener('pointerdown', (event) => {
         if (event.target === overlay) close(null)
@@ -3953,10 +3984,16 @@
           name.focus()
           return
         }
+        // A step that cannot run (SSH with no host) keeps the dialog open.
+        if (stepsEditor && !stepsEditor.check()) return
+        // `cwd` and `command` are what the steps compile to, and what
+        // launches; `steps` is kept so the dialog can show them again.
+        const compiled = stepsEditor ? stepsEditor.compile() : null
         const values = {
           name: value,
-          cwd: options.launch ? cwd.value.trim() : undefined,
-          command: options.launch ? command.value.trim() : undefined,
+          cwd: compiled ? compiled.cwd : undefined,
+          command: compiled ? compiled.command : undefined,
+          steps: stepsEditor ? stepsEditor.serialize() : undefined,
           launch: !!options.launch,
           record: recordInput ? recordInput.checked : session.record !== false,
           copyHistory: copyHistoryInput
@@ -4697,6 +4734,7 @@
       name: profile.name || undefined,
       cwd: profile.cwd || undefined,
       command: profile.command || undefined,
+      steps: profile.steps || undefined,
       copyHistoryFrom: profile.copyHistoryFrom || undefined,
       // Only an unrecorded session says so; absent means recorded.
       record: profile.record === false ? false : undefined,
@@ -12634,6 +12672,29 @@
       button.click()
       await debugSettleEditorChecks()
       return { done: true, ...debugUiState() }
+    }
+    // The 261118_session-plugins kit: the open dialog's launch steps.
+    if (command === 'launch-state') return openStepsEditor ? openStepsEditor.state() : null
+    if (command === 'launch-set') {
+      // One step's field, by the step's place and the field's name.
+      const field = document.querySelector(
+        `.session-editor .launch-step[data-index="${Number(request.index)}"] [name="${String(request.field || '').replace(/[^\w-]/g, '')}"]`
+      )
+      if (!field || !openStepsEditor) return { set: false, launch: null }
+      field.value = request.value === undefined || request.value === null ? '' : request.value
+      field.dispatchEvent(new window.Event('input', { bubbles: true }))
+      await debugSettle()
+      return { set: true, launch: openStepsEditor.state() }
+    }
+    if (command === 'launch-add' || command === 'launch-remove' || command === 'launch-menu') {
+      if (!openStepsEditor) return { done: false, launch: null }
+      let done = true
+      if (command === 'launch-add') done = openStepsEditor.add(String(request.plugin || ''))
+      else if (command === 'launch-remove') done = openStepsEditor.remove(Number(request.index))
+      else if (request.open === false) openStepsEditor.closeMenu()
+      else openStepsEditor.openMenu()
+      await debugSettle()
+      return { done, launch: openStepsEditor.state() }
     }
     if (command === 'confirm-state') return debugModalState()
     if (command === 'confirm-answer') {

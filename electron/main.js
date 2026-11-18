@@ -19,6 +19,7 @@ const { createDebugServer, DEFAULT_PORT } = require('./debug-server')
 const { createDebugInput } = require('./debug-input')
 const { createSessionDataBatcher } = require('./session-data-batcher')
 const { detectChannel, checkForUpdate } = require('./update-channel')
+const launchPluginHost = require('./launch-plugin-host')
 const { listProviders, GITHUB_USERNAME } = require('../engine/identity/providers')
 const { command, flag } = require('paparam')
 const pkg = require('../package.json')
@@ -795,7 +796,7 @@ function applyWindowState(win, state, opts = {}) {
   if (state.isMaximized) win.maximize()
 }
 
-// Folder picker for a session's home directory. Paths under the home
+// Folder picker for a session's "Change Directory" step. Paths under the home
 // directory come back as `~/...`, the form the session editor shows and the
 // PTY host expands again at spawn time.
 async function chooseDirectory(evt, args = {}) {
@@ -809,7 +810,7 @@ async function chooseDirectory(evt, args = {}) {
         : current
   const win = BrowserWindow.fromWebContents(evt.sender)
   const result = await dialog.showOpenDialog(win, {
-    title: 'Home Directory',
+    title: 'Change Directory',
     defaultPath,
     properties: ['openDirectory', 'createDirectory']
   })
@@ -1610,6 +1611,9 @@ ipcMain.handle('zbterm:invoke', async (evt, method, args) => {
   )
   try {
     if (method === 'app.chooseDirectory') return await chooseDirectory(evt, args)
+    // The launch plugins' main-process half (renderer/plugins/).
+    if (method === 'app.launchPlugins.env') return await launchPluginHost.env()
+    if (method === 'app.launchPlugin') return await launchPluginHost.call(args)
     if (method.startsWith('app.')) {
       const appResult = handleAppInvoke(method, args)
       // A preference that was never saved reads as null, which is an answer,

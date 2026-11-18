@@ -894,6 +894,191 @@
         place-items: center;
       }
 
+      /* The launch steps (renderer/plugins/steps-editor.js): one row per
+         step on the dialog's own two columns, then "+ Add". */
+      .launch-steps,
+      .launch-step-rows,
+      .launch-step {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: subgrid;
+        gap: 8px 10px;
+        align-items: center;
+        min-width: 0;
+      }
+
+      .launch-step > .session-editor-label {
+        align-self: start;
+        padding-top: 7px;
+      }
+
+      /* A step inside another one's scope (the remote steps after SSH) sits
+         under it. */
+      .launch-step:not([data-scope='local']) > .session-editor-label {
+        padding-left: 14px;
+      }
+
+      .launch-step:not([data-scope='local']) > .session-editor-label::before {
+        content: '\21B3\00A0';
+        color: var(--muted);
+      }
+
+      .launch-step-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 6px;
+        align-items: start;
+        min-width: 0;
+      }
+
+      .launch-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .launch-stack {
+        display: grid;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .launch-step-body .modal-input {
+        width: 100%;
+        min-width: 0;
+      }
+
+      .launch-step-body .launch-input-short {
+        width: 76px;
+      }
+
+      .launch-step-body .session-editor-browse {
+        height: 31px;
+      }
+
+      .launch-step-remove:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      .launch-steps-footer {
+        grid-column: 2;
+        position: relative;
+        justify-self: start;
+      }
+
+      .launch-add,
+      .launch-add-item,
+      .launch-remote-entry {
+        display: flex;
+        align-items: center;
+      }
+
+      .launch-add {
+        gap: 6px;
+        padding: 5px 10px;
+      }
+
+      .launch-add-menu {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        z-index: 2;
+        min-width: 230px;
+        display: grid;
+        gap: 3px;
+        padding: 5px;
+        border: 1px solid var(--control-border);
+        border-radius: 7px;
+        background: var(--bar-bg);
+        box-shadow: 0 16px 44px rgba(0, 0, 0, 0.34);
+      }
+
+      .launch-add-menu[hidden],
+      .launch-steps-error[hidden],
+      .launch-remote-browser[hidden] {
+        display: none;
+      }
+
+      .launch-add-item {
+        gap: 9px;
+        white-space: nowrap;
+      }
+
+      .launch-add-item:focus-visible {
+        background: var(--control-bg);
+        outline: none;
+      }
+
+      .launch-steps-error {
+        grid-column: 2;
+        color: var(--danger, #e5534b);
+        font-size: 12px;
+      }
+
+      /* "Change Remote Directory": the remote machine's directories. */
+      .launch-remote-browser {
+        display: grid;
+        gap: 6px;
+        padding: 7px;
+        border: 1px solid var(--control-border);
+        border-radius: 6px;
+        min-width: 0;
+      }
+
+      .launch-remote-path {
+        color: var(--soft-text);
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        direction: rtl;
+        text-align: left;
+      }
+
+      .launch-remote-list {
+        display: grid;
+        gap: 1px;
+        max-height: 168px;
+        overflow-y: auto;
+      }
+
+      .launch-remote-entry {
+        justify-content: flex-start;
+        gap: 8px;
+        border: 0;
+        background: transparent;
+        padding: 4px 6px;
+        font-size: 13px;
+        text-align: left;
+      }
+
+      .launch-remote-entry:hover,
+      .launch-remote-entry:focus-visible {
+        background: var(--control-bg);
+      }
+
+      .launch-remote-status {
+        color: var(--muted);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .launch-remote-status.launch-remote-error {
+        color: var(--danger, #e5534b);
+      }
+
+      .launch-remote-actions {
+        display: flex;
+        gap: 6px;
+      }
+
+      .launch-remote-actions .text-btn {
+        padding: 4px 9px;
+        font-size: 12px;
+      }
+
       .session-editor .session-editor-check {
         grid-column: 1 / -1;
         margin-top: 0;
@@ -982,6 +1167,11 @@
       /* The Share options want the wizard's width once they are shown. */
       .session-editor:has(.session-editor-share-options:not([hidden])) {
         width: min(440px, calc(100vw - 16px));
+      }
+
+      /* The launch steps carry long labels and several fields in a row. */
+      .session-editor:has(.launch-steps) {
+        width: min(480px, calc(100vw - 16px));
       }
 
       .session-editor-actions {
@@ -2883,6 +3073,12 @@
     <script src="search-highlights.js"></script>
     <script src="live-stream.js"></script>
     <script src="demo-overlay.js"></script>
+    <script src="plugins/launch-core.js"></script>
+    <script src="plugins/change-directory.js"></script>
+    <script src="plugins/shell-command.js"></script>
+    <script src="plugins/ssh.js"></script>
+    <script src="plugins/remote-directory.js"></script>
+    <script src="plugins/steps-editor.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

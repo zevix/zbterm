@@ -603,7 +603,8 @@ the engine for a profile — are served from the shell's own `ProfileManager`
 (`electron/engine-lifecycle.js`), since a profile has to be chosen before any
 worker runs; the engine's own `profile.*` methods are there for other hosts.
 `app.*` (`app.info`, `app.updateCheck`, `app.preference.get`/`set`,
-`app.chooseDirectory`) and most `debug.*` methods are shell-only. The
+`app.chooseDirectory`, and the launch plugins' `app.launchPlugins.env` and
+`app.launchPlugin`) and most `debug.*` methods are shell-only. The
 `identity.ssh*` trio is forwarded to the worker even while it is still
 booting, because the identity wizard reads SSH keys early.
 
@@ -1996,6 +1997,11 @@ the README's [Updating](../README.md#install-update) section.
   the Freenet session protocol and history on ZBTerm's side:
   `engine/zxterm/share.js` and `engine/zxterm/history.js`.
 - Invite codec: `engine/invite.js`.
+- Session composition (the dialog's launch steps): the plugin classes, the
+  launch context they share and the chain's compile to `cwd` + `command`:
+  `renderer/plugins/`; their main-process half (`app.launchPlugin`):
+  `electron/launch-plugin-host.js`; design:
+  `docs/projects/261118_session-plugins/design.md`.
 - Shell/worker frames: `engine/rpc/schema.js`, `engine/rpc/pipe.js`; worker
   spawn and supervision: `engine/client.js`, `engine/spawn-worker.js`,
   `engine/worker.js`, `electron/engine-lifecycle.js`.
