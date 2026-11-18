@@ -783,3 +783,62 @@ async function readPackets(engine, sessionId) {
     await store.close()
   }
 }
+
+// 261118_session-plugins: the dialog's launch steps ride on the catalog entry.
+test('a session keeps its launch steps, and drops them when its launch changes without them', async (t) => {
+  const dir = await temp()
+  const host = new FakeHost()
+  const engine = new SessionEngine({ userData: dir, ptyHost: host })
+  await engine.ready()
+  try {
+    const steps = [
+      { plugin: 'cd', config: { path: '~/a' } },
+      { plugin: 'ssh', config: { host: 'box', port: '', identity: '' } }
+    ]
+    const created = await engine.invoke('session.create', {
+      cwd: '~/a',
+      command: 'ssh box',
+      steps
+    })
+    const { sessionId } = created
+    t.alike(created.steps, steps, 'session.create answers with the steps')
+    t.alike(host.spawns[0], { sessionId, cols: 100, rows: 30, cwd: '~/a', command: 'ssh box' })
+    const listed = async () =>
+      (await engine.invoke('session.list', {})).find((entry) => entry.sessionId === sessionId)
+    t.alike((await listed()).steps, steps, 'and the list carries them')
+
+    const next = [{ plugin: 'shell', config: { command: 'htop' } }]
+    await engine.invoke('session.update', { sessionId, cwd: '', command: 'htop', steps: next })
+    t.alike((await listed()).steps, next, 'session.update replaces them')
+
+    await engine.invoke('session.update', { sessionId, name: 'renamed', command: 'htop' })
+    t.alike((await listed()).steps, next, 'a patch that restates the launch keeps them')
+
+    await engine.invoke('session.update', { sessionId, command: 'top' })
+    t.is((await listed()).steps, null, 'a launch changed without steps drops the stale ones')
+
+    await t.exception(
+      engine.invoke('session.update', { sessionId, name: 'half', steps: 'cd' }),
+      /steps/
+    )
+    t.is((await listed()).name, 'renamed', 'a refused patch renames nothing')
+
+    for (const bad of ['cd', [{ config: {} }], [null], Array(33).fill({ plugin: 'shell' })]) {
+      await t.exception(
+        engine.invoke('session.update', { sessionId, steps: bad }),
+        /steps/,
+        `refuses ${JSON.stringify(bad).slice(0, 30)}`
+      )
+    }
+    await t.exception(
+      engine.invoke('session.create', {
+        steps: [{ plugin: 'x', config: { big: 'y'.repeat(20000) } }]
+      }),
+      /too large/
+    )
+    const plain = await engine.invoke('session.create', { command: 'true' })
+    t.absent('steps' in plain, 'a session created without steps has no steps key')
+  } finally {
+    await engine.close()
+  }
+})

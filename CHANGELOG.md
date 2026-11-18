@@ -15,6 +15,10 @@ and the project uses [semantic versioning](https://semver.org/) as described in
 - Optional relay fallback for NAT traversal, discovered through a DHT record.
 - Experimental Freenet share backend, through the `zxterm-core` sidecar.
 - Multiple profiles and multiple concurrent sessions.
+- Session composition: the session dialog builds a launch from plugin steps ("Change Directory",
+  "Shell Command", "SSH", and "Change Remote Directory" with a remote directory browser) in place
+  of the fixed "Home Directory" and "Command" fields. Existing sessions open as the two equivalent
+  steps.
 - `zbterm doctor`, `zbterm install-desktop` / `uninstall-desktop`, and a localhost debug REST API.
 - The Rust `zxterm-core` sidecar, built from the `zxterm/` submodule and shipped as one optional
   npm package per platform (`@zbterm/zxterm-core-<platform>-<arch>`).

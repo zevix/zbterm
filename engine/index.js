@@ -390,6 +390,9 @@ class SessionEngine extends EventEmitter {
     // Where and what to launch. Kept on the catalog entry only (never in the
     // shared store info), and reused every time the session is extended.
     const launch = mode === 'spawn' ? launchOptions(opts) : {}
+    // The dialog's launch steps that `cwd` and `command` were compiled from
+    // (261118_session-plugins): opaque here, kept for the dialog to reopen.
+    const steps = mode === 'spawn' ? launchSteps(opts.steps) : null
     if (mode === 'attach' && typeof this.ptyHost.attach !== 'function') {
       throw new EngineError(CODES.E_INTERNAL, 'PTY host does not support attach mode')
     }
@@ -456,14 +459,15 @@ class SessionEngine extends EventEmitter {
         name,
         now,
         startedAt,
-        launch: record ? launch : { ...launch, record: false }
+        launch: record ? launch : { ...launch, record: false },
+        steps
       })
     } finally {
       if (beginCopy) beginCopy()
     }
   }
 
-  async _registerCreatedSession(store, runtime, { name, now, startedAt, launch }) {
+  async _registerCreatedSession(store, runtime, { name, now, startedAt, launch, steps }) {
     const entry = {
       sessionId: store.sessionId,
       name,
@@ -477,6 +481,7 @@ class SessionEngine extends EventEmitter {
       path: store.dir,
       ...launch
     }
+    if (steps) entry.steps = steps
     await this.catalog.put(entry)
     this.emit('session:list-changed', await this.listSessions())
     return {
@@ -1051,15 +1056,24 @@ class SessionEngine extends EventEmitter {
     if ('record' in patch && (patch.record !== false) !== (entry.record !== false)) {
       throw new EngineError(CODES.E_INVALID, 'Recording cannot be changed after a session starts')
     }
+    // Checked before anything is written: a refused patch changes nothing.
+    const restatesSteps = patch.steps !== undefined
+    const steps = restatesSteps ? launchSteps(patch.steps) : null
     const name = typeof patch.name === 'string' ? patch.name.trim() : ''
     if (name && name !== entry.name) await this.renameSession(sessionId, name)
-    if (entry.owner !== 'joined' && ('cwd' in patch || 'command' in patch)) {
+    if (entry.owner !== 'joined' && ('cwd' in patch || 'command' in patch || restatesSteps)) {
       const current = launchOptions(entry)
       const next = launchOptions({
         cwd: 'cwd' in patch ? patch.cwd : current.cwd,
         command: 'command' in patch ? patch.command : current.command
       })
-      await this.catalog.update(sessionId, { cwd: next.cwd || null, command: next.command || null })
+      const update = { cwd: next.cwd || null, command: next.command || null }
+      // The steps are what `cwd` and `command` were compiled from: a patch
+      // that changes those two without restating the steps leaves them stale,
+      // so they go.
+      if (restatesSteps) update.steps = steps
+      else if (next.cwd !== current.cwd || next.command !== current.command) update.steps = null
+      await this.catalog.update(sessionId, update)
       this.emit('session:list-changed', await this.listSessions())
     }
     // 261115 R7: the manual sort time (ms) a dragged row gets; null clears it.
@@ -3174,6 +3188,33 @@ function launchOptions(source = {}) {
     if (value) out[key] = value
   }
   return out
+}
+
+// A session's launch steps (261118_session-plugins): a short list of
+// `{ plugin, config }` objects the session dialog owns. The engine only
+// stores them, so it checks their shape and size and nothing else.
+const MAX_LAUNCH_STEPS = 32
+const MAX_LAUNCH_STEPS_JSON = 16384
+
+function launchSteps(value) {
+  if (value === undefined || value === null) return null
+  const invalid = (why) => new EngineError(CODES.E_INVALID, `steps ${why}`)
+  if (!Array.isArray(value)) throw invalid('must be a list')
+  if (value.length > MAX_LAUNCH_STEPS) throw invalid(`cannot be more than ${MAX_LAUNCH_STEPS}`)
+  for (const step of value) {
+    if (!step || typeof step !== 'object' || Array.isArray(step)) throw invalid('must be objects')
+    if (typeof step.plugin !== 'string' || !step.plugin || step.plugin.length > 64) {
+      throw invalid('must each name a plugin')
+    }
+  }
+  let json
+  try {
+    json = JSON.stringify(value)
+  } catch {
+    throw invalid('must be plain JSON')
+  }
+  if (json.length > MAX_LAUNCH_STEPS_JSON) throw invalid('are too large')
+  return JSON.parse(json)
 }
 
 async function buildArchiveMirror(store, opts = {}) {

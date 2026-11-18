@@ -67,6 +67,16 @@ read it for the wiring; below are only the non-obvious facts.
   `MODULE_NOT_FOUND` at runtime, not a build error. `ZBTERM_BACKEND` (app CLI
   `--backend` / env) only narrows further, at runtime, within what the build
   carries.
+- The launch plugins (`renderer/plugins/*.js`, the session dialog's steps) are
+  loaded twice: as plain `<script>`s by the sandboxed renderer, and with
+  `require` by the main process (`electron/launch-plugin-host.js`, through
+  `renderer/plugins/index.js`) for each plugin's `static host` functions. So a
+  plugin file may touch neither `window`/`document` nor Node at load time: DOM
+  only inside `getUI`, `require` only inside a `host` function. A new plugin is
+  listed in both `index.js` and `renderer/index.html`, in the same order
+  (`test/launch-plugins.test.js` checks). A chain compiles to the `cwd` +
+  `command` the PTY host always took; the catalog's `steps` are for the dialog
+  only and are trusted only while they still compile to that pair.
 - **A stall is usually the network, not the code, and the two look identical.**
   Exercise real replication against a local `hyperdht/testnet`
   (`test/backends/conformance-pear.test.js`'s pattern) or a throwaway local-mode

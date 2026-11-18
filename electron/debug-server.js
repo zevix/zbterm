@@ -158,7 +158,8 @@ function createDebugServer(opts) {
         cols: body.cols,
         rows: body.rows,
         cwd: body.cwd,
-        command: body.command
+        command: body.command,
+        steps: body.steps
       })
       return {
         selectedSessionId: body.select === false ? selectedSessionId : session.sessionId,

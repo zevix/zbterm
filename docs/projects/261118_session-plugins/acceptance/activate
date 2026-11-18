@@ -1,0 +1,4 @@
+# source me. The 261115_quit-pins-reorder kit's environment, reused unchanged: a
+# private state dir, scratch HOME and storage, the packaged app under test
+# (ZBUI_OUT / ZBUI_APP), and the shared harness (ZBUI_LIB, ZBUI_LIB_UP).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../261115_quit-pins-reorder/acceptance/activate"

@@ -120,6 +120,11 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   recorded"); when it ends, its last screen stays until you switch away, and
   Extend starts a fresh shell, unrecorded, on an empty screen. Recording cannot
   be turned on or off for an existing session
+- Session composition: a session's dialog builds its launch from steps, each a
+  plugin — "Change Directory", "Shell Command", "SSH" and, after SSH, "Change
+  Remote Directory" with a browser for the remote machine. Steps run in order;
+  "+ Add" offers the ones that fit after the last step, and each has a delete
+  button. See [Session steps](#session-steps).
 - New-session templates: each way to start a session — "+ New", Ctrl+Shift+T,
   and Shift + "+ New" — copies one template profile with all its settings. A
   profile becomes a trigger's template from its dialog's Advanced section,
@@ -146,6 +151,7 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   - [Updating](#install-update)
   - [Prerequisites (Linux)](#install-prereqs)
   - [Run from a clone (development)](#install-dev)
+- [Session steps](#session-steps)
 - [Storage](#storage)
 - [Sharing](#sharing)
   - [Link Options](#link-options)
@@ -330,6 +336,36 @@ colours are read out of `STARTUP_LOGO_COLORS` rather than hardcoded, so a
 recoloured logo propagates on its own. `npm run logo` prints the result in your
 terminal. Building the `.ico` needs ImageMagick (`magick`); everything else
 needs only the `sharp` devDependency.
+
+## Session steps <a name="session-steps"></a>
+
+The New, Copy and Edit dialogs describe how a session starts as a list of
+steps, run top to bottom. A new session has two: **Change Directory** (`~/`)
+and **Shell Command** (empty, which means your default shell) — the same
+launch the old "Home Directory" and "Command" fields gave, and sessions saved
+before steps existed open as exactly those two.
+
+| Step                        | Offered                 | What it does                                                                                                                      |
+| --------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Change Directory**        | on this machine         | The directory the shell starts in (with a folder picker); after a command, a `cd`.                                                |
+| **Shell Command**           | anywhere                | A command line for the shell of wherever the step is: local, or remote after SSH. Empty means an interactive shell.               |
+| **SSH**                     | on this machine, once   | Runs every later step on another machine. Host is `user@host` or an `~/.ssh/config` alias; port and identity file are optional.   |
+| **Change Remote Directory** | after SSH               | A `cd` on the remote machine. Browse lists its directories over SSH (this needs a key or an agent; the path can always be typed). |
+
+- **+ Add** lists the steps that fit after the last one — after SSH, the remote
+  directory instead of the local one.
+- Every step has a delete button. A step that later steps depend on (SSH with
+  remote steps after it) can be deleted once those are gone.
+- Whatever is last keeps the terminal: a chain that ends on a command ends when
+  the command does; one that ends on a directory or an empty Shell Command
+  stays in an interactive shell there.
+
+`cd ~/src` → `ssh me@box` → remote `cd /srv/app` → `tail -f log/app.log`, for
+example, runs `ssh -t me@box 'cd /srv/app && tail -f log/app.log'` from `~/src`.
+
+Steps are plugins: one class per file under `renderer/plugins/`, see
+[`docs/projects/261118_session-plugins/design.md`](docs/projects/261118_session-plugins/design.md)
+for the interface and how to add one.
 
 ## Storage <a name="storage"></a>
 
