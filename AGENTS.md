@@ -36,6 +36,7 @@ npm run make                                       # → installers in out/make/
 ./build_all.sh --flatpak [--bump-build]           # also the Flatpak tarball + manifest sha512/metainfo release; needs flatpak/releases/<version>.md
 ./install_deps.sh                                  # system packages (Ubuntu/Debian/Fedora), rustup, npm install; build_all.sh/run.sh offer it
 ./run.sh [--dev|--packaged|--relay] [--scratch]    # run from source / out/ / the relay; --scratch = throwaway HOME + storage
+./demo.sh [--part 1|2] [--fast] [--packaged]       # the guided walk-through (docs/demo.md): scratch instances driven through the debug server; opens windows on the current display (the maintainer's; an agent runs it under `uisolate`)
 ```
 
 Always give a test run its own `HOME` and a short `TMPDIR` (under 20 characters): a

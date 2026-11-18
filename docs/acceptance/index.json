@@ -51,6 +51,7 @@
       "test/core-boundary.test.js",
       "test/core-contract.test.js",
       "test/crypto.test.js",
+      "test/debug-input.test.js",
       "test/debug-server-share.test.js",
       "test/engine-client-pty.test.js",
       "test/engine-delete-race.test.js",

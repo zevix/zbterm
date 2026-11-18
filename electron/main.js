@@ -16,6 +16,7 @@ const { EngineLifecycle } = require('./engine-lifecycle')
 const { BACKEND_CHOICES, resolveBackendLimit } = require('./backend-limit')
 const { iceServersFlag, resolveIceServers } = require('./ice-servers')
 const { createDebugServer, DEFAULT_PORT } = require('./debug-server')
+const { createDebugInput } = require('./debug-input')
 const { createSessionDataBatcher } = require('./session-data-batcher')
 const { detectChannel, checkForUpdate } = require('./update-channel')
 const { listProviders, GITHUB_USERNAME } = require('../engine/identity/providers')
@@ -923,6 +924,7 @@ function startDebugServer() {
       getEngine: () => lifecycle.engine,
       getPopups: popupList,
       handlePopup: handlePopupAction,
+      input: createDebugInput({ getWindow: firstWindow }),
       getRendererLayout: async () => {
         const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
         if (!win) {

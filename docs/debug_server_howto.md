@@ -145,6 +145,11 @@ work as soon as the server listens.
 | `GET /window/bounds`                                     | no     | `{ bounds, contentBounds, isMaximized, display }`                                                |
 | `POST /window/bounds`                                    | no     | `{ x, y, width, height, animate? }`; unmaximizes, clamps to at least 640x420, saves window state |
 | `GET /debug/worker-pid`                                  | no     | `{ pid }` of the Bare engine worker (`null` before it runs)                                      |
+| `POST /window/focus`                                     | no     | raises the window and gives it the keyboard focus; `{ focused, pageFocused }`                    |
+| `GET /window/screenshot`                                 | no     | the page as drawn now: `{ width, height, bounds, png }` (`png` is base64)                        |
+| `POST /input/key`                                        | no     | a real key press (see [Real input](#real-input))                                                 |
+| `POST /input/text`                                       | no     | text typed a key at a time into whatever holds the focus                                         |
+| `POST /input/mouse`                                      | no     | a pointer move, press, release, click or wheel turn                                              |
 | `GET /identity`                                          | yes    | `identity.get`                                                                                   |
 | `GET /account/profile`                                   | yes    | `account.profile`                                                                                |
 | `GET /account/devices`                                   | yes    | `account.devices`                                                                                |
@@ -237,6 +242,55 @@ click on a real element; a feature that is not built yet reads as absent
 | `search-state`        | —                                                        | the search box and what it drives: `box` (`id`, `rect`, `visible`, `focused`, `value`, `placeholder`, `selStart`/`selEnd`, `countText` (`#searchCount`, `null` while absent), `inSidebar`, `inBottom`), `searchInputs` (every input that looks like a search box), `toolsInputs`, `activeOnlyInTools`, `statusText`, `statusRect`, `bottomRect`, `bottomCells` (the bottom bar's visible cells, `search`/`status` for the cells holding them), `sidebarRect`/`topbarBrandRect` (`null` while hidden), `sideCollapsed`, `narrow` (≤ 780 px), `window`, `activeElement`, `activeInModal`, `terminalFocused`, `selectedId`, `remembered` (the text a terminal click took out of the box, put back on its next focus; `''` for none), `inputBlockedFlashes` ("input blocked" button flashes so far), `crossSession`, `inSession` (`query`, `total`, `index` (1-based, 0 for none), `current` (`row`, `col`, `len`, the row's `text`), `viewportY`, `baseY`, `length`, `rows`, `decorations`, `drawn` (the highlights on screen: each decoration's or overlay box's element shown, as viewport cells `row`, `col`, `width`, read off its rect against `.xterm-screen`), `colors` (`match`, `current`: the highlight colours as `#rrggbb`), `mode`, `buffer` (`normal`/`alternate`)), `sessions` (`query`, `seq`, `pending`, `heading`, `headingIndex`, `searching`, `empty`, `nameEmpty`, `rows`: `id`, `name`, `sub`, `subColor`, `rowBg` (the first opaque background up the tree), `selected`, `section` (`current`/`name`/`buffer`), `index`) |
 | `buffer-search-log`   | —                                                        | since the last call: `{ logging, entries }`, each `session.searchBuffer` request and answer (`sessionId`, `seq`, `count`, `cancelled`, `gone`, `sentAt`, `answeredAt`); `logging` is `false` while the renderer keeps no log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `key-probe`           | `action`: `start` / `take`; `scope`: `document` (optional) | `start` listens for `keydown` on the element focused now, or with `scope: "document"` on the whole page in the capture phase (observing only, never preventing), and answers `{ listening }`; `take` answers `{ listening, events }` (each `key`, `code`, `ctrl`, `shift`, `target`, `defaultPrevented`, `at` (when the key happened, epoch ms from the event's `timeStamp`), `handledAt` (when the probe saw it)) and stops listening |
+
+## Real input
+
+`POST /input/key`, `/input/text` and `/input/mouse` (`electron/debug-input.js`)
+hand events to Chromium with `webContents.sendInputEvent`. The page gets
+trusted events, so the app's hotkeys, the terminal and the dialogs behave as
+under a person's hands, which a `click` renderer command (a synthetic DOM
+event) or `POST /sessions/:id/input` (bytes written to the PTY) do not show.
+No OS tool is involved: the desktop's pointer does not move and the display
+server does not matter. Coordinates are page (CSS) pixels, as `demo-rect` and
+`style-of` report them.
+
+| Route               | Body                                                                                                   | What it does                                                                                                                                                                                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /input/key`   | `chord` (`"Ctrl+Shift+F"`, `"F2"`, `"Ctrl+PgDn"`, `"Enter"`) or `key` + `modifiers`; `count`, `delayMs` | Key down, the character it types (none with Ctrl, Alt or Meta held), key up. Names: `Enter`, `Esc`, `Tab`, `Space`, `Backspace`, `Delete`, `Up`/`Down`/`Left`/`Right`, `PgUp`/`PgDn`, `Home`, `End`, `F1`–`F24`, or one character. Modifiers: `ctrl`, `shift`, `alt`, `meta`. |
+| `POST /input/text`  | `text` (up to 4096 characters), `enter`, `delayMs`, `jitterMs`                                         | Types each character as its own key press, `delayMs` (plus up to `jitterMs`, at random) apart; `enter` ends with Enter.                                                                                                                                                       |
+| `POST /input/mouse` | `type`, `x`, `y`, `button` (`left`/`right`/`middle`), `modifiers`                                      | `move` (glides from the last place in `durationMs`), `down`, `up`, `click` (`count: 2` for a double click, `durationMs` to glide there first), `wheel` (`deltaX`/`deltaY` as a DOM wheel event's: positive scrolls down; `count`, `delayMs`). Answers `{ type, x, y, down }`.   |
+
+```sh
+curl -s -X POST http://127.0.0.1:17177/input/key \
+  -H 'content-type: application/json' -d '{"chord":"Ctrl+Shift+T"}'
+curl -s -X POST http://127.0.0.1:17177/input/text \
+  -H 'content-type: application/json' -d '{"text":"ls -la","enter":true,"delayMs":40}'
+curl -s -X POST http://127.0.0.1:17177/input/mouse \
+  -H 'content-type: application/json' -d '{"type":"wheel","x":600,"y":300,"deltaY":-120,"modifiers":["alt"]}'
+```
+
+A key goes to the page's focused element; the route gives the page the focus
+first, without raising the window. A pointer event sent while a person moves
+the real mouse over the window competes with it.
+
+## Demo overlay
+
+The `demo-*` renderer commands (`renderer/demo-overlay.js`) draw what a
+recorded walk-through needs above the app. The overlay is off until one of
+them is used, never takes a click or a key, and `demo-overlay` with
+`on: false` removes it.
+
+| Command          | Body                                                    | What it does                                                                                                                                                                                                                         |
+| ---------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `demo-overlay`   | `on`, `pointer`, `autoKeys`                             | Turns the overlay on or off. While on, a drawn pointer follows the page's mouse events with a ripple per press, and every chord, function key, modified click and wheel turn shows as a key badge (`autoKeys: false` turns that off). |
+| `demo-caption`   | `title`, `text`, `position` (`bottom`/`top`), `ms`      | The caption card; empty `text` hides it. `text` may hold `<kbd>`, `<b>` and `<br>`; anything else is shown as written.                                                                                                               |
+| `demo-keys`      | `keys` (`"Shift+Enter"`), `ms`                          | A key badge, for the keys the overlay does not show by itself (Enter, Esc, the arrows).                                                                                                                                              |
+| `demo-card`      | `title`, `subtitle`, `lines`, `logo`, `ms`; or `hide`   | A title card over the whole window.                                                                                                                                                                                                  |
+| `demo-spotlight` | `selector`, `text`, `index`, `pad`, `ms`                | A pulsing ring around one element.                                                                                                                                                                                                   |
+| `demo-rect`      | `selector`, `text` (picks among the matches), `index`   | A pure read: `{ found, count, visible, disabled, text, value, rect, window }`, `rect` with the element's `left`, `top`, `width`, `height` and centre `x`, `y`.                                                                       |
+| `demo-state`     | —                                                       | `{ on, pointer, autoKeys, position, caption, keys, card, ring }`.                                                                                                                                                                    |
+
+`./demo.sh` ([demo.md](demo.md)) is built on these two sections.
 
 ## End-to-end script
 

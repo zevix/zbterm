@@ -19,6 +19,13 @@ and the project uses [semantic versioning](https://semver.org/) as described in
 - The Rust `zxterm-core` sidecar, built from the `zxterm/` submodule and shipped as one optional
   npm package per platform (`@zbterm/zxterm-core-<platform>-<arch>`).
 
+- [`docs/OVERVIEW.md`](docs/OVERVIEW.md), a tour of every feature and key binding for a new user,
+  and `./demo.sh` ([`docs/demo.md`](docs/demo.md)), a guided walk-through that drives the real app
+  on scratch data: one window first, then two side by side sharing a terminal.
+- Debug server: real input (`POST /input/key`, `/input/text`, `/input/mouse`, sent as Chromium
+  input events), `POST /window/focus`, `GET /window/screenshot`, and the `demo-*` renderer
+  commands (captions, key badges, a drawn pointer) the walk-through is built on.
+
 ### Changed
 
 - The logo is now the left half of the Freenet rabbit and the right half of the Pear pear, and the

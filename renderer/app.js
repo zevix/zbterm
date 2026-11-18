@@ -12447,6 +12447,9 @@
 
   window.__zbtermDebugCommand = async (request = {}) => {
     const command = request.command || request.action
+    // The demo overlay's commands (renderer/demo-overlay.js): captions, key
+    // badges, the drawn pointer, and where an element is.
+    if (String(command || '').startsWith('demo-')) return window.__zbtermDemoOverlay(request)
     const modal = () => {
       const overlay = document.querySelector('.modal-overlay')
       if (!overlay) throw new Error('Debug modal is not open')

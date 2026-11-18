@@ -23,6 +23,12 @@ function createDebugServer(opts) {
   const executeRendererCommand =
     opts.executeRendererCommand ||
     (() => Promise.reject(httpError(404, 'Renderer commands are not available')))
+  // Real input (electron/debug-input.js): keys, typed text, the mouse, focus.
+  const input = opts.input || null
+  const inputRoute = (name) => (ctx) => {
+    if (!input) throw httpError(404, 'Input events are not available')
+    return input[name](ctx.body || {})
+  }
   const onSelectSession = opts.onSelectSession || (() => {})
   const handlePopup =
     opts.handlePopup || (() => Promise.reject(httpError(404, 'Popup handler is not available')))
@@ -130,6 +136,11 @@ function createDebugServer(opts) {
     route('POST', '/window/bounds', ({ body }) => setWindowBounds(body || {}), {
       requiresEngine: false
     }),
+    route('POST', '/window/focus', inputRoute('focus'), { requiresEngine: false }),
+    route('GET', '/window/screenshot', inputRoute('screenshot'), { requiresEngine: false }),
+    route('POST', '/input/key', inputRoute('key'), { requiresEngine: false }),
+    route('POST', '/input/text', inputRoute('text'), { requiresEngine: false }),
+    route('POST', '/input/mouse', inputRoute('mouse'), { requiresEngine: false }),
     route(
       'POST',
       '/popups/:popupId/actions/:action',

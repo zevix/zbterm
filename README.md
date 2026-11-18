@@ -32,6 +32,10 @@ run in `zxterm-core`, a Rust sidecar built from the
 
 Note: ZBTerm is not affiliated with Holepunch.to or pears.com
 
+New here? [**The tour**](docs/OVERVIEW.md) covers every feature and key
+binding, and `./demo.sh` ([docs/demo.md](docs/demo.md)) walks the real app
+through them on scratch data.
+
 For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## Current version status
@@ -279,6 +283,7 @@ the snap/flatpak makers' tools), and `./run.sh` wraps the run step:
 ./run.sh --relay                   # node relay/server.js
 ./run.sh --scratch --debug-server  # throwaway HOME/storage, debug API on a free port
 ./run.sh --profile work -- --devtools   # anything after -- goes to the app
+./demo.sh                          # the guided walk-through, on scratch data (docs/demo.md)
 ```
 
 `./build_all.sh` and `./run.sh` both check for Node.js, npm and `node_modules`
@@ -707,6 +712,8 @@ curl -s -X POST http://127.0.0.1:17077/sessions/current/input \
 | `GET /renderer/layout` | Renderer layout snapshot. |
 | `POST /renderer/command` | Run a renderer debug command. |
 | `GET /window/bounds` \| `POST /window/bounds` | Read or set the window position and size. |
+| `POST /window/focus` \| `GET /window/screenshot` | Focus the window; the page as a PNG. |
+| `POST /input/key` \| `/input/text` \| `/input/mouse` | Real key, typing and mouse events, as Chromium input. |
 | `GET /debug/worker-pid` | PID of the Bare worker. |
 | `GET /sessions/:sessionId/input/diagnostics` | Input pipeline diagnostics. |
 
