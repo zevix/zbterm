@@ -55,3 +55,18 @@ test('terminal frame snapshot keeps the mouse report encoding', async (t) => {
   frame.dispose()
   restored.dispose()
 })
+
+// @xterm/headless 6.0.0 leaves a scrollback-0 buffer shorter than the grid
+// after this resize pair; the print that followed threw from xterm's write
+// timer and took the Bare worker down ("reading 'getWidth'").
+test('a resized scrollback-0 frame keeps every row the cursor can reach', async (t) => {
+  const frame = new TerminalFrame(100, 30, { scrollback: 0 })
+  t.teardown(() => frame.dispose())
+  await frame.write('\x1b[32;124H' + '日本'.repeat(56) + '\x1b[12A')
+  frame.resize(2, 31)
+  frame.resize(130, 45)
+  const buffer = frame.term._core.buffers.active
+  t.ok(buffer.lines.length >= buffer.ybase + frame.rows, 'the grid has a line for every row')
+  await frame.write('\x1b[64;98H' + '日本'.repeat(48))
+  t.is(frame.snapshot(1).rows, 45)
+})

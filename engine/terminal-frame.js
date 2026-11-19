@@ -37,6 +37,39 @@ class TerminalFrame {
 
   resize(cols, rows) {
     this.term.resize(cols || this.cols, rows || this.rows)
+    this._repairBuffers()
+  }
+
+  // @xterm/headless 6.0.0, scrollback 0 (the archive and playback screens): a
+  // resize can leave a buffer with fewer lines than `ybase + rows` - a
+  // scrolled-off base with no scrollback to hold it, then a taller grid that
+  // is not padded for it. The cursor may then sit on a row that does not
+  // exist, and the next printed character throws inside xterm's own write
+  // timer, where nothing can catch it: the whole worker dies with "Cannot
+  // read properties of undefined (reading 'getWidth')". Give the base back
+  // and pad the grid, so every row the cursor can reach exists.
+  _repairBuffers() {
+    const buffers = this.term._core && this.term._core.buffers
+    if (!buffers) return
+    const rows = this.term.rows
+    for (const buffer of [buffers.normal, buffers.alt]) {
+      const lines = buffer && buffer.lines
+      // The alternate buffer holds no lines while the normal one is shown.
+      if (!lines || !lines.length || typeof buffer.getBlankLine !== 'function') continue
+      let missing = buffer.ybase + rows - lines.length
+      if (missing <= 0) continue
+      while (missing > 0 && buffer.ybase > 0) {
+        buffer.ybase--
+        buffer.y++
+        missing--
+      }
+      for (; missing > 0 && lines.length < lines.maxLength; missing--) {
+        lines.push(buffer.getBlankLine(buffer.getNullCell()))
+      }
+      buffer.ydisp = Math.min(buffer.ydisp, buffer.ybase)
+      buffer.y = Math.max(0, Math.min(buffer.y, rows - 1))
+      buffer.savedY = Math.max(0, Math.min(buffer.savedY, lines.length - 1))
+    }
   }
 
   write(data) {
