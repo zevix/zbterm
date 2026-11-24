@@ -33,6 +33,69 @@
   // The open session dialog's step list, for the debug commands.
   let openStepsEditor = null
 
+  // 261121_dialog-and-command-plugins R5–R7, U1, U3: the user's command
+  // plugins, `.js` files in <app data>/plugins/commands/ that the main process
+  // lists (electron/command-plugins.js) and this page runs, and its
+  // commands.json: which plugins "+ Add" offers.
+  // { displayDir, choice: { builtin: [id] | null, commands: [file] },
+  //   files: [{ file, source, ids, error }] }
+  const commandPlugins = { displayDir: '', choice: { builtin: null, commands: [] }, files: [] }
+  let commandPluginsLoading = null
+
+  // Runs one file's source in the page. launch.reloadFiles calls it through
+  // launch.runFile, which marks what it registers with the file and catches a
+  // syntax error or a throw (U1): it never reaches the page's own error
+  // handlers, and the other files' plugins stay.
+  function runCommandPluginFile(file, source) {
+    // A URL of its own in stack traces and the devtools' source list.
+    const body = `${source}\n//# sourceURL=zbterm-command-plugin/${encodeURIComponent(file)}`
+    // eslint-disable-next-line no-new-func
+    const run = new Function(body)
+    run.call(window)
+  }
+
+  // Reads the directory again: new or changed files run, and so does every
+  // file that failed last time (C3); gone ones drop out
+  // (launch.reloadFiles).
+  function loadCommandPlugins() {
+    if (commandPluginsLoading) return commandPluginsLoading
+    commandPluginsLoading = Promise.resolve()
+      .then(() => api.invoke('app.commandPlugins.list'))
+      .then((listed) => {
+        const before = new Map(commandPlugins.files.map((entry) => [entry.file, entry]))
+        commandPlugins.files = launch.reloadFiles(
+          commandPlugins.files,
+          (listed && listed.files) || [],
+          runCommandPluginFile
+        )
+        for (const entry of commandPlugins.files) {
+          const old = before.get(entry.file)
+          if (entry.error && !(old && old.error === entry.error)) {
+            console.error(`[command-plugins] ${entry.file}: ${entry.error}`)
+          }
+        }
+        commandPlugins.displayDir = (listed && listed.displayDir) || ''
+        if (listed && listed.choice) commandPlugins.choice = listed.choice
+        commandPlugins.choiceError = (listed && listed.choiceError) || ''
+        return commandPlugins
+      })
+      .catch((err) => {
+        console.error('[command-plugins] could not list the plugins:', err && err.message)
+        return commandPlugins
+      })
+      .finally(() => {
+        commandPluginsLoading = null
+      })
+    return commandPluginsLoading
+  }
+
+  // Does "+ Add" offer `Plugin`? Built-ins unless unticked; files when ticked.
+  function commandPluginShown(Plugin) {
+    const choice = commandPlugins.choice || {}
+    if (Plugin.source) return (choice.commands || []).includes(Plugin.source)
+    return !Array.isArray(choice.builtin) || choice.builtin.includes(Plugin.id)
+  }
+
   if (bridge && bridge.logToFile) {
     bridge.logToFile('=== ZBTerm renderer app.js loaded ===')
     const oldLog = console.log
@@ -120,6 +183,11 @@
   const COPY_ON_SELECT_STORAGE_KEY = 'zbterm.copyOnSelect'
   const CTRL_ZOOM_STORAGE_KEY = 'zbterm.ctrlZoom'
   const F2_EDIT_STORAGE_KEY = 'zbterm.f2Edit'
+  // 261121 R1: read by the main process (electron/main.js CONFIRM_CLOSE_PREFERENCE).
+  const CONFIRM_CLOSE_STORAGE_KEY = 'zbterm.confirmClose'
+  // 261121 R15: the search box's two toggles, install-wide like the theme.
+  const SEARCH_CASE_STORAGE_KEY = 'zbterm.searchCaseSensitive'
+  const SEARCH_WORD_STORAGE_KEY = 'zbterm.searchWholeWord'
   const PIN_KEYS_STORAGE_KEY = 'zbterm.pinKeys'
   const APP_ZOOM_STORAGE_KEY = 'zbterm.appZoom'
   const APP_ZOOM_LEVEL_STORAGE_KEY = 'zbterm.appZoomLevel'
@@ -382,6 +450,7 @@
     copyOnSelect: true,
     ctrlZoom: true,
     f2Edit: true,
+    confirmClose: true,
     pinKeys: true,
     appZoom: false,
     appZoomLevel: 0,
@@ -500,6 +569,8 @@
     sessionSelect: document.getElementById('sessionSelect'),
     search: document.getElementById('search'),
     searchCount: document.getElementById('searchCount'),
+    searchCase: document.getElementById('searchCase'),
+    searchWord: document.getElementById('searchWord'),
     activeOnly: document.getElementById('activeOnly'),
     newSession: document.getElementById('newSession'),
     joinLink: document.getElementById('joinLink'),
@@ -583,6 +654,10 @@
 
   async function init() {
     state.startupPhase = 'initializing'
+    state.startupMarks = []
+    // 261121 R16: until the engine answered the first list, the list says so.
+    state.sessionsLoaded = false
+    renderSessionsLoading()
     if (!bridge || !api) throw new Error('Electron preload bridge did not load')
     state.appVersion = String(bridge.pkg().version || '')
     await loadAppInfo()
@@ -591,6 +666,8 @@
     applyDevb(await preferredDevb(), false)
     await restoreZoomPreferences()
     await restoreF2EditPreference()
+    await restoreConfirmClosePreference()
+    await restoreSearchOptions()
     await restorePinKeysPreference()
     await restoreIceServers()
     await restoreRelayKey()
@@ -618,12 +695,19 @@
     await api.invoke('ping')
     // The first read can fail while the engine starts: read again now.
     if (!state.pinnedLoaded) await loadPinnedSessionsPreference()
-    await loadShareBackends()
     setStatus('loading sessions')
-    // Load the stored peer records once: the render loop reads the memoized
-    // map, never the engine.
-    await refreshPeerIdentities()
-    await refreshSessions()
+    // 261121 R16: the list is read alongside the share backends and the peer
+    // records (it needs neither to be drawn) and drawn as soon as it answers;
+    // the badges the peer records add follow in the redraw below. Load the
+    // stored peer records once: the render loop reads the memoized map,
+    // never the engine.
+    await Promise.all([
+      loadShareBackends(),
+      refreshPeerIdentities(),
+      refreshSessions(),
+      // The user's command plugins, before a profile dialog can show them.
+      loadCommandPlugins()
+    ])
     renderSessions()
     if (state.appInfo.channel === 'npm') setStatus('checking for updates')
     wireUpdater()
@@ -1392,6 +1476,16 @@
         else els.search.focus()
       })
     }
+    // The toggles keep the box's focus (mousedown's default would blur it and
+    // could end search mode before the click).
+    for (const [el, which] of [
+      [els.searchCase, 'case'],
+      [els.searchWord, 'word']
+    ]) {
+      if (!el) continue
+      el.addEventListener('mousedown', (event) => event.preventDefault())
+      el.addEventListener('click', () => toggleSearchOption(which))
+    }
     if (els.status) {
       els.status.addEventListener('click', () => {
         if (!state.identityRefusal) return
@@ -1552,6 +1646,26 @@
             return
           }
         }
+        if (
+          event.key === 'Escape' &&
+          !event.shiftKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.metaKey &&
+          !event.isComposing &&
+          searchIsOn() &&
+          document.activeElement !== els.search &&
+          !sidePaneBlocked() &&
+          !anyMenuOpen()
+        ) {
+          // 261121 R3, U2: while the box holds text, Esc ends the search from
+          // anywhere, the terminal too (it does not reach the shell then);
+          // with no search it is the terminal's. The box handles its own Esc.
+          event.preventDefault()
+          event.stopPropagation()
+          clearSearch()
+          return
+        }
         if (event.key === 'Tab') {
           // Inside a dialog Tab moves between its fields, and stays in it.
           // Everywhere else it is swallowed so focus never leaves the terminal
@@ -1638,6 +1752,14 @@
       state.sessions = withPinnedFirst([...state.pendingJoins, ...list])
       syncSelectedSessionFromList()
       renderSessions()
+    })
+    // 261121_dialog-and-command-plugins C8: a Plugins dialog's Save, in this
+    // window or another: "+ Add" offers the new choice.
+    api.on('commandPlugins:changed', (choice) => {
+      if (!choice || typeof choice !== 'object') return
+      commandPlugins.choice = choice
+      commandPlugins.choiceError = ''
+      if (openStepsEditor) openStepsEditor.refresh()
     })
     api.on('session:data', ({ sessionId, source, hd, data, end }) => {
       const bytes = new Uint8Array(data)
@@ -1802,7 +1924,7 @@
     // While the box holds text the list also needs the sessions the name
     // filter hides: they are "Other - unmatched sessions" (261113_ui-polish R3).
     const [sessions, unfiltered] = await Promise.all([
-      api.invoke('session.list', { query, activeOnly: state.activeOnly }),
+      api.invoke('session.list', { query, activeOnly: state.activeOnly, ...searchOptions() }),
       query ? api.invoke('session.list', { activeOnly: state.activeOnly }) : null
     ])
     updateActiveToggle()
@@ -1812,7 +1934,26 @@
     state.unfilteredSessions = unfiltered ? withPinnedFirst(unfiltered) : null
     ingestSessionIdentities(state.sessions)
     syncSelectedSessionFromList()
+    if (!state.sessionsLoaded) {
+      state.sessionsLoaded = true
+      if (state.startupMarks) {
+        state.startupMarks.push({ step: 'list drawn', ms: Math.round(performance.now()) })
+      }
+    }
     renderSessions()
+  }
+
+  // 261121 R16: the list before the engine's first answer: a spinner and
+  // "Loading profiles…", never "No sessions yet".
+  function renderSessionsLoading() {
+    if (!els.sessions) return
+    const box = document.createElement('div')
+    box.className = 'empty sessions-loading'
+    const spin = document.createElement('span')
+    spin.className = 'spinner'
+    spin.setAttribute('aria-hidden', 'true')
+    box.append(spin, document.createTextNode('Loading profiles…'))
+    els.sessions.replaceChildren(box)
   }
 
   async function loadSessionListPreferences() {
@@ -2272,6 +2413,7 @@
     if (!profile.skipDialog) return newSessionDialog(anchor, template)
     const session = await createSession({
       name: await templateSessionName(template),
+      launchName: profile.name,
       cwd: profile.cwd,
       command: profile.command,
       steps: profile.steps,
@@ -2292,7 +2434,8 @@
     const name = template
       ? await templateSessionName(template)
       : (await api.invoke('session.defaultName')).name
-    const values = await showSessionEditor(anchor, profile ? { ...profile, name } : { name }, {
+    const prefill = profile ? { ...profile, name, launchName: profile.name } : { name }
+    const values = await showSessionEditor(anchor, prefill, {
       mode: 'new',
       launch: true,
       share: profile ? profile.share : null,
@@ -2346,8 +2489,10 @@
   }
 
   function templateMenuItems() {
+    // 261121 R5: the stamp a template's row carries, at the item's left.
     return NEW_SESSION_TRIGGERS.map((trigger) => ({
       kind: 'field',
+      icon: 'fa-stamp',
       label: trigger.menuLabel,
       toggle: () => {
         closeSettingsMenu()
@@ -2851,6 +2996,11 @@
   // own order; only when there are some) and "Session buffer matches".
   // With the box empty it is the plain list.
   function renderSessions() {
+    if (state.sessionsLoaded === false) {
+      renderSessionsLoading()
+      renderSessionSelect()
+      return
+    }
     els.sessions.replaceChildren()
     renderSessionSelect()
     const searching = searchIsOn()
@@ -2872,7 +3022,11 @@
         state.query || state.activeOnly ? 'No matching sessions' : 'No sessions yet'
       els.sessions.append(empty)
     }
-    if (!nameHidden) for (const session of rows) els.sessions.append(buildSessionRow(session))
+    // 261121 R2: the part of each name that matched the box's text, in cyan.
+    const nameMatch = searching ? state.query : ''
+    if (!nameHidden) {
+      for (const session of rows) els.sessions.append(buildSessionRow(session, { nameMatch }))
+    }
     renderSessionBufferSection()
     if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)
     markSearchCursor()
@@ -3004,6 +3158,31 @@
     renderSessions()
   }
 
+  // 261121 R2: `name` as text, every occurrence of `query` wrapped in a cyan
+  // mark. The matcher is the one the engine's name filter uses
+  // (engine/catalog.js::list), with the box's toggles (R15).
+  function setNameWithMatches(el, name, query) {
+    const text = String(name || '')
+    const q = String(query || '')
+    el.replaceChildren()
+    const find = window.zbtermFindInText
+    const hits = q && find ? find(text, q, searchOptions()) : []
+    if (!hits.length) {
+      el.textContent = text
+      return
+    }
+    let at = 0
+    for (const hit of hits) {
+      if (hit > at) el.append(document.createTextNode(text.slice(at, hit)))
+      const mark = document.createElement('mark')
+      mark.className = 'name-match'
+      mark.textContent = text.slice(hit, hit + q.length)
+      el.append(mark)
+      at = hit + q.length
+    }
+    if (at < text.length) el.append(document.createTextNode(text.slice(at)))
+  }
+
   // One row of the session list: icon, name, subtitle, marks, identity
   // badges and hover actions. options.matchCount makes it a buffer-match row.
   function buildSessionRow(session, options = {}) {
@@ -3015,7 +3194,7 @@
     row.addEventListener('click', () => selectSession(session).catch(showError))
     row.addEventListener('contextmenu', (event) => {
       event.preventDefault()
-      openSessionMenu(session, event)
+      openProfileMenu(session, { clientX: event.clientX, clientY: event.clientY }).catch(showError)
     })
     const status = session.pending ? 'pending' : session.active ? 'live' : 'recorded'
     const liveIcon = sessionLiveIcon(session, { keyboardShared: true })
@@ -3033,7 +3212,7 @@
     </span>
     <span class="session-actions"></span>
   `
-    row.querySelector('.session-name').textContent = session.name
+    setNameWithMatches(row.querySelector('.session-name'), session.name, options.nameMatch)
     // A buffer-match row (261111_buffer-search R6) says how many times the
     // box's text is in the session's buffer instead of "live · …".
     // Matches the terminal cannot show (the normal-screen history behind a
@@ -3664,6 +3843,7 @@
     if (event && event.shiftKey) {
       await createSession({
         name,
+        launchName: session.name,
         cwd: session.cwd,
         command: session.command,
         steps: session.steps,
@@ -3672,9 +3852,10 @@
       return
     }
     // Copy has no Advanced section, but its name is still checked (U2).
+    // `launchName`: the steps' placeholders were filled with the source's name.
     const values = await showSessionEditor(
       anchor,
-      { ...session, name, record },
+      { ...session, name, launchName: session.name, record },
       {
         mode: 'copy',
         launch: true,
@@ -3731,19 +3912,96 @@
   // edges aligned, flipping above it (or pinning to the viewport) when there
   // is no room below. The panel is re-placed whenever its size or the
   // window's changes, since wizards grow and shrink between steps.
+  // Placed once below the anchor (above it, or against the window's bottom,
+  // when it does not fit). 261121 R8: afterwards a change of the panel's own
+  // size (a filtered list) keeps its top edge and only moves it as far as the
+  // window's edge needs; choosing below/above afresh on every resize made a
+  // shrinking list flip the dialog by about its height. A window resize
+  // places it afresh.
+  // The open profile dialog: { close(value), dirty(), focus() }, so a second
+  // request can keep an edited one (C6) or replace an untouched one.
+  let openSessionEditor = null
+  // { target, until }: the field a kept dialog focused, which the next
+  // focusPrimaryTarget (within a second) keeps focused.
+  let sessionEditorFocusClaim = null
+
+  // Keeps a fixed panel wholly inside the window, at least 8 px from each
+  // edge (C7, A-7: the panel's max-height is the window's less 16 px, so it
+  // always fits; it scrolls inside when taller).
+  function clampPanel(panel) {
+    const box = panel.getBoundingClientRect()
+    const x = Math.max(8, Math.min(box.left, window.innerWidth - box.width - 8))
+    const y = Math.max(8, Math.min(box.top, window.innerHeight - box.height - 8))
+    panel.style.left = `${Math.round(x)}px`
+    panel.style.top = `${Math.round(y)}px`
+  }
+
+  // 261121_dialog-and-command-plugins R2: a fixed panel moves with its title
+  // held down (not from the title's buttons); it stays inside the window.
+  // Once moved it is not placed by its anchor again (anchorPanel).
+  function dragByTitle(panel, handle) {
+    if (!handle) return
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.target.closest('button, input, select, a')) return
+      event.preventDefault()
+      const box = panel.getBoundingClientRect()
+      const dx = event.clientX - box.left
+      const dy = event.clientY - box.top
+      handle.setPointerCapture(event.pointerId)
+      panel.classList.add('dragging')
+      const move = (next) => {
+        panel.dataset.dragged = '1'
+        panel.style.left = `${Math.round(next.clientX - dx)}px`
+        panel.style.top = `${Math.round(next.clientY - dy)}px`
+        clampPanel(panel)
+      }
+      const end = () => {
+        panel.classList.remove('dragging')
+        handle.removeEventListener('pointermove', move)
+        handle.removeEventListener('pointerup', end)
+        handle.removeEventListener('pointercancel', end)
+        handle.removeEventListener('lostpointercapture', end)
+      }
+      handle.addEventListener('pointermove', move)
+      handle.addEventListener('pointerup', end)
+      handle.addEventListener('pointercancel', end)
+      // C7: a capture lost any other way (the button released outside the
+      // window) ends the drag too, so the panel never sticks to the pointer.
+      handle.addEventListener('lostpointercapture', end)
+    })
+  }
+
   function anchorPanel(panel, anchor, align = 'left') {
     if (!anchor || !anchor.getBoundingClientRect) return false
-    const place = () => {
+    let placed = null
+    const clampY = (y, height) => Math.max(8, Math.min(y, window.innerHeight - height - 8))
+    const place = (fresh) => {
       if (!panel.isConnected) {
-        window.removeEventListener('resize', place)
+        window.removeEventListener('resize', onWindowResize)
         observer.disconnect()
+        return
+      }
+      // Moved by its title: where the user put it, kept inside the window.
+      if (panel.dataset.dragged) {
+        clampPanel(panel)
+        return
+      }
+      const box = panel.getBoundingClientRect()
+      if (placed && !fresh) {
+        const y = clampY(placed.y, box.height)
+        if (y !== placed.y) {
+          placed.y = y
+          panel.style.top = `${y}px`
+        }
         return
       }
       // A list refresh can replace the anchor while the panel is open; keep
       // the last position rather than jumping to a detached button's 0,0.
-      if (!anchor.isConnected) return
+      if (!anchor.isConnected) {
+        if (placed) panel.style.top = `${(placed.y = clampY(placed.y, box.height))}px`
+        return
+      }
       const rect = anchor.getBoundingClientRect()
-      const box = panel.getBoundingClientRect()
       const edge = align === 'right' ? rect.right - box.width : rect.left
       const x = Math.max(8, Math.min(window.innerWidth - box.width - 8, edge))
       const below = rect.bottom + 4
@@ -3752,13 +4010,15 @@
       if (below + box.height > window.innerHeight - 8) {
         y = above >= 8 ? above : Math.max(8, window.innerHeight - box.height - 8)
       }
+      placed = { x, y }
       panel.style.left = `${x}px`
       panel.style.top = `${y}px`
     }
-    const observer = new window.ResizeObserver(place)
+    const onWindowResize = () => place(true)
+    const observer = new window.ResizeObserver(() => place(false))
     observer.observe(panel)
-    window.addEventListener('resize', place)
-    place()
+    window.addEventListener('resize', onWindowResize)
+    place(true)
     return true
   }
 
@@ -3770,6 +4030,140 @@
     anchorPanel(panel, anchor, align)
   }
 
+  // 261121_dialog-and-command-plugins R6, U1: which plugins "+ Add" offers. A
+  // checkbox per plugin: the built-in ones, then every `.js` file of the
+  // plugins directory (a file that failed to load shows why, unticked and
+  // greyed). Save writes commands.json. Resolves true when saved.
+  async function showPluginsDialog(anchor) {
+    await loadCommandPlugins()
+    const body = document.createElement('div')
+    body.className = 'plugins-dialog'
+    // C9 (F9): a commands.json that could not be read is said so; Save keeps
+    // it as commands.json.bad (electron/command-plugins.js save).
+    if (commandPlugins.choiceError) {
+      const bad = document.createElement('div')
+      bad.className = 'plugins-dialog-choice-error'
+      bad.textContent = `${commandPlugins.choiceError}. Save keeps it as commands.json.bad.`
+      body.append(bad)
+    }
+    const boxes = []
+    const section = (heading, rows) => {
+      const head = document.createElement('div')
+      head.className = 'plugins-dialog-section'
+      head.textContent = heading
+      const list = document.createElement('div')
+      list.className = 'plugins-dialog-list'
+      list.append(...rows)
+      body.append(head, list)
+      return head
+    }
+    const row = ({ kind, key, title, icon, detail, checked, error }) => {
+      const label = document.createElement('label')
+      label.className = 'plugins-dialog-row'
+      const input = document.createElement('input')
+      input.type = 'checkbox'
+      input.checked = !!checked && !error
+      input.disabled = !!error
+      input.dataset.kind = kind
+      input.dataset.key = key
+      const mark = document.createElement('i')
+      mark.className = `fa-solid ${icon || 'fa-puzzle-piece'}`
+      mark.setAttribute('aria-hidden', 'true')
+      const name = document.createElement('span')
+      name.className = 'plugins-dialog-name'
+      name.textContent = title
+      label.append(input, mark, name)
+      if (detail) {
+        const note = document.createElement('span')
+        note.className = 'plugins-dialog-detail'
+        note.textContent = detail
+        label.append(note)
+      }
+      if (error) {
+        label.classList.add('disabled')
+        const why = document.createElement('span')
+        why.className = 'plugins-dialog-error'
+        why.textContent = error
+        label.title = error
+        label.append(why)
+      }
+      boxes.push(input)
+      return label
+    }
+    const builtins = launch.plugins().filter((Plugin) => !Plugin.source)
+    section(
+      'Built-in',
+      builtins.map((Plugin) =>
+        row({
+          kind: 'builtin',
+          key: Plugin.id,
+          title: Plugin.title,
+          icon: Plugin.icon,
+          checked: commandPluginShown(Plugin)
+        })
+      )
+    )
+    const chosen = new Set(commandPlugins.choice.commands || [])
+    const fileRows = commandPlugins.files.map((entry) => {
+      const registered = entry.ids.map((id) => launch.plugin(id)).filter(Boolean)
+      const first = registered[0]
+      return row({
+        kind: 'file',
+        key: entry.file,
+        title: registered.length ? registered.map((Plugin) => Plugin.title).join(', ') : entry.file,
+        icon: first ? first.icon : 'fa-file-code',
+        detail: registered.length ? entry.file : '',
+        checked: chosen.has(entry.file),
+        error: entry.error
+      })
+    })
+    if (!fileRows.length) {
+      const none = document.createElement('div')
+      none.className = 'plugins-dialog-empty'
+      none.textContent = 'No .js files'
+      fileRows.push(none)
+    }
+    const dirName = commandPlugins.displayDir || '~/.config/ZBTerm/plugins/commands/'
+    const fromHead = section(`From ${dirName}`, fileRows)
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.className = 'text-btn plugins-dialog-open'
+    open.title = 'Open the folder'
+    open.setAttribute('aria-label', 'Open the folder')
+    open.innerHTML = '<i class="fa-solid fa-folder-open" aria-hidden="true"></i>'
+    open.addEventListener('click', () => {
+      api.invoke('app.commandPlugins.open').catch(showError)
+    })
+    fromHead.append(open)
+    const note = document.createElement('div')
+    note.className = 'plugins-dialog-note'
+    note.textContent =
+      'Ticked plugins are offered by "+ Add". New or changed files are read when this dialog or a profile dialog opens.'
+    body.append(note)
+    const saved = await showModal({
+      title: 'Plugins',
+      body,
+      panelClass: 'plugins-dialog-panel',
+      okText: 'Save',
+      input: false,
+      anchor: anchor && anchor.isConnected ? anchor : null,
+      popupId: 'plugins'
+    })
+    if (!saved) return false
+    const picked = (kind) =>
+      boxes.filter((box) => box.dataset.kind === kind && box.checked).map((box) => box.dataset.key)
+    const builtin = picked('builtin')
+    const choice = await api.invoke('app.commandPlugins.save', {
+      // Every built-in ticked is written as "all", so a later built-in shows.
+      builtin: builtin.length === builtins.length ? null : builtin,
+      commands: picked('file')
+    })
+    if (choice) commandPlugins.choice = choice
+    commandPlugins.choiceError = ''
+    if (openStepsEditor) openStepsEditor.refresh()
+    return true
+  }
+
   // A small popover editor anchored under a row action, left edges aligned.
   // `options.mode` is 'edit', 'new', 'copy' or 'template' (a trigger's
   // template, from the settings menu). Resolves with
@@ -3778,16 +4172,56 @@
   // when "Share session now" was ticked, null when not, undefined in a dialog
   // without it; `triggerId` is the Advanced choice ('' for none), undefined
   // without that section. `options.triggerId`/`skipDialog`/`share` prefill.
-  function showSessionEditor(anchor, session, options = {}) {
+  // C6 (Q-2): one dialog at a time. An open one with changes is kept and
+  // focused, and the new request resolves null; one without is replaced.
+  // True when the new dialog may open.
+  function replaceOpenSessionEditor() {
+    if (!openSessionEditor) return true
+    if (openSessionEditor.dirty()) {
+      openSessionEditor.focus()
+      setStatus('Close the open profile dialog first')
+      return false
+    }
+    openSessionEditor.close(null)
+    return true
+  }
+
+  async function showSessionEditor(anchor, session, options = {}) {
     closeSessionMenu()
+    if (!replaceOpenSessionEditor()) return null
+    // C12: a file changed or added since the last read is run first, so the
+    // dialog shows its steps with the plugin as it is now.
+    if (options.launch) {
+      await loadCommandPlugins()
+      // Another dialog may have opened while the files were read.
+      if (!replaceOpenSessionEditor()) return null
+    }
     const existing = document.querySelector('.session-editor-overlay')
     if (existing) existing.remove()
+    if (anchor && !anchor.isConnected) anchor = null
     return new Promise((resolve) => {
+      // 261121_dialog-and-command-plugins R2, R3: a floating window, not a
+      // modal one. The layer passes the pointer through (only the panel takes
+      // it), so the terminal and the list behind stay usable while it is
+      // open: click in the terminal, copy, paste into a field.
       const overlay = document.createElement('div')
-      overlay.className = 'session-editor-overlay'
+      overlay.className = 'session-editor-overlay session-editor-floating'
       const panel = document.createElement('form')
       panel.className = 'session-editor'
+      const heading =
+        options.title ||
+        {
+          new: 'New profile',
+          edit: 'Edit profile',
+          copy: 'Copy profile',
+          template: 'New-session template'
+        }[options.mode] ||
+        'Profile'
       panel.innerHTML = `
+        <div class="session-editor-title" title="Drag to move">
+          <i class="fa-solid fa-grip-vertical session-editor-grip" aria-hidden="true"></i>
+          <span class="session-editor-heading"></span>
+        </div>
         <label class="session-editor-label" for="sessionEditorName">Name:</label>
         <input id="sessionEditorName" class="modal-input" name="name" autocomplete="off" />
         <div class="session-editor-launch session-editor-steps"></div>
@@ -3796,6 +4230,8 @@
           <button type="button" class="text-btn session-editor-cancel">Cancel</button>
         </span>
       `
+      panel.querySelector('.session-editor-heading').textContent = heading
+      panel.setAttribute('aria-label', heading)
       const name = panel.querySelector('#sessionEditorName')
       name.value = session.name || ''
       // The launch: a chain of plugin steps (renderer/plugins/), in place of
@@ -3806,9 +4242,25 @@
           steps: launch.stepsFor(session, launchEnv),
           env: launchEnv,
           invoke: (method, args) => api.invoke(method, args),
-          showError
+          showError,
+          // R8: the placeholders take the name as typed in this dialog.
+          name: () => name.value.trim(),
+          shown: commandPluginShown,
+          onPlugins: () => showPluginsDialog(null)
         })
         panel.querySelector('.session-editor-steps').replaceWith(stepsEditor.root)
+        // C12: a stored step whose plugin is not loaded (a file removed,
+        // renamed or failing) is shown as the command it compiled to.
+        const missing = launch.missingPlugins(session.steps)
+        if (missing.length) {
+          const note = document.createElement('div')
+          note.className = 'session-editor-note session-editor-missing'
+          note.textContent =
+            missing.length === 1
+              ? `${missing[0]} is not loaded; its step is shown as a command`
+              : `${missing.join(', ')} are not loaded; their steps are shown as a command`
+          stepsEditor.root.after(note)
+        }
         openStepsEditor = stepsEditor
         const editor = stepsEditor
         loadLaunchEnv().then((env) => editor.setEnv(env))
@@ -3947,8 +4399,11 @@
         triggerRow.append(stamp, triggerSelect)
         body.append(label, triggerRow, skip.label)
         advanced.append(summary, body)
-        // A template opens with Advanced shown, so its role is visible (R37).
-        if (options.mode === 'edit' && triggerSelect.value) advanced.open = true
+        // A template opens with Advanced shown, so its role is visible (R37),
+        // from F2 / Edit and from the settings menu's template items (261121 R6).
+        if ((options.mode === 'edit' || options.mode === 'template') && triggerSelect.value) {
+          advanced.open = true
+        }
         panel.insertBefore(advanced, actionsRow)
       }
       overlay.append(panel)
@@ -3957,19 +4412,51 @@
       const row = anchor && anchor.closest ? anchor.closest('.session-row') : null
       if (row) row.classList.add('menu-open')
       let closed = false
+      // C7: on every window resize the panel stays wholly inside, whether it
+      // is anchored (anchorPanel places it first), centred or dragged.
+      const onResize = () => {
+        if (panel.isConnected) clampPanel(panel)
+      }
       const close = (value) => {
         if (closed) return
         closed = true
         overlay.remove()
+        window.removeEventListener('resize', onResize)
         if (openStepsEditor === stepsEditor) openStepsEditor = null
+        if (openSessionEditor && openSessionEditor.close === close) openSessionEditor = null
         if (row) row.classList.remove('menu-open')
         resolve(value)
       }
+      // C6: what the user can change, to tell an edited dialog from one
+      // just opened.
+      const snapshot = () =>
+        JSON.stringify({
+          steps: stepsEditor ? stepsEditor.serialize() : null,
+          fields: Array.from(panel.querySelectorAll('input, select, textarea')).map((field) =>
+            field.type === 'checkbox' || field.type === 'radio' ? field.checked : field.value
+          )
+        })
+      let initial = ''
+      openSessionEditor = {
+        close,
+        dirty: () => !closed && snapshot() !== initial,
+        focus: () => {
+          const target =
+            panel.contains(document.activeElement) && document.activeElement !== document.body
+              ? document.activeElement
+              : name
+          target.focus()
+          sessionEditorFocusClaim = { target, until: performance.now() + 1000 }
+          panel.classList.remove('session-editor-attention')
+          void panel.offsetWidth
+          panel.classList.add('session-editor-attention')
+        }
+      }
+      dragByTitle(panel, panel.querySelector('.session-editor-title'))
 
       panel.querySelector('.session-editor-cancel').addEventListener('click', () => close(null))
-      overlay.addEventListener('pointerdown', (event) => {
-        if (event.target === overlay) close(null)
-      })
+      // U4: only Esc inside the dialog closes it; a click outside it (the
+      // terminal, the list) leaves it open, and Esc there is the terminal's.
       panel.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') close(null)
       })
@@ -4025,7 +4512,14 @@
           })
       })
 
-      anchorPanel(panel, anchor, 'left')
+      if (!anchorPanel(panel, anchor, 'left')) {
+        // Opened from nowhere on screen: centred, then free to move.
+        const box = panel.getBoundingClientRect()
+        panel.style.left = `${Math.max(8, Math.round((window.innerWidth - box.width) / 2))}px`
+        panel.style.top = `${Math.max(8, Math.round((window.innerHeight - box.height) / 3))}px`
+      }
+      window.addEventListener('resize', onResize)
+      initial = snapshot()
       window.requestAnimationFrame(() => {
         name.focus()
         name.select()
@@ -4056,33 +4550,174 @@
         : ''
   }
 
-  function openSessionMenu(session, anchor, options = {}) {
-    if (!els.sessionMenu || !session) return
-    closeTerminalMenu()
-    closeSettingsMenu()
-    els.sessionMenu.replaceChildren()
-    const items = options.items || [
-      { icon: 'fa-pen', label: 'Rename', action: renameSession, disabled: false },
+  // ---- The profile's right-click menu (261121 R10-R12, U3, U4) -------------
+  // The row is selected first (without resuming it), so every label and
+  // enabled state below is that profile's: its HD, input mode and share.
+  async function openProfileMenu(session, point) {
+    if (!session) return
+    if (!session.pending && state.selectedId !== session.sessionId) {
+      await selectSession(session, { extend: false })
+    }
+    const fresh = sessionEntryById(session.sessionId) || session
+    openSessionMenu(fresh, point)
+  }
+
+  // Shared while one of its invite links still works; an engine without
+  // `liveLinks` counts as shared while it reports a share (review #9).
+  function sessionSharedNow(session) {
+    if (!session || !session.isSharing) return false
+    return !Number.isFinite(session.liveLinks) || session.liveLinks > 0
+  }
+
+  function profileMenuItems(session) {
+    const joined = !!(session.isJoined || session.owner === 'joined')
+    const pending = !!session.pending
+    const selected = state.selectedId === session.sessionId
+    const own = !pending && !joined
+    const live = own && !!session.active
+    const recorded = !isUnrecordedSession(session)
+    const canShare = live && recorded && sharingAvailable() && selected
+    const shared = sessionSharedNow(session)
+    const keyboardShared = session.inputMode === 'all'
+    const hdOn = selected && !!state.hd
+    const canHd = live && selected && state.mode === 'live'
+    const removable = own && !session.active && selected && sessionHasHd()
+    const rowAction = (key) => {
+      const row = revealSessionRow(session.sessionId)
+      return (row && row.querySelector(`.session-action[data-action="${key}"]`)) || row
+    }
+    return [
+      {
+        icon: 'fa-clone',
+        label: 'Clone',
+        title: 'A copy, at once (no dialog)',
+        action: () => cloneSessionProfile(session),
+        disabled: !own
+      },
+      {
+        icon: 'fa-copy',
+        label: 'Create a copy, edit first',
+        action: () => copySessionProfile(session, rowAction('copy') || els.sessions),
+        disabled: !own
+      },
+      { separator: true },
+      {
+        icon: 'fa-pen',
+        label: 'Edit',
+        action: () => editSelectedSessionProfile(session),
+        disabled: pending
+      },
+      { icon: 'fa-eraser', label: 'Remove HD', action: removeHd, disabled: !removable },
       {
         icon: 'fa-clock-rotate-left',
         label: 'Delete History',
         action: () => clearCaches({ anchor: sessionDeleteButton(session.sessionId) }),
-        disabled: session.pending || session.isJoined || session.owner === 'joined'
-      },
-      {
-        icon: 'fa-rocket',
-        label: 'Remove HD',
-        action: removeHd,
-        disabled: session.pending || session.active || !session.hd
+        disabled: pending || joined
       },
       {
         icon: 'fa-trash',
         label: 'Delete',
         action: () => deleteSession({ anchor: sessionDeleteButton(session.sessionId) }),
         disabled: false
+      },
+      { separator: true },
+      {
+        icon: 'fa-share-nodes',
+        label: shared ? 'Unshare Session' : 'Share Session',
+        action: () => (shared ? unshareSession(session) : shareSession()),
+        disabled: !canShare
+      },
+      {
+        icon: 'fa-keyboard',
+        label: keyboardShared ? 'Unshare Keyboard' : 'Share Keyboard',
+        action: toggleInputMode,
+        disabled: !canShare
+      },
+      {
+        icon: 'fa-rocket',
+        label: hdOn
+          ? 'Disable HD (save and share fewer updates)'
+          : 'Enable HD (save and share more updates)',
+        action: toggleHd,
+        disabled: !canHd
+      },
+      { separator: true },
+      {
+        icon: 'fa-arrow-rotate-right',
+        label: 'Resume',
+        action: () => extendSession(),
+        disabled: !canExtendSession(session)
       }
     ]
+  }
+
+  // "Clone": the copy the row's Copy makes with SHIFT, from the menu; one at
+  // a time (review #8).
+  async function cloneSessionProfile(session) {
+    if (state.cloning) return
+    state.cloning = true
+    try {
+      setStatus(`cloning "${session.name}"`)
+      await copySessionProfile(session, null, { shiftKey: true })
+    } finally {
+      state.cloning = false
+    }
+  }
+
+  // "Unshare Session" (R12, U4): every invite link of the session is revoked
+  // (the engine disconnects that link's viewers and rotates the keys); the
+  // session keeps running and keeps its history. One failed link does not stop
+  // the others, and the list is refreshed either way (review #4).
+  async function unshareSession(session) {
+    const confirmed = await askConfirm(
+      `Stop sharing "${session.name}"? Its invite links stop working and its viewers are disconnected; the session keeps running.`,
+      { okText: 'Unshare', danger: true, anchor: els.shareSession, align: 'right' }
+    )
+    if (!confirmed) return
+    let revoked = 0
+    let failed = 0
+    try {
+      const links = await api.invoke('share.listLinks', { sessionId: session.sessionId })
+      for (const link of Array.isArray(links) ? links : []) {
+        if (!link || link.revoked) continue
+        try {
+          if (
+            await api.invoke('share.revokeLink', {
+              sessionId: session.sessionId,
+              linkId: link.linkId
+            })
+          ) {
+            revoked++
+          }
+        } catch {
+          failed++
+        }
+      }
+    } finally {
+      await refreshSessions()
+      updateTransportControls()
+    }
+    setStatus(
+      failed
+        ? `unshared ${revoked} link(s); ${failed} could not be revoked`
+        : `unshared: ${revoked} link(s) revoked`
+    )
+  }
+
+  function openSessionMenu(session, anchor, options = {}) {
+    if (!els.sessionMenu || !session) return
+    closeTerminalMenu()
+    closeSettingsMenu()
+    els.sessionMenu.replaceChildren()
+    const items = options.items || profileMenuItems(session)
     for (const item of items) {
+      if (item.separator) {
+        const rule = document.createElement('div')
+        rule.className = 'context-menu-separator'
+        rule.setAttribute('role', 'separator')
+        els.sessionMenu.append(rule)
+        continue
+      }
       const button = document.createElement('button')
       button.type = 'button'
       button.className = 'context-menu-item label-btn'
@@ -4129,6 +4764,11 @@
   function runSessionMenuAction(session, item, event) {
     return Promise.resolve()
       .then(async () => {
+        // The profile may have gone while its menu was open (261121 review #3).
+        if (!sessionEntryById(session.sessionId)) {
+          setStatus('that profile is gone')
+          return
+        }
         if (state.selectedId !== session.sessionId) {
           await selectSession(session, { extend: false })
         }
@@ -4242,6 +4882,7 @@
   function stunTurnMenuItem() {
     return {
       kind: 'field',
+      icon: 'fa-tower-broadcast',
       label: 'STUN/TURN servers…',
       toggle: editIceServers
     }
@@ -4250,6 +4891,7 @@
   function relayKeyMenuItem() {
     return {
       kind: 'field',
+      icon: 'fa-server',
       label: 'ZBTerm relay access key…',
       toggle: () => editRelayKey().catch(showError)
     }
@@ -4400,6 +5042,12 @@
         label: 'Map F2 to edit profile',
         checked: state.f2Edit,
         toggle: toggleF2Edit
+      },
+      {
+        kind: 'check',
+        label: 'Ask before closing with running sessions',
+        checked: state.confirmClose,
+        toggle: toggleConfirmClose
       },
       {
         kind: 'check',
@@ -4729,11 +5377,20 @@
     }
     await ensureTerminalReady()
     const dims = dimensions()
+    // 261121_dialog-and-command-plugins R8: steps with {{name}} or {{slug}}
+    // launch with the new session's own name ("Work #2", not its source's).
+    const relaunch = profile.name
+      ? launch.relaunchFor(
+          { ...profile, name: profile.launchName || profile.name, launchName: undefined },
+          profile.name,
+          launchEnv
+        )
+      : null
     setStatus('starting session')
     const session = await api.invoke('session.create', {
       name: profile.name || undefined,
-      cwd: profile.cwd || undefined,
-      command: profile.command || undefined,
+      cwd: (relaunch ? relaunch.cwd : profile.cwd) || undefined,
+      command: (relaunch ? relaunch.command : profile.command) || undefined,
       steps: profile.steps || undefined,
       copyHistoryFrom: profile.copyHistoryFrom || undefined,
       // Only an unrecorded session says so; absent means recorded.
@@ -5114,6 +5771,19 @@
     const hidden = profile ? await hiddenCopiesNamed(name) : []
     if (hidden.length && !(await confirmHiddenCopyName(name, hidden))) return
     await api.invoke('session.rename', { sessionId, name })
+    // 261121_dialog-and-command-plugins C11 (Q-1): steps with {{name}} or
+    // {{slug}} launch under the new name; the steps are restated, or the
+    // engine would drop them with the old launch. A running session keeps
+    // its launch until it starts again.
+    const relaunch = current ? launch.relaunchFor(current, name, launchEnv) : null
+    if (relaunch) {
+      await api.invoke('session.update', {
+        sessionId,
+        cwd: relaunch.cwd,
+        command: relaunch.command,
+        steps: current.steps
+      })
+    }
     await renameTemplateCopies(sessionId, name)
     if (hidden.length && !(await triggersHeldBy(sessionId)).length) {
       await claimHiddenCopies(sessionId, hidden, { ...current, name })
@@ -5223,7 +5893,7 @@
       freezePlaybackClock()
       await api.invoke('player.pause', { sessionId }).catch(() => {})
       clearPlaybackWrites()
-      setStatus('extending session')
+      setStatus('resuming session')
       // No geometry: the engine revives the shell at the grid the session was
       // last recorded at (not the playback view's), and selectSession() below
       // restores the font size it was last shown with before fitting.
@@ -7557,7 +8227,12 @@
 
   function updateIdentityDot() {
     const dot = identityDotState()
-    if (els.identitySetup) els.identitySetup.dataset.identity = dot
+    if (els.identitySetup) {
+      els.identitySetup.dataset.identity = dot
+      // 261121_dialog-and-command-plugins R1: a set identity names itself
+      // (user@github.com) in the tooltip and in the settings menu's item.
+      els.identitySetup.title = identityButtonTitle()
+    }
     if (els.settingsToggle) {
       if (isSidePaneCollapsed()) {
         els.settingsToggle.dataset.identity = dot
@@ -7565,6 +8240,19 @@
         delete els.settingsToggle.dataset.identity
       }
     }
+  }
+
+  // The identity button's tooltip, which the settings menu's item reuses:
+  // the identity once one is set, in the user's spelling "user@github.com"
+  // (displayId says "user@github").
+  function identityButtonTitle() {
+    const self = state.identity
+    if (!self || !self.configured) return 'Choose your identity'
+    if (self.provider === 'github' && self.subject) {
+      return `${String(self.subject).toLowerCase()}@github.com`
+    }
+    if (self.displayId) return String(self.displayId)
+    return 'Choose your identity'
   }
 
   function showIdentityWizard(self, anchor) {
@@ -8272,6 +8960,9 @@
       title.className = 'modal-title'
       title.textContent = options.title
       panel.append(title)
+      // A dialog's own content (the Plugins dialog), under the title.
+      if (options.body) panel.append(options.body)
+      if (options.panelClass) panel.classList.add(options.panelClass)
 
       let input = null
       if (options.input) {
@@ -9570,6 +10261,58 @@
     persistAppPreference(F2_EDIT_STORAGE_KEY, state.f2Edit ? '1' : '0')
   }
 
+  // 261121 R1: the main process asks before an outside close (title bar,
+  // Alt+F4) ends running sessions; its "Don't ask again" turns this off.
+  async function restoreConfirmClosePreference() {
+    const saved = await storedAppPreference(CONFIRM_CLOSE_STORAGE_KEY)
+    state.confirmClose = !(saved === '0' || saved === 'false')
+  }
+
+  // 261121 R15: match case / whole word, for every search the box drives:
+  // the list's name filter and its cyan marks, the terminal's matches and
+  // highlights, and the live sessions' buffers.
+  function searchOptions() {
+    return { caseSensitive: !!state.searchCaseSensitive, wholeWord: !!state.searchWholeWord }
+  }
+
+  async function restoreSearchOptions() {
+    state.searchCaseSensitive = (await storedAppPreference(SEARCH_CASE_STORAGE_KEY)) === '1'
+    state.searchWholeWord = (await storedAppPreference(SEARCH_WORD_STORAGE_KEY)) === '1'
+    syncSearchToggles()
+  }
+
+  function syncSearchToggles() {
+    if (els.searchCase) {
+      els.searchCase.setAttribute('aria-pressed', String(!!state.searchCaseSensitive))
+      els.searchCase.title = state.searchCaseSensitive ? 'Match case (on)' : 'Match case'
+    }
+    if (els.searchWord) {
+      els.searchWord.setAttribute('aria-pressed', String(!!state.searchWholeWord))
+      els.searchWord.title = state.searchWholeWord ? 'Match whole word (on)' : 'Match whole word'
+    }
+  }
+
+  function toggleSearchOption(which) {
+    if (which === 'case') {
+      state.searchCaseSensitive = !state.searchCaseSensitive
+      persistAppPreference(SEARCH_CASE_STORAGE_KEY, state.searchCaseSensitive ? '1' : '0')
+    } else {
+      state.searchWholeWord = !state.searchWholeWord
+      persistAppPreference(SEARCH_WORD_STORAGE_KEY, state.searchWholeWord ? '1' : '0')
+    }
+    syncSearchToggles()
+    if (!inSessionQuery()) return
+    // The same text, matched anew: every search the box drives runs again.
+    scheduleInSessionSearch(0, { reveal: true })
+    scheduleSessionBufferSearch()
+    refreshSessions().catch(showError)
+  }
+
+  function toggleConfirmClose() {
+    state.confirmClose = !state.confirmClose
+    persistAppPreference(CONFIRM_CLOSE_STORAGE_KEY, state.confirmClose ? '1' : '0')
+  }
+
   // Map Ctrl+1 to Ctrl+9 to pinned profiles (261115 R39, R40): as F2, an
   // install-wide habit, on unless turned off. The list redraws for the numbers.
   async function restorePinKeysPreference() {
@@ -9980,8 +10723,13 @@
   // read in slices between timers; a marker on each slice's next row follows
   // rows that output trims meanwhile. Returns null when a newer scan or a
   // reset made this one void.
+  // The shared matcher with the box's toggles (261121 R15).
+  function scanWithSearchOptions(buffer, query, opts = {}) {
+    return window.zbtermScanBuffer(buffer, query, { ...opts, ...searchOptions() })
+  }
+
   async function scanTerminalBuffer(query, token, options = {}) {
-    const scan = window.zbtermScanBuffer
+    const scan = window.zbtermScanBuffer ? scanWithSearchOptions : null
     const term = state.term
     if (!scan || !term) return null
     const buffer = term.buffer.active
@@ -10157,6 +10905,12 @@
     await refreshSessions()
   }
 
+  function anyMenuOpen() {
+    return [els.sessionMenu, els.terminalMenu, els.settingsMenu, els.sizeLockMenu].some(
+      (menu) => menu && !menu.hidden
+    )
+  }
+
   function searchIsOn() {
     return !!(els.search && els.search.value)
   }
@@ -10325,18 +11079,45 @@
     if (drawn) drawn.el.scrollIntoView({ block: 'nearest' })
   }
 
+  // 261121 R4: the position N/M is in the status line (no longer beside the
+  // box's x), with how to step: Enter/Shift+Enter in the terminal's matches,
+  // the arrows through the profiles. Rewritten on every step and scan; when
+  // the search ends the status is cleared if it still holds our text.
+  const SEARCH_COUNT_HINT = '(In terminal Enter/Shift+Enter, in profiles ⬆️/⬇️ )'
+
   function updateSearchCount() {
     const el = els.searchCount
-    if (!el) return
+    if (el) {
+      el.textContent = ''
+      el.hidden = true
+    }
     const bs = state.bufferSearch
     const query = inSessionQuery()
     if (!query || !bs) {
-      el.textContent = ''
-      el.hidden = true
+      if (state.searchCountStatus && els.status.textContent === state.searchCountStatus) {
+        setStatus('')
+        els.status.title = ''
+      }
+      state.searchCountStatus = ''
       return
     }
-    el.hidden = false
-    el.textContent = `${bs.index >= 0 ? bs.index + 1 : 0}/${bs.count}`
+    const index = String(bs.index >= 0 ? bs.index + 1 : 0)
+    const total = String(bs.count)
+    const text = `${index} / ${total} ${SEARCH_COUNT_HINT}`
+    state.searchCountStatus = text
+    // 261121 R14: "M / N": M bold cyan, the slash plain, N cyan.
+    if (els.status.textContent !== text && !state.identityRefusal) {
+      const m = document.createElement('span')
+      m.className = 'search-pos-index'
+      m.textContent = index
+      const n = document.createElement('span')
+      n.className = 'search-pos-total'
+      n.textContent = total
+      els.status.replaceChildren(m, document.createTextNode(' / '), n, ` ${SEARCH_COUNT_HINT}`)
+      devLog(text)
+    }
+    // A narrow status cell cuts the hint; the whole line is its tooltip.
+    els.status.title = text
   }
 
   // ---- Cross-session search (261111_buffer-search R5-R9) -------------------
@@ -10444,7 +11225,8 @@
         sessionId,
         query: bm.query,
         searchKey: state.bufferSearchKey,
-        seq: bm.seq
+        seq: bm.seq,
+        ...searchOptions()
       })
       .then(
         (answer) => {
@@ -10577,7 +11359,7 @@
     }
     if (state.searchHighlights) state.searchHighlights.hl.clear()
     const hl = factory.createSearchHighlights(term, {
-      scan: window.zbtermScanBuffer,
+      scan: window.zbtermScanBuffer ? scanWithSearchOptions : null,
       colors: () => ({
         match: searchColorToken('--search-match', '#5c4a12'),
         current: searchColorToken('--search-current', '#f3c969'),
@@ -11035,6 +11817,11 @@
   }
 
   function setStatus(text) {
+    // 261121 R16: each startup step and when it began (ms since the page
+    // started), for the debug state; the list's first draw is marked too.
+    if (state.startupPhase !== 'ready' && state.startupMarks) {
+      state.startupMarks.push({ step: String(text), ms: Math.round(performance.now()) })
+    }
     // A refused join owns the status line until it is dismissed, so routine
     // chatter cannot bury the reason the connection was refused.
     if (state.identityRefusal) {
@@ -11116,6 +11903,15 @@
   // input always lands in the terminal instead of accidentally re-triggering
   // whatever control was last clicked.
   function focusPrimaryTarget() {
+    // 261121_dialog-and-command-plugins C6: a kept profile dialog was just
+    // focused for the request that found it open; the handler's own return
+    // to the terminal does not take that focus back.
+    const claim = sessionEditorFocusClaim
+    sessionEditorFocusClaim = null
+    if (claim && claim.target.isConnected && performance.now() < claim.until) {
+      claim.target.focus()
+      return
+    }
     if (state.term) state.term.focus()
   }
 
@@ -11424,6 +12220,7 @@
       list: debugRect(els.sessions),
       selectedId: state.selectedId,
       f2Edit: state.f2Edit,
+      confirmClose: state.confirmClose,
       pinKeys: state.pinKeys,
       hiddenSearchSections: Array.from(state.hiddenSearchSections || []),
       overlays: document.querySelectorAll('.modal-overlay').length,
@@ -11590,7 +12387,7 @@
     if (!overlay) return null
     const kind = overlay.classList.contains('session-editor-overlay') ? 'session-editor' : 'modal'
     const panel = overlay.querySelector('.session-editor, .modal-panel') || overlay
-    const title = overlay.querySelector('.modal-title')
+    const title = overlay.querySelector('.modal-title, .session-editor-heading')
     // On top: what is drawn at the panel's centre belongs to this overlay.
     const box = panel.getBoundingClientRect()
     const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
@@ -11619,6 +12416,11 @@
     if (el.getAttribute('role') === 'menuitemcheckbox') return 'check'
     if (el.classList.contains('context-menu-field')) return 'field'
     return 'item'
+  }
+
+  function debugSessionMenuState() {
+    if (!els.sessionMenu || els.sessionMenu.hidden) return null
+    return Array.from(els.sessionMenu.children).map(debugMenuItem)
   }
 
   function debugSettingsMenuState() {
@@ -11690,6 +12492,11 @@
         : [],
       menuOpen: !!(els.settingsMenu && !els.settingsMenu.hidden),
       menu: debugSettingsMenuState(),
+      sessionMenu: debugSessionMenuState(),
+      // 261121 R16: the startup steps' times and whether the list is in.
+      startup: { marks: state.startupMarks || [], sessionsLoaded: state.sessionsLoaded !== false },
+      // 261121 R15: the search box's toggles.
+      searchOptions: searchOptions(),
       brandVersion: (document.getElementById('version') || {}).textContent || null,
       brandMark: brandMark
         ? {
@@ -12471,6 +13278,9 @@
       // 261114_live-output-and-fixes kit (R6/R7).
       fontFamily: styles.fontFamily,
       ariaLabel: el.getAttribute('aria-label'),
+      // 261121 R14, R15: the status M's weight, a toggle's state.
+      fontWeight: styles.fontWeight,
+      ariaPressed: el.getAttribute('aria-pressed'),
       // R8-R13: borders, enabled state and the animations' clocks.
       borderWidth: styles.borderTopWidth,
       borderColor: styles.borderTopColor,
@@ -12675,6 +13485,51 @@
     }
     // The 261118_session-plugins kit: the open dialog's launch steps.
     if (command === 'launch-state') return openStepsEditor ? openStepsEditor.state() : null
+    // The 261121_dialog-and-command-plugins kit: the command plugins as loaded,
+    // the choice, and the open Plugins dialog's rows (null when it is closed).
+    if (command === 'plugins-state') {
+      const dialog = document.querySelector('.plugins-dialog')
+      return {
+        displayDir: commandPlugins.displayDir,
+        choice: commandPlugins.choice,
+        choiceError: commandPlugins.choiceError || '',
+        files: commandPlugins.files.map((entry) => ({
+          file: entry.file,
+          ids: entry.ids,
+          error: entry.error || ''
+        })),
+        registered: launch.plugins().map((Plugin) => ({
+          id: Plugin.id,
+          title: Plugin.title,
+          source: Plugin.source || null,
+          shown: commandPluginShown(Plugin)
+        })),
+        dialog: dialog
+          ? {
+              choiceError: (() => {
+                const bad = dialog.querySelector('.plugins-dialog-choice-error')
+                return bad ? bad.textContent : ''
+              })(),
+              sections: Array.from(dialog.querySelectorAll('.plugins-dialog-section')).map((head) =>
+                head.textContent.trim()
+              ),
+              rows: Array.from(dialog.querySelectorAll('.plugins-dialog-row')).map((row) => {
+                const input = row.querySelector('input')
+                const errorText = row.querySelector('.plugins-dialog-error')
+                return {
+                  kind: input.dataset.kind,
+                  key: input.dataset.key,
+                  title: row.querySelector('.plugins-dialog-name').textContent,
+                  checked: input.checked,
+                  disabled: input.disabled,
+                  error: errorText ? errorText.textContent : '',
+                  rect: debugRect(input)
+                }
+              })
+            }
+          : null
+      }
+    }
     if (command === 'launch-set') {
       // One step's field, by the step's place and the field's name.
       const field = document.querySelector(

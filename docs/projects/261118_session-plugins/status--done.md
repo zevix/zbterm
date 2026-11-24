@@ -2,7 +2,7 @@
 
 The file name is the state: `status--proposal` | `design` | `in-progress` | `verifying` | `done`.
 
-## Now
+## Before closing
 
 2026-11-18: built in one unattended session from the user's request (`notes--context.md`); the
 requirements in `goal_requirements.md` are the builder's reading of it and are **not yet approved
@@ -48,3 +48,12 @@ pointers, CHANGELOG.
 ## Open for the user
 
 The decisions under "Decisions made without the user" in `notes--context.md`.
+
+## 2026-11-21, done
+
+Closed on the user's instruction ("if there is another project open and waiting for my approval
+to close and it looks complete close it"). It was waiting only on the user's read of the
+requirements and of "Decisions made without the user" in `notes--context.md`; everything built had
+passed its checks (above), and the user had since built on it (`9fa00de` "demo of plugins and
+ssh"). Those requirements and decisions stand as approved by that instruction. The *Not checked*
+list above (Windows, macOS, password-only SSH browsing, fish) stays as it is: unrun, not failed.

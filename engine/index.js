@@ -1336,7 +1336,13 @@ class SessionEngine extends EventEmitter {
       const before = count
       let row = 0
       for (;;) {
-        const slice = scanBuffer(buffer, query, { from: row, lines: BUFFER_SEARCH_SLICE, limit: 0 })
+        const slice = scanBuffer(buffer, query, {
+          from: row,
+          lines: BUFFER_SEARCH_SLICE,
+          limit: 0,
+          caseSensitive: !!args.caseSensitive,
+          wholeWord: !!args.wholeWord
+        })
         count += slice.count
         if (slice.next >= buffer.length) break
         // Output written while this yields can trim the oldest rows and move

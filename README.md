@@ -66,11 +66,19 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   terminal, and does nothing while a dialog is open). Its text filters the
   session list by name and highlights every match in the selected session's
   buffer, scrollback and full-screen programs included (past 2000 matching
-  rows, those within three screens of the view), with the count in the
-  box; Enter and Shift+Enter step to the next and previous match and scroll it
+  rows, those within three screens of the view), with the position "M / N"
+  in the status line (M bold, both in cyan; "(In terminal Enter/Shift+Enter,
+  in profiles ⬆️/⬇️ )"); the part of each name under "Session name matches"
+  that matches is cyan. Two small toggles just left of the box's "x", "Aa"
+  (Match case) and "ab" (Match whole word: no letter, digit or "_" may touch
+  the match), narrow every one of these searches; they are cyan while on and
+  are remembered across restarts.
+  Enter and Shift+Enter step to the next and previous match and scroll it
   into view, and Esc (or the blue "x" at the box's right end, shown while the
   box has the focus or holds text) clears the box, the highlights and the
-  filter and returns to the terminal. Up and Down (or Ctrl+PgUp and Ctrl+PgDn)
+  filter and returns to the terminal; while the box holds text, Esc ends the
+  search from the terminal too (it reaches the shell again once the search is
+  over). Up and Down (or Ctrl+PgUp and Ctrl+PgDn)
   select the previous and next session in the list, marked with a green
   border, while the focus stays in the box; an ended session reached this way
   is only shown, not resumed, with the "Press ^R or Enter to resume the
@@ -115,20 +123,41 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   (hide)/(show) link that folds its rows away for the rest of the run
 - Ctrl+Q in the terminal is sent to the program like any other key (^Q);
   anywhere else it asks: Quit, Cancel, or "Send ^Q to the terminal"
-- Ended sessions can be resumed (extended) at any time by the host: Ctrl+R (or
-  Enter) in an offline session, or the Extend button. The new shell starts on a fresh line
+- Closing the window from outside the app (its title-bar close, Alt+F4, the
+  taskbar's Close) while a session is running asks "Close ZBTerm?" first, with
+  "Don't ask again"; the settings menu's "Ask before closing with running
+  sessions" turns the question back on. A shutdown or logout never asks
+- A profile's right-click menu: Clone (a copy at once), Create a copy, edit
+  first · Edit, Remove HD, Delete History, Delete · Share Session, Share
+  Keyboard, Enable HD (each reading Unshare / Disable while on; Unshare
+  Session revokes every invite link and disconnects its viewers, the session
+  keeps running) · Resume. Items that do not apply are greyed out
+- The settings menu's "Edit new profile defaults…" items open the profile
+  dialog with its Advanced section shown
+- Ended sessions can be resumed at any time by the host: Ctrl+R (or
+  Enter) in an offline session, the Resume button, or Resume in the profile's
+  right-click menu. The new shell starts on a fresh line
   under the old screen; a full-screen program redraws in place
 - Unrecorded sessions: untick "Record session" in the New or Copy dialog and
   the session runs live with nothing of its output stored. It cannot be
   shared, played back or copied with history (those controls read "Not
   recorded"); when it ends, its last screen stays until you switch away, and
-  Extend starts a fresh shell, unrecorded, on an empty screen. Recording cannot
+  Resume starts a fresh shell, unrecorded, on an empty screen. Recording cannot
   be turned on or off for an existing session
 - Session composition: a session's dialog builds its launch from steps, each a
   plugin — "Change Directory", "Shell Command", "SSH" and, after SSH, "Change
   Remote Directory" with a browser for the remote machine. Steps run in order;
   "+ Add" offers the ones that fit after the last step, and each has a delete
   button. See [Session steps](#session-steps).
+- The profile dialog (New profile, Edit profile, Copy profile, New-session
+  template) floats over the app without dimming it: drag it by its title (the
+  grip icon at the left), and it stays inside the window. It stays open while
+  you click, select and copy in the terminal, so a command or a path can be
+  pasted into its fields; keys typed in the terminal (Esc too) go to the
+  terminal, and the dialog closes only by its OK, Cancel, or Esc inside it
+- Command plugins: your own launch steps, as `.js` files in the app's config
+  directory, chosen for "+ Add" in its Plugins dialog. See
+  [Command plugins](#command-plugins)
 - New-session templates: each way to start a session — "+ New", Ctrl+Shift+T,
   and Shift + "+ New" — copies one template profile with all its settings. A
   profile becomes a trigger's template from its dialog's Advanced section,
@@ -156,6 +185,9 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   - [Prerequisites (Linux)](#install-prereqs)
   - [Run from a clone (development)](#install-dev)
 - [Session steps](#session-steps)
+  - [Shell Command and your shell](#shell-command)
+  - [Profile-name placeholders](#placeholders)
+  - [Command plugins](#command-plugins)
 - [Storage](#storage)
 - [Sharing](#sharing)
   - [Link Options](#link-options)
@@ -371,6 +403,138 @@ example, runs `ssh -t me@box 'cd /srv/app && tail -f log/app.log'` from `~/src`.
 Steps are plugins: one class per file under `renderer/plugins/`, see
 [`docs/projects/261118_session-plugins/design.md`](docs/projects/261118_session-plugins/design.md)
 for the interface and how to add one.
+
+The dialog itself floats: drag it by its title (the grip at its left) to see
+the terminal behind it, and keep it open while you select and copy a command
+or a path there, then paste it into a step. While the terminal has the focus
+your keys, Esc included, go to the terminal; the dialog closes only by OK,
+Cancel, or Esc pressed inside it.
+
+### Shell Command and your shell <a name="shell-command"></a>
+
+A Shell Command runs through your shell as an _interactive_ shell, so your
+aliases, functions and a `PATH` set in its start-up files (`~/.bashrc`,
+`~/.zshrc`, fish's `config.fish`) work just as at the session's own prompt:
+
+| your shell                                                  | started as                            |
+| ----------------------------------------------------------- | ------------------------------------- |
+| bash, zsh, fish, ksh, mksh, sh, dash (a version suffix too) | `$SHELL -i -c '<command>'`            |
+| the same, on macOS                                          | `$SHELL -l -i -c '<command>'` (login) |
+| any other shell                                             | `$SHELL -c '<command>'`, as before    |
+| Windows                                                     | `%ComSpec% /c <command>` (`cmd.exe`)  |
+
+The shell is `$SHELL`, else your login shell, else `bash`. macOS adds `-l`
+because an app started from the Finder has only the system `PATH`, and
+terminals there start login shells. A start-up file that prints a banner
+prints it into the session as well; that is expected.
+
+### Profile-name placeholders <a name="placeholders"></a>
+
+In any step's settings, three placeholders stand for the profile's name and
+are filled in when the launch is composed:
+
+| placeholder                    | for a profile named "Work #2" |
+| ------------------------------ | ----------------------------- |
+| `{{name}}`                     | `Work #2`                     |
+| `{{slug}}` (or `{{name_can}}`) | `work-2`                      |
+
+- The slug is the name in lower case, accents dropped, with every run of
+  other characters turned into one `-`; a name with no letter or digit
+  (`###`, emoji) gives `profile`. Two names with the same slug ("Work 2",
+  "work-2") share it.
+- In a Shell Command a placeholder is filled as **one shell word, already
+  quoted**: write `echo {{name}}` (it runs `echo 'Work #2'`), not
+  `echo "{{name}}"`. A name such as `x; rm -rf ~` stays a harmless word. In
+  other steps the plugin quotes its own fields (Change Directory, for one).
+- A new name gets its own values: a Clone or a Copy ("Work #3"), a
+  template's "#N", and a rename all compile with the new name. The profile
+  keeps the placeholders as typed, so Edit shows them, not the old values.
+- An unknown placeholder (`{{foo}}`) is left as typed.
+
+### Command plugins <a name="command-plugins"></a>
+
+Your own steps live as `.js` files in the app's config directory:
+
+| platform | directory                                                |
+| -------- | -------------------------------------------------------- |
+| Linux    | `~/.config/ZBTerm/plugins/commands/`                     |
+| macOS    | `~/Library/Application Support/ZBTerm/plugins/commands/` |
+| Windows  | `%APPDATA%\ZBTerm\plugins\commands\`                     |
+
+- **First start.** When the directory does not exist, ZBTerm creates it with
+  three samples, `sample_custom_command.js` (prints a message with the
+  placeholders), `tmux_session.js` and `python_venv.js`, and a
+  `commands.json` that chooses every built-in step and only the first sample.
+  A directory or `commands.json` that already exists is never overwritten or
+  added to; delete the directory to get the samples back.
+- **"+ Add"** ends with a separator, the command plugins you chose (by
+  default "Sample custom command"), another separator and **Plugins…**.
+- **The Plugins dialog** (from "Plugins…") has a checkbox per plugin in two
+  sections, **Built-in** and **From** _the directory above_ (every `.js` file
+  there, with a button that opens the folder). Ticked plugins are what "+ Add"
+  offers; Save writes the choice to `commands.json` and updates every window.
+  Unticking only hides a plugin from "+ Add": profiles that use it keep their
+  steps and still open.
+- **`commands.json`** holds the choice, for example
+  `{"builtin": ["cd", "shell"], "commands": ["sample_custom_command.js"]}`;
+  leave `builtin` out to offer every built-in. One ZBTerm cannot read is reported in the dialog, and Save keeps
+  the old file as `commands.json.bad`.
+- **When files are read.** A new or changed file is read when the Plugins
+  dialog or a profile dialog opens; no restart is needed.
+- **A file that fails to load** (a syntax error, a throw, an id already taken
+  by another plugin, no plugin registered) is listed in the Plugins dialog,
+  greyed out, with the reason; every other plugin and the app keep working.
+  A profile whose step names a plugin that is not loaded opens with that step
+  shown as a Shell Command ("<id> is not loaded; its step is shown as a
+  command") and its stored launch unchanged.
+
+**Command plugins are trusted user code.** A plugin runs in the app's
+renderer with all of its rights, the way your shell's start-up files run in
+your shell: only put files there you wrote or would run yourself. On Linux
+and macOS ZBTerm refuses a file, or the whole directory, that is **not owned
+by you** or that is **writable by other users** (world-writable, or
+group-writable by a group other than your own primary group); the dialog
+shows the reason. A file whose loading never returns (an endless loop) hangs
+the window; rename it away and restart.
+
+**Writing one.** A plugin is a class extending
+`window.zbtermLaunch.LaunchPlugin`, in the built-in steps' own shape, passed
+to `window.zbtermLaunch.register`; `sample_custom_command.js` is a commented
+starting point:
+
+```js
+;(() => {
+  const launch = window.zbtermLaunch
+  class Hello extends launch.LaunchPlugin {
+    static id = 'my-hello' // stable: stored with each profile that uses it
+    static title = 'Say hello' // the "+ Add" label
+    static icon = 'fa-hand' // a Font Awesome icon
+    static defaults() {
+      return { message: 'Hello from {{name}}' } // settings, all strings
+    }
+    getUI(ui) {
+      return ui.input({
+        name: 'message',
+        value: this.config.message,
+        onInput: (v) => {
+          this.config.message = v.trim()
+        }
+      })
+    }
+    validate() {
+      return this.config.message ? '' : 'Type a message'
+    }
+    apply(ctx) {
+      ctx.scope.add(`echo ${ctx.quote(this.config.message)}`) // quoted for the shell
+      ctx.scope.interactive = true // the session goes on after this step
+    }
+  }
+  launch.register(Hello)
+})()
+```
+
+An id must be unique: one a built-in or another file already holds is
+refused. The built-in ids are `cd`, `shell`, `ssh` and `ssh-cd`.
 
 ## Storage <a name="storage"></a>
 

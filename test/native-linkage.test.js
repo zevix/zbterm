@@ -31,6 +31,20 @@ function someElf() {
   return null
 }
 
+// 2026-11-21: a shared-libnode Node (/usr/bin/node links libnode.so) made
+// someElf() hand the scan a "clean" fixture that is itself an offender; the
+// clean addon must be an ELF the parser confirms has no libnode in DT_NEEDED.
+function cleanElf() {
+  for (const candidate of ['/bin/ls', '/bin/true', '/usr/bin/env', process.execPath]) {
+    try {
+      if (!fs.statSync(candidate).isFile()) continue
+      const needed = linkage.neededLibrariesOf(candidate)
+      if (needed.length > 0 && !needed.some((lib) => /^libnode\.so/.test(lib))) return candidate
+    } catch {}
+  }
+  return null
+}
+
 test('native-linkage: parses DT_NEEDED out of a real ELF', async (t) => {
   const elf = someElf()
   if (!elf || process.platform !== 'linux') {
@@ -57,7 +71,8 @@ test('native-linkage: non-ELF input yields no libraries rather than throwing', a
 })
 
 test('native-linkage: scan follows the dependency graph and flags libnode', async (t) => {
-  const elf = someElf()
+  // 2026-11-21: the clean fixture is checked libnode-free (execPath may link libnode).
+  const elf = cleanElf()
   if (!elf || process.platform !== 'linux') {
     t.pass('skipped: needs a Linux ELF')
     return

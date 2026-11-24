@@ -77,6 +77,14 @@ read it for the wiring; below are only the non-obvious facts.
   (`test/launch-plugins.test.js` checks). A chain compiles to the `cwd` +
   `command` the PTY host always took; the catalog's `steps` are for the dialog
   only and are trusted only while they still compile to that pair.
+  `renderer/plugins/samples/*.js` are **not** built-ins: they are listed in
+  neither `index.js` nor `index.html`, run only in the renderer (never
+  `require`d by the main process, so no `static host`) and may touch `window`
+  at load (`window.zbtermLaunch.register`). `electron/command-plugins.js`
+  copies them into `<userData>/plugins/commands/` on first start (only when
+  that directory is missing) and serves `app.commandPlugins.list/save/open`;
+  the renderer runs the user's files with `new Function`, and a throwing file
+  is caught in `launch-core.js::runFile`, never in the window's error handler.
 - **A stall is usually the network, not the code, and the two look identical.**
   Exercise real replication against a local `hyperdht/testnet`
   (`test/backends/conformance-pear.test.js`'s pattern) or a throwaway local-mode

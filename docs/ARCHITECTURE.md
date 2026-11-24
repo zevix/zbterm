@@ -603,8 +603,9 @@ the engine for a profile — are served from the shell's own `ProfileManager`
 (`electron/engine-lifecycle.js`), since a profile has to be chosen before any
 worker runs; the engine's own `profile.*` methods are there for other hosts.
 `app.*` (`app.info`, `app.updateCheck`, `app.preference.get`/`set`,
-`app.chooseDirectory`, and the launch plugins' `app.launchPlugins.env` and
-`app.launchPlugin`) and most `debug.*` methods are shell-only. The
+`app.chooseDirectory`, the launch plugins' `app.launchPlugins.env` and
+`app.launchPlugin`, and the user command plugins' `app.commandPlugins.list`/
+`save`/`open`, served by `electron/command-plugins.js`) and most `debug.*` methods are shell-only. The
 `identity.ssh*` trio is forwarded to the worker even while it is still
 booting, because the identity wizard reads SSH keys early.
 
@@ -2001,7 +2002,16 @@ the README's [Updating](../README.md#install-update) section.
   launch context they share and the chain's compile to `cwd` + `command`:
   `renderer/plugins/`; their main-process half (`app.launchPlugin`):
   `electron/launch-plugin-host.js`; design:
-  `docs/projects/261118_session-plugins/design.md`.
+  `docs/projects/261118_session-plugins/design.md`. The user's own command
+  plugins (`<userData>/plugins/commands/*.js` and `commands.json`; seeding,
+  listing with the owner/permission check, saving the choice):
+  `electron/command-plugins.js` (`app.commandPlugins.*`, event
+  `commandPlugins:changed`), run in the renderer by `renderer/app.js`
+  through `launch-core.js::runFile`/`reloadFiles`; samples:
+  `renderer/plugins/samples/`; design:
+  `docs/projects/261121_dialog-and-command-plugins/design.md`. A profile's
+  command is spawned `$SHELL -i -c` (`-l -i -c` on macOS) for a known shell
+  (`electron/pty-session.js::commandArgs`).
 - Shell/worker frames: `engine/rpc/schema.js`, `engine/rpc/pipe.js`; worker
   spawn and supervision: `engine/client.js`, `engine/spawn-worker.js`,
   `engine/worker.js`, `electron/engine-lifecycle.js`.

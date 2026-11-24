@@ -9,6 +9,9 @@
     static id = 'shell'
     static title = 'Shell Command'
     static icon = 'fa-terminal'
+    // Passed to the shell as typed: a placeholder here is filled as one
+    // quoted word (launch-core.js run, 261121_dialog-and-command-plugins C1).
+    static shellFields = ['command']
 
     static defaults() {
       return { command: '' }

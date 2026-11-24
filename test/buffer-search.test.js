@@ -16,7 +16,7 @@ const SessionEngine = require('../engine')
 const LoopbackBackend = require('../engine/backends/loopback')
 const { LoopbackHub } = require('../engine/backends/loopback')
 const { TerminalFrame } = require('../engine/terminal-frame')
-const { scanBuffer, foldText } = require('../engine/buffer-search')
+const { scanBuffer, findInText, foldText } = require('../engine/buffer-search')
 
 const ROOT = path.join(__dirname, '..')
 const ENGINE_COPY = path.join(ROOT, 'engine', 'buffer-search.js')
@@ -144,6 +144,45 @@ test('case folding keeps lengths; the query is used as typed', async (t) => {
   runs.dispose()
 })
 
+// 261121 R15: the box's two toggles, match case and whole word.
+test('match case and whole word: findInText and scanBuffer agree', async (t) => {
+  t.alike(findInText('Foo foo FOO', 'foo'), [0, 4, 8], 'default: case-insensitive')
+  t.alike(findInText('Foo foo FOO', 'foo', { caseSensitive: true }), [4], 'match case')
+  t.alike(
+    findInText('foobar foo_x foo-x (foo)', 'foo', { wholeWord: true }),
+    [13, 20],
+    'a letter, digit or _ next to it is no whole word; - and ( are boundaries'
+  )
+  t.alike(
+    findInText('a-x b-xy', '-x', { wholeWord: true }),
+    [1],
+    'only the query edges that are word characters are checked'
+  )
+  t.alike(findInText('éfoo foo', 'foo', { wholeWord: true }), [5], 'letters beyond ASCII count')
+  t.alike(
+    findInText('xfoofoo foo', 'foo', { wholeWord: true }),
+    [8],
+    'a rejected place is not skipped past: the next try starts one on'
+  )
+  t.alike(findInText('anything', '  '), [], 'all whitespace is refused, as in scanBuffer')
+
+  const frame = await frameWith(40, 5, 50, 'Foo foo FOO food\r\nfoo_bar foo\r\n')
+  const buffer = frame.term.buffer.active
+  t.is(scanBuffer(buffer, 'foo').count, 6, 'default')
+  t.is(scanBuffer(buffer, 'foo', { caseSensitive: true }).count, 4, 'match case')
+  t.is(scanBuffer(buffer, 'foo', { wholeWord: true }).count, 4, 'whole word')
+  t.is(scanBuffer(buffer, 'foo', { caseSensitive: true, wholeWord: true }).count, 2, 'both')
+  t.alike(
+    scanBuffer(buffer, 'foo', { caseSensitive: true, wholeWord: true }).matches,
+    [
+      { row: 1, col: 8, len: 3 },
+      { row: 0, col: 4, len: 3 }
+    ],
+    'placed newest first'
+  )
+  frame.dispose()
+})
+
 test('the count is exact; positions stop at the limit, newest first', async (t) => {
   const frame = await frameWith(
     120,
@@ -256,6 +295,26 @@ test('searchBuffer counts a live session, normal buffer plus the shown alt scree
     { sessionId, count: 0, hidden: 0, cancelled: false, gone: false },
     'all whitespace: no search'
   )
+})
+
+test('searchBuffer: caseSensitive and wholeWord narrow the count (261121 R15)', async (t) => {
+  const { engine, pty } = await engineWith(t)
+  const { sessionId } = await engine.invoke('session.create', { name: 'one', cols: 80, rows: 24 })
+  await push(engine, pty, sessionId, 'Needle needles needle\r\n')
+  const count = async (seq, opts) =>
+    (
+      await engine.invoke('session.searchBuffer', {
+        sessionId,
+        query: 'needle',
+        searchKey: 'o',
+        seq,
+        ...opts
+      })
+    ).count
+  t.is(await count(1, {}), 3)
+  t.is(await count(2, { caseSensitive: true }), 2)
+  t.is(await count(3, { wholeWord: true }), 2)
+  t.is(await count(4, { caseSensitive: true, wholeWord: true }), 1)
 })
 
 test('searchBuffer never opens the recording', async (t) => {

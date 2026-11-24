@@ -26,7 +26,7 @@ class PtySession extends EventEmitter {
     if (!env.SHELL && process.platform !== 'win32') env.SHELL = shell
     // A session's command runs through the user's shell, so it can carry
     // arguments, pipes and `~` exactly as typed at a prompt.
-    this._pty = pty.spawn(shell, commandArgs(opts.command), {
+    this._pty = pty.spawn(shell, commandArgs(opts.command, process.platform, shell), {
       name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,
@@ -84,10 +84,23 @@ class PtySession extends EventEmitter {
 module.exports = PtySession
 module.exports._test = { defaultShell, resolveCwd, commandArgs }
 
-function commandArgs(command, platform = process.platform) {
+// 261121_dialog-and-command-plugins R4, U5: a command runs as it would at the
+// session's own prompt. A shell known to take it gets `-i`: the rc file the
+// prompt reads (aliases, functions, a PATH set there) and alias expansion,
+// which bash turns off without it. On macOS, where an app started from the
+// Finder has only the system PATH and terminals start login shells, `-l` too.
+// Any other shell keeps the plain `-c`. C5 (F5): matched on the basename, a
+// login shell's leading `-` dropped, and a version suffix allowed
+// (`bash5`, `zsh-5.9`).
+const INTERACTIVE_SHELL = /^(bash|zsh|fish|ksh|mksh|sh|dash)(-?[0-9.]+)?$/
+
+function commandArgs(command, platform = process.platform, shell = '') {
   const text = typeof command === 'string' ? command.trim() : ''
   if (!text) return []
-  return platform === 'win32' ? ['/c', text] : ['-c', text]
+  if (platform === 'win32') return ['/c', text]
+  const base = path.basename(String(shell || '')).replace(/^-/, '')
+  if (!INTERACTIVE_SHELL.test(base)) return ['-c', text]
+  return platform === 'darwin' ? ['-l', '-i', '-c', text] : ['-i', '-c', text]
 }
 
 // `~` and `~/x` expand to the home directory; a directory that does not exist
@@ -104,7 +117,17 @@ function resolveCwd(cwd, home = os.homedir()) {
   return home
 }
 
-function defaultShell(platform = process.platform, env = process.env) {
+function defaultShell(platform = process.platform, env = process.env, userShell = loginShell) {
   if (platform === 'win32') return env.ComSpec || env.COMSPEC || 'cmd.exe'
-  return env.SHELL || 'bash'
+  if (env.SHELL) return env.SHELL
+  // Started from a launcher with no SHELL: the user's login shell.
+  return userShell() || 'bash'
+}
+
+function loginShell() {
+  try {
+    return os.userInfo().shell || ''
+  } catch {
+    return ''
+  }
 }

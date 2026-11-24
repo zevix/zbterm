@@ -6,7 +6,9 @@ const {
   screen,
   nativeTheme,
   clipboard,
-  dialog
+  dialog,
+  powerMonitor,
+  shell
 } = require('electron')
 const os = require('os')
 const path = require('path')
@@ -20,6 +22,7 @@ const { createDebugInput } = require('./debug-input')
 const { createSessionDataBatcher } = require('./session-data-batcher')
 const { detectChannel, checkForUpdate } = require('./update-channel')
 const launchPluginHost = require('./launch-plugin-host')
+const commandPlugins = require('./command-plugins')
 const { listProviders, GITHUB_USERNAME } = require('../engine/identity/providers')
 const { command, flag } = require('paparam')
 const pkg = require('../package.json')
@@ -88,6 +91,8 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 // dir (see the `app.setPath('userData', ...)` block below) - capture it
 // before anything can change it.
 const stableUserData = app.getPath('userData')
+// The user's command plugins live beside it: <data>/plugins/commands/.
+commandPlugins.configure({ dataDir: stableUserData })
 
 function debugLog(...args) {
   const msg = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')
@@ -153,6 +158,71 @@ function markExitTrigger(event, details = {}) {
     }
   }
   exitLog(event, details)
+}
+
+// 261121 R1: the preference the settings menu's "Ask before closing with
+// running sessions" writes ('0' = off; anything else, or unset, = on).
+const CONFIRM_CLOSE_PREFERENCE = 'zbterm.confirmClose'
+let closeConfirmed = false
+let closeConfirmOpen = false
+// 261121 U1: set when the system is shutting down or the user logging out;
+// then an outside close never asks (and a question already up is answered Close).
+let systemEnding = false
+
+function noteSystemEnding(event) {
+  if (systemEnding) return
+  systemEnding = true
+  exitLog(event, { closeConfirmOpen })
+  if (closeConfirmOpen) {
+    closeConfirmed = true
+    requestAppQuit(event)
+  }
+}
+
+async function liveHostSessionCount() {
+  if (!lifecycle.engine) return 0
+  try {
+    const list = await lifecycle.engine.invoke('session.list', {})
+    return (Array.isArray(list) ? list : []).filter((item) => item && item.active && !item.isJoined)
+      .length
+  } catch {
+    return 0
+  }
+}
+
+async function confirmExternalClose(win) {
+  if (closeConfirmOpen) return
+  closeConfirmOpen = true
+  try {
+    const count = await liveHostSessionCount()
+    let close = count === 0
+    if (!close && !win.isDestroyed()) {
+      const { response, checkboxChecked } = await dialog.showMessageBox(win, {
+        type: 'question',
+        title: 'Close ZBTerm?',
+        message: 'Close ZBTerm?',
+        detail: `${count} ${count === 1 ? 'session is' : 'sessions are'} still running. Closing ends ${count === 1 ? 'it' : 'them'}.`,
+        buttons: ['Cancel', 'Close'],
+        defaultId: 0,
+        cancelId: 0,
+        checkboxLabel: "Don't ask again",
+        checkboxChecked: false
+      })
+      close = response === 1
+      exitLog('window:close-confirm', { count, close, dontAskAgain: !!checkboxChecked })
+      if (close && checkboxChecked) {
+        const prefs = readPreferences()
+        prefs[CONFIRM_CLOSE_PREFERENCE] = '0'
+        writePreferences(prefs)
+      }
+    }
+    if (close) {
+      closeConfirmed = true
+      requestAppQuit('window:external-close-confirmed', { liveSessions: count })
+    }
+  } finally {
+    closeConfirmOpen = false
+  }
 }
 
 function requestAppQuit(event, details = {}) {
@@ -1502,6 +1572,8 @@ function createWindow(opts = {}) {
     lastQuitKey = { key: `${input.control ? 'Ctrl+' : ''}${input.meta ? 'Meta+' : ''}${key}` }
     lastQuitKeyAt = Date.now()
   })
+  // 261121 U1: Windows' logout/shutdown reaches each window first.
+  win.on('query-session-end', () => noteSystemEnding('system:query-session-end'))
   win.on('close', (event) => {
     const details = {
       windowId: win.id,
@@ -1513,6 +1585,23 @@ function createWindow(opts = {}) {
       // (seconds later), so any threshold short enough to be meaningful for
       // an external close would throw the evidence away there.
       lastQuitKey: lastQuitKey ? { ...lastQuitKey, agoMs: Date.now() - lastQuitKeyAt } : null
+    }
+    // 261121 R1/U1: a close from outside the app (title-bar close, Alt+F4,
+    // taskbar) asks first while host sessions are running.
+    if (
+      details.source === 'external' &&
+      !details.defaultPrevented &&
+      details.windowCount === 1 &&
+      !closeConfirmed &&
+      !systemEnding &&
+      readPreferences()[CONFIRM_CLOSE_PREFERENCE] !== '0'
+    ) {
+      event.preventDefault()
+      exitLog('window:close-held', details)
+      confirmExternalClose(win).catch((err) => {
+        exitLog('window:close-confirm-failed', { message: err && err.message })
+      })
+      return
     }
     if (details.windowCount === 1) markExitTrigger('window:last-window-close', details)
     else exitLog('window:close', details)
@@ -1623,6 +1712,19 @@ ipcMain.handle('zbterm:invoke', async (evt, method, args) => {
     // The launch plugins' main-process half (renderer/plugins/).
     if (method === 'app.launchPlugins.env') return await launchPluginHost.env()
     if (method === 'app.launchPlugin') return await launchPluginHost.call(args)
+    // The user's command plugins (261121_dialog-and-command-plugins).
+    if (method === 'app.commandPlugins.list') return commandPlugins.list()
+    if (method === 'app.commandPlugins.save') {
+      const choice = commandPlugins.save(args || {})
+      // C8 (F8): every window's "+ Add" follows the new choice.
+      sendToAll('zbterm:event', { name: 'commandPlugins:changed', data: choice })
+      return choice
+    }
+    if (method === 'app.commandPlugins.open') {
+      const error = await shell.openPath(commandPlugins.dir())
+      if (error) throw new Error(error)
+      return true
+    }
     if (method.startsWith('app.')) {
       const appResult = handleAppInvoke(method, args)
       // A preference that was never saved reads as null, which is an answer,
@@ -1764,8 +1866,24 @@ app.on('open-url', (evt, url) => {
 
 {
   app.whenReady().then(async () => {
+    // 261121 U1: Linux (logind) and macOS report a shutdown/logout here.
+    powerMonitor.on('shutdown', () => noteSystemEnding('system:shutdown'))
     const profileKey = await startupWindowProfileKey()
     const win = createWindow({ profileKey })
+    // 261121 R16: the engine starts while the page loads, not after it, so
+    // the profile list is drawn sooner. Nothing waits on the window: the
+    // renderer asks `profile.current` and waits for the decision only while
+    // the engine is still starting, so an engine that is ready first is
+    // simply found ready.
+    lifecycle.startPearRuntime().catch((err) => {
+      console.error('Failed to initialize ZBTerm:', err)
+      const message = String(err && err.stack ? err.stack : err)
+      if (win && !win.isDestroyed()) win.webContents.send('pear:error', message)
+      sendToAll('zbterm:event', {
+        name: 'engine:error',
+        data: err && err.toJSON ? err.toJSON() : { message: err.message || String(err) }
+      })
+    })
     try {
       await loadAppWindow(win)
     } catch (err) {
@@ -1776,16 +1894,6 @@ app.on('open-url', (evt, url) => {
       return
     }
     if (!win.isDestroyed()) win.show()
-
-    lifecycle.startPearRuntime().catch((err) => {
-      console.error('Failed to initialize ZBTerm:', err)
-      const message = String(err && err.stack ? err.stack : err)
-      if (win && !win.isDestroyed()) win.webContents.send('pear:error', message)
-      sendToAll('zbterm:event', {
-        name: 'engine:error',
-        data: err && err.toJSON ? err.toJSON() : { message: err.message || String(err) }
-      })
-    })
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

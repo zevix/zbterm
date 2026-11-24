@@ -80,6 +80,49 @@
     return value.startsWith('-') ? `./${value}` : value
   }
 
+  // ---- profile placeholders ---------------------------------------------
+
+  // 261121_dialog-and-command-plugins R8: in any step's settings `{{name}}` is
+  // the profile's name and `{{slug}}` (also `{{name_can}}`) that name made
+  // lower case, accents dropped, every run of other characters one `-`:
+  // "Work #2" -> "work-2". A name with nothing left is "profile".
+  function slugOf(name) {
+    const slug = String(name || '')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+    return slug || 'profile'
+  }
+
+  // The values the placeholders stand for, for a profile named `name`.
+  function profileVars(name) {
+    const text = String(name || '')
+    const slug = slugOf(text)
+    return { name: text, slug, name_can: slug }
+  }
+
+  const PLACEHOLDER = /\{\{\s*([A-Za-z_]+)\s*\}\}/g
+
+  // An unknown placeholder, or any without `vars`, is left as it is.
+  // `wrap(value)`, when given, turns each value into the text that replaces
+  // its placeholder (C1: one quoted shell word).
+  function substitute(text, vars, wrap) {
+    if (!vars || typeof text !== 'string' || !text.includes('{{')) return text
+    return text.replace(PLACEHOLDER, (whole, key) => {
+      if (!Object.prototype.hasOwnProperty.call(vars, key)) return whole
+      const value = String(vars[key])
+      return wrap ? wrap(value) : value
+    })
+  }
+
+  function hasPlaceholder(steps) {
+    return (steps || []).some((step) =>
+      Object.values(step.getConfig()).some((value) => /\{\{\s*[A-Za-z_]+\s*\}\}/.test(value))
+    )
+  }
+
   // ---- context -----------------------------------------------------------
 
   class LaunchScope {
@@ -202,6 +245,9 @@
     // the plugin's UI reaches with `ui.host(method, args)`. `probe()`, when
     // there is one, runs once and its answer is `ctx.facts[id]`.
     static host = null
+    // The settings the plugin hands to the shell as typed (Shell Command's
+    // `command`): a profile placeholder there is filled as one quoted word.
+    static shellFields = []
 
     // May a step of this kind be added to a chain whose context is `ctx`?
     static isAvailable() {
@@ -256,11 +302,121 @@
 
   const registry = new Map()
 
+  // While the app runs a user's plugin file, `loading` names it: the plugin is
+  // marked with its `source`, may replace one the same file registered before
+  // (the file was read again), and may not take a built-in's or another
+  // file's id.
+  let loading = ''
+
   function register(Plugin) {
     if (!Plugin || !Plugin.id) throw new Error('A launch plugin needs a static id')
-    if (registry.has(Plugin.id)) throw new Error(`Launch plugin registered twice: ${Plugin.id}`)
+    if (typeof Plugin.id !== 'string') throw new Error('A launch plugin id is a string')
+    const taken = registry.get(Plugin.id)
+    if (loading) {
+      if (!(Plugin.prototype instanceof LaunchPlugin)) {
+        throw new Error(`${Plugin.id} does not extend LaunchPlugin`)
+      }
+      if (taken && taken.source !== loading) {
+        throw new Error(`The id ${Plugin.id} is taken by ${taken.source || 'a built-in plugin'}`)
+      }
+      Object.defineProperty(Plugin, 'source', { value: loading, configurable: true })
+      registry.set(Plugin.id, Plugin)
+      return Plugin
+    }
+    if (taken) throw new Error(`Launch plugin registered twice: ${Plugin.id}`)
     registry.set(Plugin.id, Plugin)
     return Plugin
+  }
+
+  // Runs `fn` (which runs a user's plugin file) with `file` as the source of
+  // whatever it registers; returns the ids it registered.
+  function loadingFrom(file, fn) {
+    const before = new Map(registry)
+    loading = String(file || '') || 'a plugin file'
+    try {
+      fn()
+    } finally {
+      loading = ''
+    }
+    return Array.from(registry.values())
+      .filter((Plugin) => Plugin.source === file && before.get(Plugin.id) !== Plugin)
+      .map((Plugin) => Plugin.id)
+  }
+
+  // The plugins one file registered, and dropping them (the file is gone).
+  function pluginsFrom(file) {
+    return plugins().filter((Plugin) => Plugin.source === file)
+  }
+
+  function unregisterFrom(file) {
+    for (const Plugin of pluginsFrom(file)) registry.delete(Plugin.id)
+  }
+
+  function errorText(err) {
+    if (err && err.name && err.message) return `${err.name}: ${err.message}`
+    return String((err && err.message) || err || '') || 'Failed to run'
+  }
+
+  // Runs one user plugin file, `execute()` (U1): a syntax error or a throw is
+  // caught here and returned, never thrown on to the page; the file's
+  // plugins are dropped first and again on an error, so a failed file leaves
+  // nothing half-registered and every other file's plugins as they were.
+  // Returns { ids, error }.
+  function runFile(file, execute) {
+    let ids = []
+    let error = ''
+    try {
+      unregisterFrom(file)
+      ids = loadingFrom(file, execute)
+    } catch (err) {
+      error = errorText(err)
+    }
+    if (error) {
+      unregisterFrom(file)
+      ids = []
+    } else if (!ids.length) {
+      error = 'It registered no plugin'
+    }
+    return { ids, error }
+  }
+
+  // The directory read again: `previous` and the result are [{ file, source,
+  // ids, error }], `listed` is the main process's [{ file, source | error }]
+  // in name order, `execute(file, source)` runs one file's source. Files that
+  // are gone drop out first (so an id they held is free), then a new or
+  // changed file runs, and so does every file that failed last time
+  // (C3: a refused file may win the id its winner gave up); an unchanged
+  // file that loaded keeps its plugins.
+  function reloadFiles(previous, listed, execute) {
+    const before = new Map((previous || []).map((entry) => [entry.file, entry]))
+    const now = new Set((listed || []).map((entry) => entry.file))
+    for (const file of before.keys()) if (!now.has(file)) unregisterFrom(file)
+    const files = []
+    for (const entry of listed || []) {
+      const old = before.get(entry.file)
+      if (entry.error) {
+        unregisterFrom(entry.file)
+        files.push({ file: entry.file, source: '', ids: [], error: entry.error })
+        continue
+      }
+      if (old && !old.error && old.source === entry.source) {
+        files.push(old)
+        continue
+      }
+      const ran = runFile(entry.file, () => execute(entry.file, entry.source))
+      files.push({ file: entry.file, source: entry.source, ids: ran.ids, error: ran.error })
+    }
+    return files
+  }
+
+  // C12: the plugin ids stored steps name that are not registered (a file
+  // removed, renamed or failing), in order, once each.
+  function missingPlugins(stored) {
+    if (!Array.isArray(stored)) return []
+    const ids = stored
+      .map((step) => (step && typeof step.plugin === 'string' ? step.plugin : ''))
+      .filter((id) => id && !registry.has(id))
+    return Array.from(new Set(ids))
   }
 
   function plugins() {
@@ -294,17 +450,41 @@
   function run(steps, env) {
     const ctx = new LaunchContext(env)
     const trace = []
+    // `env.vars` (profileVars): the placeholders are filled in for the step's
+    // validate and apply only; its stored settings keep them.
+    const vars = env && env.vars
     for (const step of steps) {
       const scope = ctx.scope
-      trace.push({
-        step,
-        available: !!step.constructor.isAvailable(ctx),
-        scope,
-        depth: ctx.depth,
-        kind: scope.kind,
-        error: step.validate(ctx) || ''
-      })
-      step.apply(ctx)
+      const own = step.config
+      if (vars && own) {
+        // 261121_dialog-and-command-plugins C1 (F1, A-12): in a field the
+        // plugin passes to the shell as typed (`static shellFields`), a
+        // placeholder is one word, quoted for this scope's shell, so a name
+        // can never become shell syntax ("Work #2" -> 'Work #2'). Other
+        // fields are filled raw; their plugin quotes what it builds.
+        const shellFields = Array.isArray(step.constructor.shellFields)
+          ? step.constructor.shellFields
+          : []
+        const word = (value) => quote(value, scope.shell)
+        const filled = {}
+        for (const [key, value] of Object.entries(own)) {
+          filled[key] = substitute(value, vars, shellFields.includes(key) ? word : null)
+        }
+        step.config = filled
+      }
+      try {
+        trace.push({
+          step,
+          available: !!step.constructor.isAvailable(ctx),
+          scope,
+          depth: ctx.depth,
+          kind: scope.kind,
+          error: step.validate(ctx) || ''
+        })
+        step.apply(ctx)
+      } finally {
+        step.config = own
+      }
       scope.steps.push(step)
       ctx.steps.push(step)
     }
@@ -326,7 +506,12 @@
   // (a session with an SSH step must stay editable where `ssh` is missing).
   // Only what "+ Add" offers depends on the facts.
   function structural(env = {}) {
-    return { platform: env.platform }
+    return { platform: env.platform, vars: env.vars }
+  }
+
+  // `env` with the placeholders of a profile named `name`.
+  function withName(env, name) {
+    return { ...(env || {}), vars: profileVars(name) }
   }
 
   // The plugins the "+ Add" menu offers at the end of the chain.
@@ -384,14 +569,40 @@
   // something that knows only those two (an older build, the debug server)
   // falls back to them, so the dialog never shows a launch that is not the
   // one that runs.
+  //
+  // With placeholders (R8) the steps compile with the name the session was
+  // launched as: `session.launchName` when the caller knows one that differs
+  // from `name` (a copy's dialog, prefilled "Work #2", of "Work"), else its
+  // name.
   function stepsFor(session = {}, env) {
     const stored = createSteps(session.steps)
     if (stored && stored.length) {
-      const launch = compile(stored, env)
       const cwd = session.cwd || ''
-      if (sameText(launch.cwd, cwd) && sameText(launch.command, session.command)) return stored
+      const names = [session.launchName, session.name].filter((name) => typeof name === 'string')
+      if (!names.length) names.push('')
+      for (const name of names) {
+        const launch = compile(stored, withName(env, name))
+        if (sameText(launch.cwd, cwd) && sameText(launch.command, session.command)) return stored
+      }
     }
     return stepsFromLaunch(session)
+  }
+
+  // { cwd, command } for stored steps under a new name, or null when the
+  // steps no longer describe the session's launch (stepsFor fell back) or
+  // hold no placeholder (nothing changes).
+  function relaunchFor(session = {}, name, env) {
+    const stored = createSteps(session.steps)
+    if (!stored || !stored.length || !hasPlaceholder(stored)) return null
+    const kept = stepsFor(session, env)
+    if (
+      kept.length !== stored.length ||
+      kept.some((step, i) => step.constructor !== stored[i].constructor)
+    ) {
+      return null
+    }
+    if (!sameText(JSON.stringify(serialize(kept)), JSON.stringify(serialize(stored)))) return null
+    return compile(kept, withName(env, name))
   }
 
   const launch = {
@@ -413,6 +624,17 @@
     firstError,
     stepsFromLaunch,
     stepsFor,
+    relaunchFor,
+    withName,
+    profileVars,
+    slugOf,
+    substitute,
+    loadingFrom,
+    pluginsFrom,
+    unregisterFrom,
+    runFile,
+    reloadFiles,
+    missingPlugins,
     quote,
     quotePath,
     posixQuote

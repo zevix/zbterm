@@ -1091,9 +1091,16 @@ class ShareManager extends EventEmitter {
       })
     }
     const runtime = this.engine.sessions && this.engine.sessions.get(sessionId)
+    // 261121 R12: how many of the share's invite links still work; 0 once
+    // every one is revoked ("Unshare Session"), while the share itself lives.
+    let liveLinks = 0
+    for (const link of share.links ? share.links.values() : []) {
+      if (link && !link.revoked) liveLinks++
+    }
     return {
       sessionId,
       isSharing: true,
+      liveLinks,
       viewerCount,
       viewers,
       inputMode: runtime ? runtime.inputMode || 'host' : undefined
@@ -1153,9 +1160,9 @@ class ShareManager extends EventEmitter {
           canSendInput: hasCap(link.caps, SEND_INPUT),
           viewers: link.viewers,
           autoJoin: link.autoJoin,
-          verifiedOnly: !!link.verifiedOnly,
           revoked: !!link.revoked,
-          consumed: !!link.consumed
+          consumed: !!link.consumed,
+          verifiedOnly: !!link.verifiedOnly
         })),
         peerDetails: Array.from(share.peers).map((peer) => ({
           confirmed: !!peer.confirmed,

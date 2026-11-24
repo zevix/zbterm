@@ -846,6 +846,161 @@
         background: rgba(0, 0, 0, 0.48);
       }
 
+      /* 261121_dialog-and-command-plugins R2, R3: the profile dialog floats.
+         Nothing is dimmed and the layer lets the pointer through, so the
+         terminal and the list stay usable; only the panel takes clicks. */
+      .session-editor-overlay.session-editor-floating {
+        background: transparent;
+        pointer-events: none;
+      }
+
+      .session-editor-floating > .session-editor {
+        pointer-events: auto;
+        /* C7 (F7, A-7): never taller than the window; it scrolls inside, and
+           the OK row stays in view at its foot. */
+        max-height: calc(100vh - 16px);
+        overflow: auto;
+      }
+
+      .session-editor-floating > .session-editor > .session-editor-actions {
+        position: sticky;
+        bottom: -12px;
+        margin-bottom: -12px;
+        padding: 6px 0 12px;
+        background: var(--bar-bg);
+        z-index: 1;
+      }
+
+      /* C6: a second request for the dialog points at the open one. */
+      .session-editor.session-editor-attention {
+        animation: session-editor-attention 0.6s ease-out 1;
+      }
+
+      @keyframes session-editor-attention {
+        0%,
+        60% {
+          box-shadow:
+            0 0 0 2px var(--accent, #4c8dff),
+            0 16px 44px rgba(0, 0, 0, 0.34);
+        }
+      }
+
+      /* C12: a stored step whose plugin is not loaded. */
+      .session-editor-note.session-editor-missing {
+        margin: -2px 0 0;
+        color: var(--danger, #e5534b);
+      }
+
+      .session-editor-title {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: -4px -4px 2px;
+        padding: 4px;
+        border-radius: 5px;
+        cursor: grab;
+        user-select: none;
+        touch-action: none;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .session-editor-title:hover {
+        background: var(--control-bg);
+      }
+
+      .session-editor.dragging .session-editor-title {
+        cursor: grabbing;
+      }
+
+      .session-editor-grip {
+        color: var(--soft-text);
+        font-size: 12px;
+      }
+
+      /* The Plugins dialog (261121_dialog-and-command-plugins R6). */
+      .plugins-dialog {
+        display: grid;
+        gap: 6px;
+        min-width: min(380px, calc(100vw - 48px));
+        max-height: min(60vh, 520px);
+        overflow: auto;
+      }
+
+      .plugins-dialog-section {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 4px;
+        color: var(--soft-text);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .plugins-dialog-open {
+        margin-left: auto;
+        padding: 2px 6px;
+      }
+
+      .plugins-dialog-list {
+        display: grid;
+        gap: 2px;
+      }
+
+      .plugins-dialog-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 4px;
+        border-radius: 4px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .plugins-dialog-row:hover {
+        background: var(--control-bg);
+      }
+
+      .plugins-dialog-row > i {
+        width: 16px;
+        text-align: center;
+        color: var(--soft-text);
+      }
+
+      .plugins-dialog-row.disabled {
+        cursor: default;
+        opacity: 0.75;
+      }
+
+      .plugins-dialog-detail,
+      .plugins-dialog-empty,
+      .plugins-dialog-note {
+        color: var(--soft-text);
+        font-size: 12px;
+      }
+
+      .plugins-dialog-detail {
+        margin-left: auto;
+      }
+
+      /* C9: a commands.json that could not be read. */
+      .plugins-dialog-choice-error {
+        color: var(--danger, #e5534b);
+        font-size: 12px;
+      }
+
+      .plugins-dialog-error {
+        margin-left: auto;
+        color: var(--danger, #e5534b);
+        font-size: 12px;
+        max-width: 55%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       /* Popup menus dim the app like the dialogs do. The layer lets pointer
          events through, so the outside-click handlers still see the target. */
       body:has(.context-menu:not([hidden]))::before {
@@ -1581,6 +1736,12 @@
         white-space: nowrap;
       }
 
+      /* The matched part of a name in "Session name matches" (261121 R2). */
+      .session-name mark.name-match {
+        background: none;
+        color: var(--match-cyan);
+      }
+
       /* A buffer-match row's subtitle: "N matches" (261111_buffer-search R6). */
       .session-sub.match-count {
         color: var(--match-cyan);
@@ -1616,6 +1777,20 @@
       .empty {
         color: var(--muted);
         padding: 12px;
+      }
+
+      /* 261121 R16: the list while the engine starts. */
+      .sessions-loading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .sessions-loading .spinner {
+        width: 12px;
+        height: 12px;
+        min-width: 12px;
+        border-width: 2px;
       }
 
       .main {
@@ -1839,6 +2014,59 @@
 
       .search-count[hidden] {
         display: none;
+      }
+
+      /* 261121 R15: match case (Aa) and whole word (ab, underlined between
+         two ticks), just left of the x; pressed, they are the match cyan. */
+      .search-opt {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        box-sizing: border-box;
+        width: 20px;
+        min-width: 0;
+        height: 18px;
+        padding: 0;
+        border: 1px solid transparent;
+        border-radius: 3px;
+        background: none;
+        color: var(--muted);
+        font: 600 11px/16px var(--mono, monospace);
+        cursor: pointer;
+      }
+
+      #searchCase {
+        right: 54px;
+      }
+
+      #searchWord {
+        right: 32px;
+      }
+
+      .search-opt-word {
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .search-opt:hover {
+        color: var(--text);
+        border-color: var(--border);
+      }
+
+      .search-opt[aria-pressed='true'] {
+        color: var(--match-cyan);
+        border-color: var(--match-cyan);
+      }
+
+      /* 261121 R14: the status line's search position, "M / N". */
+      .status .search-pos-index {
+        color: var(--match-cyan);
+        font-weight: 700;
+      }
+
+      .status .search-pos-total {
+        color: var(--match-cyan);
+        font-weight: 400;
       }
 
       .search-cell input:focus-visible,
@@ -3033,7 +3261,7 @@
             </button>
             <button id="extendSession" class="text-btn label-btn" disabled>
               <i class="fa-solid fa-arrow-rotate-right btn-icon" aria-hidden="true"></i
-              ><span>Extend</span>
+              ><span>Resume</span>
             </button>
             <button id="goLive" class="text-btn label-btn" disabled>
               <i class="fa-solid fa-desktop btn-icon" aria-hidden="true"></i><span>Live</span>
@@ -3055,6 +3283,26 @@
         <div class="search-cell">
           <input id="search" type="search" placeholder="Search (Ctrl+Shift+F)" />
           <span id="searchCount" class="search-count" aria-live="polite" hidden></span>
+          <button
+            id="searchCase"
+            type="button"
+            class="search-opt"
+            title="Match case"
+            aria-label="Match case"
+            aria-pressed="false"
+          >
+            Aa
+          </button>
+          <button
+            id="searchWord"
+            type="button"
+            class="search-opt search-opt-word"
+            title="Match whole word"
+            aria-label="Match whole word"
+            aria-pressed="false"
+          >
+            ab
+          </button>
           <i
             id="searchIcon"
             class="fa-solid fa-magnifying-glass search-icon"
@@ -3125,7 +3373,7 @@
     <button id="rename" class="text-btn" hidden>Rename</button>
     <button id="clearCaches" class="text-btn" hidden>Delete History</button>
     <button id="removeHd" class="text-btn" hidden>Remove HD</button>
-    <button id="extendSessionHidden" class="text-btn" hidden>Extend</button>
+    <button id="extendSessionHidden" class="text-btn" hidden>Resume</button>
     <button id="delete" class="text-btn" hidden>Delete</button>
     <span id="timeLabelTip" class="time-label-tip" role="tooltip" hidden></span>
     <script src="logo-ascii.js"></script>

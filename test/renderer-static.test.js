@@ -414,9 +414,12 @@ test('renderer gates sharing on share.backends (backend-abstraction R-9)', async
   const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')
   const html = await fs.promises.readFile(path.join(rendererDir, 'index.html'), 'utf8')
   t.is(js.split("api.invoke('share.backends')").length - 1, 1, 'share.backends is asked once')
+  // 2026-11-21 (261121 R16): asked alongside the first session list, still
+  // only once the engine answered the ping.
+  // 2026-11-21 (261121_dialog-and-command-plugins): the list may run over lines.
+  const backendsAt = js.search(/await Promise\.all\(\[\s*loadShareBackends\(\),/)
   t.ok(
-    js.indexOf("await api.invoke('ping')") < js.indexOf('await loadShareBackends()') &&
-      js.indexOf('await loadShareBackends()') < js.indexOf("setStatus('loading sessions')"),
+    backendsAt > 0 && js.indexOf("await api.invoke('ping')") < backendsAt,
     'and only after the engine answered'
   )
   t.ok(js.includes("backend.state === 'available'"), 'a broken backend does not count as usable')
@@ -593,12 +596,14 @@ test('the startup logo text ends on the last row without scrolling', async (t) =
   const end = js.indexOf('\n  function ', start + 1)
   const body = js.slice(start, end === -1 ? undefined : end)
 
+  // 261114 R13: pears.com lines removed; the project-URL line is now the last write.
   t.ok(
-    /pears\.com'\s*\n\s*\)/.test(body),
+    /for more information`\s*\n\s*\)/.test(body),
     'the last line of the credits block is written with no trailing newline'
   )
+  // 261114 R13: pears.com lines removed; the line-feed check moves to the last line.
   t.absent(
-    /pears\.com\\r\\n'/.test(body),
+    /information\\r\\n/.test(body),
     'no line feed after the last line: it sits on the bottom row and would scroll'
   )
 })
@@ -703,16 +708,20 @@ test('buffer-search: the buffer-match section, its cyan in both themes, alternat
   t.ok(js.includes("api\n      .invoke('session.searchBuffer', {"), 'one engine call per session')
   t.ok(js.includes('searchKey: state.bufferSearchKey'), 'one searchKey per renderer')
   // The name rows come first; the section follows even "No matching sessions".
-  const render = js.slice(js.indexOf('  function renderSessions() {'))
+  // 261121 "Loading profiles…": the sessionsLoaded === false early return is intended; slice past it.
+  const render = js.slice(
+    js.indexOf('    els.sessions.replaceChildren()', js.indexOf('  function renderSessions() {'))
+  )
   const body = render.slice(0, render.indexOf('\n  }\n'))
   t.absent(body.includes('return'), 'renderSessions has no early return before the section')
   // Changed 2026-11-13 (261113_ui-polish R3, R13): only "Other - unmatched sessions" and the
   // reorder guard's bookkeeping follow the buffer section.
+  // 261121: markSearchCursor() now runs between the unmatched section and the reorder guard.
   t.ok(
     body
       .trim()
       .endsWith(
-        'renderSessionBufferSection()\n    if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)\n    noteSessionRowOrder()'
+        'renderSessionBufferSection()\n    if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)\n    markSearchCursor()\n    noteSessionRowOrder()'
       ),
     'the section is rendered last'
   )
@@ -797,5 +806,112 @@ test('the share warning follows approval and verified-only, and the option reach
   t.ok(
     js.includes("unverified: 'this link admits only people with a verified identity'"),
     'the viewer is told why it was refused'
+  )
+})
+
+// 261121_improvements-and-fixes R2-R12: string-level checks of the renderer;
+// the behaviour is proved on a packaged build by that project's acceptance kit.
+test('261121: name matches cyan, Esc ends a search anywhere, N/M in the status', async (t) => {
+  const dir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(dir, 'app.js'), 'utf8')
+  const html = await fs.promises.readFile(path.join(dir, 'index.html'), 'utf8')
+  t.ok(js.includes('function setNameWithMatches(el, name, query)'), 'R2: names are marked')
+  t.ok(js.includes('buildSessionRow(session, { nameMatch })'), 'R2: in the name section')
+  const mark = html.slice(html.indexOf('.session-name mark.name-match {'))
+  t.ok(mark.slice(0, mark.indexOf('}')).includes('var(--match-cyan)'), 'R2: cyan')
+  t.ok(js.includes('function anyMenuOpen()'), 'R3: a menu keeps its own Esc')
+  t.ok(
+    /searchIsOn\(\) &&\s+document\.activeElement !== els\.search/.test(js),
+    'R3: outside the box'
+  )
+  t.ok(
+    js.includes("'(In terminal Enter/Shift+Enter, in profiles ⬆️/⬇️ )'"),
+    'R4: the hint as the user wrote it'
+  )
+  t.ok(js.includes('state.searchCountStatus = text'), 'R4: the count goes to the status line')
+})
+
+test('261121: settings menu icons, templates open Advanced, Resume, steady dialog', async (t) => {
+  const dir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(dir, 'app.js'), 'utf8')
+  const html = await fs.promises.readFile(path.join(dir, 'index.html'), 'utf8')
+  t.ok(/icon: 'fa-stamp',\s+label: trigger\.menuLabel/.test(js), 'R5: stamp on template items')
+  t.ok(
+    js.includes("(options.mode === 'edit' || options.mode === 'template') && triggerSelect.value"),
+    'R6'
+  )
+  t.ok(/icon: 'fa-tower-broadcast',\s+label: 'STUN\/TURN servers…'/.test(js), 'R7: STUN icon')
+  t.ok(/icon: 'fa-server',\s+label: 'ZBTerm relay access key…'/.test(js), 'R7: relay icon')
+  t.ok(js.includes('const observer = new window.ResizeObserver(() => place(false))'), 'R8')
+  t.absent(/>\s*Extend\s*</.test(html), 'R9: no visible "Extend" in the page')
+  t.ok(html.includes('><span>Resume</span>'), 'R9: the toolbar button reads Resume')
+})
+
+test('261121: the profile right-click menu, in order, each with an icon', async (t) => {
+  const js = await fs.promises.readFile(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8')
+  const body = js.slice(js.indexOf('function profileMenuItems(session)'))
+  const end = body.indexOf('\n  }\n')
+  const menu = body.slice(0, end)
+  const order = [
+    "label: 'Clone'",
+    "label: 'Create a copy, edit first'",
+    'separator: true',
+    "label: 'Edit'",
+    "label: 'Remove HD'",
+    "label: 'Delete History'",
+    "label: 'Delete'",
+    'separator: true',
+    "'Unshare Session' : 'Share Session'",
+    "'Unshare Keyboard' : 'Share Keyboard'",
+    "'Enable HD (save and share more updates)'",
+    'separator: true',
+    "label: 'Resume'"
+  ]
+  let at = 0
+  for (const piece of order) {
+    const next = menu.indexOf(piece, at)
+    t.ok(next >= at, `R10: ${piece} in its place`)
+    at = next + 1
+  }
+  const items = menu.match(/icon: 'fa-[a-z-]+'/g) || []
+  t.is(items.length, 10, 'R10: every item has an icon')
+  t.ok(js.includes('openProfileMenu(session, { clientX'), 'R10: the row right-click opens it')
+  t.ok(js.includes("api.invoke('share.revokeLink'"), 'R12: Unshare revokes the links')
+})
+
+// 261121_improvements-and-fixes R14-R16 (string level; the kit drives the app).
+test('261121: M / N styled, match case and whole word toggles, loading profiles', async (t) => {
+  const dir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(dir, 'app.js'), 'utf8')
+  const html = await fs.promises.readFile(path.join(dir, 'index.html'), 'utf8')
+  const rule = (sel) => {
+    const at = html.indexOf(`${sel} {`)
+    return at < 0 ? '' : html.slice(at, html.indexOf('}', at))
+  }
+  t.ok(js.includes('const text = `${index} / ${total} ${SEARCH_COUNT_HINT}`'), 'R14: "M / N"')
+  t.ok(/match-cyan[\s\S]*font-weight: 700/.test(rule('.status .search-pos-index')), 'R14: M')
+  t.ok(/match-cyan[\s\S]*font-weight: 400/.test(rule('.status .search-pos-total')), 'R14: N')
+  for (const [id, tip] of [
+    ['searchCase', 'Match case'],
+    ['searchWord', 'Match whole word']
+  ]) {
+    const at = html.indexOf(`id="${id}"`)
+    t.ok(at > 0 && html.slice(at, at + 200).includes(`title="${tip}"`), `R15: #${id} hover`)
+  }
+  for (const call of [
+    "api.invoke('session.list', { query, activeOnly: state.activeOnly, ...searchOptions() })",
+    'seq: bm.seq,\n        ...searchOptions()',
+    'scan: window.zbtermScanBuffer ? scanWithSearchOptions : null',
+    'find(text, q, searchOptions())'
+  ]) {
+    t.ok(js.includes(call), `R15: every search takes the toggles: ${call.split('\n')[0]}`)
+  }
+  t.ok(js.includes("box.append(spin, document.createTextNode('Loading profiles…'))"), 'R16')
+  // 2026-11-21 (261121_dialog-and-command-plugins): the command plugins load alongside.
+  t.ok(
+    /await Promise\.all\(\[\s*loadShareBackends\(\),\s*refreshPeerIdentities\(\),\s*refreshSessions\(\),/.test(
+      js
+    ),
+    'R16: the list does not wait for the share backends and peer records'
   )
 })

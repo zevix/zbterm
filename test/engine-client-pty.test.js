@@ -14,7 +14,15 @@ test('PtySession uses cmd.exe as the default Windows shell', (t) => {
     'C:\\Windows\\System32\\cmd.exe'
   )
   t.is(defaultShell('linux', { SHELL: '/bin/zsh' }), '/bin/zsh')
-  t.is(defaultShell('linux', {}), 'bash')
+  // 261121_dialog-and-command-plugins: with no SHELL, the login shell, then bash.
+  t.is(
+    defaultShell('linux', {}, () => '/usr/bin/fish'),
+    '/usr/bin/fish'
+  )
+  t.is(
+    defaultShell('linux', {}, () => ''),
+    'bash'
+  )
 })
 
 test('PtySession runs a session command through the shell and expands ~ in cwd', (t) => {
@@ -24,6 +32,23 @@ test('PtySession runs a session command through the shell and expands ~ in cwd',
   t.alike(commandArgs(''), [])
   t.alike(commandArgs(null), [])
   t.alike(commandArgs(' htop -d 5 ', 'linux'), ['-c', 'htop -d 5'])
+  // 261121_dialog-and-command-plugins R4, U5: known shells run the command as
+  // an interactive shell (its rc file: aliases, PATH), a login one on macOS;
+  // others keep the plain -c.
+  t.alike(commandArgs('ll', 'linux', '/bin/bash'), ['-i', '-c', 'll'])
+  t.alike(commandArgs('ll', 'darwin', '/bin/zsh'), ['-l', '-i', '-c', 'll'])
+  t.alike(commandArgs('ll', 'linux', '/usr/bin/fish'), ['-i', '-c', 'll'])
+  t.alike(commandArgs('ll', 'linux', '/usr/bin/xonsh'), ['-c', 'll'])
+  // C5 (F5): a version suffix, a login shell's `-` and any directory still match.
+  t.alike(commandArgs('ll', 'linux', '/usr/local/bin/bash5'), ['-i', '-c', 'll'])
+  t.alike(commandArgs('ll', 'linux', '/usr/bin/zsh-5.9'), ['-i', '-c', 'll'])
+  t.alike(commandArgs('ll', 'linux', '-zsh'), ['-i', '-c', 'll'])
+  t.alike(commandArgs('ll', 'darwin', '/opt/homebrew/bin/zsh'), ['-l', '-i', '-c', 'll'])
+  t.alike(commandArgs('ll', 'linux', '/bin/sh'), ['-i', '-c', 'll'])
+  // U5: anything else keeps the plain -c.
+  t.alike(commandArgs('ll', 'linux', '/usr/bin/bashful'), ['-c', 'll'])
+  t.alike(commandArgs('ll', 'linux', '/usr/bin/nu'), ['-c', 'll'])
+  t.alike(commandArgs('dir', 'win32', 'C:\\Windows\\cmd.exe'), ['/c', 'dir'])
   t.alike(commandArgs('dir', 'win32'), ['/c', 'dir'])
   const home = os.homedir()
   t.is(resolveCwd(''), home)

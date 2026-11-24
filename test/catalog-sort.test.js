@@ -53,3 +53,16 @@ test('catalog: sortAt overrides the start time; null clears it (R7)', async (t) 
   t.is(sortTime({ startedAt: 5, lastStartedAt: 7, sortAt: 0 }), 0)
   t.is(sortTime({ startedAt: 5, lastStartedAt: 7, sortAt: null }), 7)
 })
+
+// 261121 R15: the name filter with the search box's toggles.
+test('catalog: the name filter takes caseSensitive and wholeWord', async (t) => {
+  const catalog = await withCatalog(t)
+  await catalog.put({ sessionId: 'a', name: 'build-TMP', startedAt: 1 })
+  await catalog.put({ sessionId: 'b', name: 'tmpfiles', startedAt: 2 })
+  await catalog.put({ sessionId: 'c', name: 'my tmp', startedAt: 3 })
+  const ids = async (opts) => (await catalog.list(opts)).map((entry) => entry.sessionId).sort()
+  t.alike(await ids({ query: 'tmp' }), ['a', 'b', 'c'], 'plain, as before')
+  t.alike(await ids({ query: 'tmp', caseSensitive: true }), ['b', 'c'])
+  t.alike(await ids({ query: 'tmp', wholeWord: true }), ['a', 'c'])
+  t.alike(await ids({ query: 'TMP', caseSensitive: true, wholeWord: true }), ['a'])
+})

@@ -86,7 +86,9 @@ test('golden: diagnostics() key set', async (t) => {
     'viewers',
     'autoJoin',
     'revoked',
-    'consumed'
+    'consumed',
+    // 261115 R42: appended (approved 2026-11-21)
+    'verifiedOnly'
   ])
   t.alike(Object.keys(diag.hostShares[0].peerDetails[0]), [
     'confirmed',

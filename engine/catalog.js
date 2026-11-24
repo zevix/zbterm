@@ -2,6 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const Hypercore = require('hypercore')
 const Hyperbee = require('hyperbee')
+const { findInText } = require('./buffer-search')
 
 class Catalog {
   constructor(dir) {
@@ -60,10 +61,20 @@ class Catalog {
   async list(opts = {}) {
     const out = []
     const q = opts.query ? opts.query.toLowerCase() : ''
+    // 261121 R15: match case / whole word use the buffer matcher on the name;
+    // with neither, the filter is the plain one it always was.
+    const exact = !!(opts.caseSensitive || opts.wholeWord)
+    const matchOpts = { caseSensitive: !!opts.caseSensitive, wholeWord: !!opts.wholeWord }
     for await (const node of this.bee.createReadStream({ gt: 'session/', lt: 'session0' })) {
       const value = node.value
       if (opts.activeOnly && !value.active) continue
-      if (q && !value.name.toLowerCase().includes(q)) continue
+      if (q) {
+        const name = String(value.name || '')
+        const hit = exact
+          ? findInText(name, opts.query, matchOpts).length > 0
+          : name.toLowerCase().includes(q)
+        if (!hit) continue
+      }
       out.push(value)
     }
     out.sort((a, b) => sortTime(b) - sortTime(a))

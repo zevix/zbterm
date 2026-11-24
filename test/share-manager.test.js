@@ -146,6 +146,28 @@ test('shared keyboard disables when no viewers remain', async (t) => {
   t.is(manager.status('session-a').inputMode, 'host', 'share status reports current input mode')
 })
 
+// 261121 R12: "Unshare Session" revokes every link; the status says when none works.
+test('share status counts the links that are not revoked', (t) => {
+  const manager = new ShareManager({ sessions: new Map([['session-a', { inputMode: 'host' }]]) })
+  t.teardown(() => manager.close())
+  t.is(manager.status('session-a').liveLinks, undefined, 'no share, no count')
+  const share = {
+    sessionId: 'session-a',
+    peers: new Set(),
+    links: new Map([
+      ['link-a', { linkId: 'link-a', revoked: false }],
+      ['link-b', { linkId: 'link-b', revoked: false, consumed: true }]
+    ])
+  }
+  manager.hostShares.set('session-a', share)
+  t.is(manager.status('session-a').liveLinks, 2, 'a consumed link still admits its viewer')
+  share.links.set('link-a', { linkId: 'link-a', revoked: true })
+  share.links.set('link-b', { linkId: 'link-b', revoked: true })
+  const status = manager.status('session-a')
+  t.is(status.liveLinks, 0, 'every link revoked')
+  t.is(status.isSharing, true, 'the share itself is still there')
+})
+
 test('snapshot sync caps long histories while keeping latest reference frame', (t) => {
   const snapshots = Array.from({ length: 500 }, (_, i) => ({ seq: i + 1 }))
   const selected = ShareManager._test.selectSnapshotSyncItems(snapshots, 16)

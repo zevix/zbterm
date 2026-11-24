@@ -413,6 +413,9 @@ test('the renderer loads the plugin files Node does, in the same order', (t) => 
   )
   for (const file of fs.readdirSync(path.join(__dirname, '../renderer/plugins'))) {
     if (file === 'index.js') continue
+    // 2026-11-21 (261121_dialog-and-command-plugins): samples/ holds the user
+    // command plugins copied to the plugins directory, not loaded from here.
+    if (file === 'samples') continue
     t.ok(scripts.includes(file), `${file} is loaded`)
   }
 })

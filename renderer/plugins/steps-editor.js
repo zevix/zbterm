@@ -5,13 +5,22 @@
 ;(() => {
   const launch = window.zbtermLaunch
 
-  // `opts`: { steps (plugin instances), env, invoke(method, args), showError }.
+  // `opts`: { steps (plugin instances), env, invoke(method, args), showError,
+  // name(), shown(Plugin), onPlugins() }. `name()` is the profile's name as
+  // typed, for the placeholders (launch-core.js profileVars); `shown` says
+  // whether "+ Add" offers a plugin (the Plugins dialog's choice); with
+  // `onPlugins` the menu ends in "Plugins…", which calls it.
   function createStepsEditor(opts = {}) {
     const document = window.document
     const steps = opts.steps ? [...opts.steps] : []
     let env = opts.env || {}
     const invoke = opts.invoke
     const showError = opts.showError || (() => {})
+    const nameOf = opts.name || (() => '')
+    const shown = opts.shown || (() => true)
+    const onPlugins = opts.onPlugins || null
+    // The chain's env with this profile's placeholders filled in.
+    const named = () => launch.withName(env, nameOf())
 
     const root = document.createElement('div')
     root.className = 'launch-steps'
@@ -268,7 +277,8 @@
         remove.title = title
         remove.setAttribute('aria-label', title)
       })
-      add.disabled = launch.addable(steps, env).length === 0
+      // "Plugins…" is always there to open, so the button stays usable.
+      add.disabled = !onPlugins && offered().length === 0
       add.title = add.disabled ? 'Nothing can be added after the last step' : 'Add a step'
       setError('')
     }
@@ -282,24 +292,88 @@
       menu.hidden = true
       menu.replaceChildren()
       add.setAttribute('aria-expanded', 'false')
+      document.removeEventListener('scroll', onScroll, true)
     }
 
+    // 261121_dialog-and-command-plugins C7: the dialog scrolls when taller
+    // than the window, which would clip a menu inside it; the menu is placed
+    // on the window instead, under "+ Add" (above it when there is no room),
+    // and a scroll closes it rather than leave it behind.
+    function placeMenu() {
+      const win = document.defaultView || window
+      const at = add.getBoundingClientRect()
+      menu.style.position = 'fixed'
+      menu.style.left = `${Math.round(Math.max(8, at.left))}px`
+      const height = menu.offsetHeight
+      const below = at.bottom + 4
+      const above = at.top - height - 4
+      const top = below + height > win.innerHeight - 8 && above >= 8 ? above : below
+      menu.style.top = `${Math.round(Math.max(8, top))}px`
+    }
+
+    function onScroll(event) {
+      if (!menu.hidden && !menu.contains(event.target)) closeMenu()
+    }
+
+    // The plugins "+ Add" offers after the last step: allowed there, and
+    // ticked in the Plugins dialog.
+    function offered() {
+      return launch.addable(steps, env).filter((Plugin) => shown(Plugin))
+    }
+
+    function separator() {
+      const line = el('div', 'context-menu-separator')
+      line.setAttribute('role', 'separator')
+      return line
+    }
+
+    function menuItems() {
+      return Array.from(menu.querySelectorAll('button'))
+    }
+
+    // 261121_dialog-and-command-plugins R5: the built-in plugins, then the
+    // user's command plugins, then "Plugins…", a separator between groups.
     function openMenu() {
       menu.replaceChildren()
-      for (const Plugin of launch.addable(steps, env)) {
+      const all = offered()
+      const groups = [all.filter((Plugin) => !Plugin.source), all.filter((Plugin) => Plugin.source)]
+      for (const group of groups) {
+        if (!group.length) continue
+        if (menu.children.length) menu.append(separator())
+        for (const Plugin of group) {
+          const item = button({
+            text: Plugin.title,
+            icon: Plugin.icon,
+            className: 'context-menu-item launch-add-item',
+            onClick: () => addStep(Plugin.id)
+          })
+          item.setAttribute('role', 'menuitem')
+          item.dataset.plugin = Plugin.id
+          menu.append(item)
+        }
+      }
+      if (onPlugins) {
+        if (menu.children.length) menu.append(separator())
         const item = button({
-          text: Plugin.title,
-          icon: Plugin.icon,
-          className: 'context-menu-item launch-add-item',
-          onClick: () => addStep(Plugin.id)
+          text: 'Plugins…',
+          icon: 'fa-puzzle-piece',
+          className: 'context-menu-item launch-add-item launch-add-plugins',
+          onClick: () => {
+            closeMenu()
+            return onPlugins()
+          }
         })
         item.setAttribute('role', 'menuitem')
-        item.dataset.plugin = Plugin.id
+        item.dataset.action = 'plugins'
         menu.append(item)
       }
       menu.hidden = !menu.children.length
       add.setAttribute('aria-expanded', String(!menu.hidden))
-      if (!menu.hidden) menu.firstElementChild.focus()
+      if (!menu.hidden) {
+        placeMenu()
+        document.addEventListener('scroll', onScroll, true)
+        menuItems()[0].focus({ preventScroll: true })
+      }
     }
 
     function focusStep(index) {
@@ -310,7 +384,7 @@
 
     function addStep(id) {
       const Plugin = launch.plugin(id)
-      if (!Plugin || !launch.addable(steps, env).includes(Plugin)) return false
+      if (!Plugin || !offered().includes(Plugin)) return false
       steps.push(new Plugin())
       render()
       focusStep(steps.length - 1)
@@ -339,7 +413,7 @@
       }
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
       event.preventDefault()
-      const items = Array.from(menu.children)
+      const items = menuItems()
       const at = items.indexOf(document.activeElement)
       const next = (at + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length
       items[next].focus()
@@ -354,11 +428,11 @@
       root,
       steps: () => [...steps],
       serialize: () => launch.serialize(steps),
-      compile: () => launch.compile(steps, env),
+      compile: () => launch.compile(steps, named()),
       // Shows the chain's first problem and puts the cursor on it; true when
       // there is none.
       check() {
-        const problem = launch.firstError(steps, env)
+        const problem = launch.firstError(steps, named())
         if (!problem) return true
         setError(problem.message)
         focusStep(problem.index)
@@ -367,6 +441,11 @@
       // Host facts arrive after the dialog opened.
       setEnv(next) {
         env = next || {}
+        refresh()
+      },
+      // The Plugins dialog changed what "+ Add" offers, or loaded plugins.
+      refresh() {
+        if (!menu.hidden) openMenu()
         refresh()
       },
       add: addStep,
@@ -382,11 +461,13 @@
             config: step.getConfig(),
             removable: launch.canRemove(steps, index, env)
           })),
-          addable: launch.addable(steps, env).map((Plugin) => Plugin.id),
+          addable: offered().map((Plugin) => Plugin.id),
           menuOpen: !menu.hidden,
-          menu: Array.from(menu.children).map((item) => item.textContent.trim()),
+          menu: Array.from(menu.children).map((item) =>
+            item.getAttribute('role') === 'separator' ? '-' : item.textContent.trim()
+          ),
           error: error.hidden ? '' : error.textContent,
-          launch: launch.compile(steps, env)
+          launch: launch.compile(steps, named())
         }
       }
     }

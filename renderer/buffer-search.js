@@ -20,9 +20,18 @@
 // - Case-insensitive: each character is folded to lower case only when its
 //   lower case has the same length (`İ` is kept as is), so string offsets in
 //   the folded text are the cells' offsets. Non-overlapping occurrences.
+// - Options (261121 R15, both off by default): `caseSensitive` compares the
+//   text as written; `wholeWord` keeps an occurrence only when no letter,
+//   digit or `_` touches it - checked at each end of the query that is itself
+//   a word character, so "-x" still matches in "a-x".
 // - An empty or all-whitespace query is refused: `{ count: 0, matches: [] }`.
 //
-// scanBuffer(buffer, query, { from, to, lines, limit }) reads the logical
+// findInText(text, query, { caseSensitive, wholeWord }) is the same matcher
+// on one string: the offsets of its non-overlapping occurrences (the session
+// names of the list, engine/catalog.js and the renderer's cyan marks).
+//
+// scanBuffer(buffer, query, { from, to, lines, limit, caseSensitive,
+// wholeWord }) reads the logical
 // lines that start in rows [from, to) - at most `lines` of them - and returns
 // { count, matches, next, lines }:
 //   count    every match in those lines (exact, never capped);
@@ -48,6 +57,53 @@
       out += lower.length === ch.length ? lower : ch
     }
     return out
+  }
+
+  const WORD_CHAR = /[\p{L}\p{N}_]/u
+
+  function isWordChar(ch) {
+    return ch !== '' && WORD_CHAR.test(ch)
+  }
+
+  // The whole character just before / at a string offset ('' at an end).
+  function charBefore(text, at) {
+    if (at <= 0) return ''
+    const unit = text.charCodeAt(at - 1)
+    if (unit >= 0xdc00 && unit <= 0xdfff && at >= 2) return text.slice(at - 2, at)
+    return text[at - 1]
+  }
+
+  function charAt(text, at) {
+    const point = text.codePointAt(at)
+    return point === undefined ? '' : String.fromCodePoint(point)
+  }
+
+  // The offsets of `needle`'s non-overlapping occurrences in `hay`, both
+  // already folded (or not) alike.
+  function occurrences(hay, needle, wholeWord) {
+    const offsets = []
+    const checkStart = wholeWord && isWordChar(charAt(needle, 0))
+    const checkEnd = wholeWord && isWordChar(charBefore(needle, needle.length))
+    let at = hay.indexOf(needle)
+    while (at !== -1) {
+      const end = at + needle.length
+      if (
+        (checkStart && isWordChar(charBefore(hay, at))) ||
+        (checkEnd && isWordChar(charAt(hay, end)))
+      ) {
+        at = hay.indexOf(needle, at + 1)
+        continue
+      }
+      offsets.push(at)
+      at = hay.indexOf(needle, end)
+    }
+    return offsets
+  }
+
+  function findInText(text, query, opts = {}) {
+    if (typeof query !== 'string' || query.trim() === '' || typeof text !== 'string') return []
+    const fold = opts.caseSensitive ? (value) => value : foldText
+    return occurrences(fold(text), fold(query), !!opts.wholeWord)
   }
 
   // A wide character that did not fit at the end of a row leaves that row's
@@ -151,7 +207,9 @@
     let row = Math.max(0, Number.isFinite(opts.from) ? opts.from : 0)
     const maxLines = Number.isFinite(opts.lines) && opts.lines > 0 ? opts.lines : Infinity
     const limit = Number.isFinite(opts.limit) ? Math.max(0, opts.limit) : DEFAULT_LIMIT
-    const needle = foldText(query)
+    const fold = opts.caseSensitive ? (value) => value : foldText
+    const wholeWord = !!opts.wholeWord
+    const needle = fold(query)
     const cell = buffer.getNullCell()
     let count = 0
     let lines = 0
@@ -174,14 +232,10 @@
       row = Math.max(logical.next, start + 1)
       lines++
       if (logical.text.length < needle.length) continue
-      const hay = foldText(logical.text)
-      const offsets = []
-      let at = hay.indexOf(needle)
-      while (at !== -1) {
-        count++
-        if (limit > 0) offsets.push(at)
-        at = hay.indexOf(needle, at + needle.length)
-      }
+      const hay = fold(logical.text)
+      const all = occurrences(hay, needle, wholeWord)
+      count += all.length
+      const offsets = limit > 0 ? all : []
       if (!offsets.length) continue
       found.push({ start, rowStarts: logical.rowStarts, length: hay.length, offsets })
       held += offsets.length
@@ -206,11 +260,12 @@
     return { count, matches, next: row, lines }
   }
 
-  const api = { scanBuffer, foldText, DEFAULT_LIMIT }
+  const api = { scanBuffer, findInText, foldText, DEFAULT_LIMIT }
   if (typeof module === 'object' && module && module.exports) {
     module.exports = api
   }
   if (typeof window === 'object' && window) {
     window.zbtermScanBuffer = scanBuffer
+    window.zbtermFindInText = findInText
   }
 })()
