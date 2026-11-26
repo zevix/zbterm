@@ -18,7 +18,7 @@
     }
 
     getUI(ui) {
-      const remote = ui.context().scope.kind !== 'local'
+      const remote = ui.context().scope.machine.kind !== 'local'
       return ui.input({
         name: 'command',
         placeholder: remote ? 'remote login shell' : 'default shell',

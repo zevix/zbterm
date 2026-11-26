@@ -219,12 +219,74 @@ function save(choice = {}) {
   return writeChoice(target, choice)
 }
 
+// The "zbterm-plugin" Claude skill (renderer/plugins/skill/): how to write,
+// check, install and enable a command plugin. The Plugins dialog installs it
+// for the user's Claude Code, as ~/.claude/skills/zbterm-plugin/ (under
+// $CLAUDE_CONFIG_DIR when that is set): the skill's own files, and in `lib/`
+// the launch plugins its script loads (launch-core.js, the built-ins, the
+// samples), so it works without ZBTerm's sources. Installing again replaces
+// the files it ships and leaves any other file there alone.
+const SKILL_NAME = 'zbterm-plugin'
+const PLUGINS_DIR = path.join(__dirname, '..', 'renderer', 'plugins')
+const SKILL_DIR = path.join(PLUGINS_DIR, 'skill')
+
+function skillTarget(env = process.env, home = os.homedir()) {
+  const base = env.CLAUDE_CONFIG_DIR || path.join(home, '.claude')
+  return path.join(base, 'skills', SKILL_NAME)
+}
+
+// [from (absolute), to (relative to the installed skill)]
+function skillFiles() {
+  const files = []
+  const walk = (from, to) => {
+    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue
+      const source = path.join(from, entry.name)
+      const dest = to ? path.join(to, entry.name) : entry.name
+      if (entry.isDirectory()) walk(source, dest)
+      else if (entry.isFile()) files.push([source, dest])
+    }
+  }
+  walk(SKILL_DIR, '')
+  const scripts = (dir) =>
+    fs
+      .readdirSync(dir)
+      .filter((file) => file.endsWith('.js'))
+      .sort()
+  for (const file of scripts(PLUGINS_DIR)) {
+    files.push([path.join(PLUGINS_DIR, file), path.join('lib', file)])
+  }
+  for (const file of scripts(SAMPLES_DIR)) {
+    files.push([path.join(SAMPLES_DIR, file), path.join('lib', 'samples', file)])
+  }
+  return files
+}
+
+// { dir, displayDir, files, updated }: `updated` when a skill was there.
+function installSkill(target = skillTarget()) {
+  const updated = fs.existsSync(path.join(target, 'SKILL.md'))
+  const files = skillFiles()
+  for (const [from, to] of files) {
+    const into = path.join(target, to)
+    fs.mkdirSync(path.dirname(into), { recursive: true })
+    // Through a temp file: a link left at `into` is replaced, not followed.
+    const temp = path.join(path.dirname(into), `.${path.basename(into)}.${process.pid}.tmp`)
+    fs.copyFileSync(from, temp)
+    fs.chmodSync(temp, to.startsWith('scripts' + path.sep) ? 0o755 : 0o644)
+    fs.renameSync(temp, into)
+  }
+  return { dir: target, displayDir: displayDir(target), files: files.length, updated }
+}
+
 module.exports = {
   configure,
   dir,
   list,
   save,
+  installSkill,
   _test: {
+    skillTarget,
+    skillFiles,
     seed,
     readChoice,
     readChoiceState,

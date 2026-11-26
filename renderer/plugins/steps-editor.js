@@ -242,6 +242,9 @@
         row.dataset.plugin = Plugin.id
         row.dataset.index = String(index)
         row.dataset.scope = trace[index].kind
+        // Indented once per scope the step runs inside (SSH, a wrapper).
+        row.dataset.depth = String(trace[index].depth - 1)
+        row.style.setProperty('--launch-depth', String(trace[index].depth - 1))
         const label = el('label', 'session-editor-label', `${step.label()}:`)
         const body = el('div', 'launch-step-body')
         const controls = step.getUI(toolkit(step)) || el('span')

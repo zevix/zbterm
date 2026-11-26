@@ -99,6 +99,55 @@ test('engine extends a recorded local session with a new live shell', async (t) 
   }
 })
 
+// 261125 P2b: each recorded packet rewrote the whole timeline.json.
+test('engine writes a live session timeline.json at most once a second, and in full at close', async (t) => {
+  const dir = await temp()
+  const engine = new SessionEngine({ userData: dir, ptyHost: new PtyHost() })
+  await engine.ready()
+  const rename = fs.promises.rename
+  const writes = []
+  let timelinePath = null
+  fs.promises.rename = function (from, to) {
+    if (to === timelinePath) writes.push(Date.now())
+    return rename.apply(this, arguments)
+  }
+
+  try {
+    const created = await engine.invoke('session.create', { name: 'burst', cols: 80, rows: 24 })
+    const store = engine.sessions.get(created.sessionId).store
+    timelinePath = path.join(store.dir, 'timeline.json')
+    const before = store.log.length
+    const started = Date.now()
+    let resizes = 0
+    // Every resize is a recorded packet with its own timeline entry.
+    while (Date.now() - started < 2500) {
+      await engine.invoke('session.resize', {
+        sessionId: created.sessionId,
+        cols: 80 + (resizes++ % 20),
+        rows: 24
+      })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const elapsed = Date.now() - started
+    t.ok(store.log.length - before >= resizes, `${resizes} resizes recorded`)
+    t.ok(
+      writes.length <= Math.ceil(elapsed / 1000) + 1,
+      `${writes.length} writes of timeline.json in ${elapsed} ms`
+    )
+
+    const length = store.log.length
+    await engine.invoke('session.close', { sessionId: created.sessionId })
+    await waitFor(() => !engine.sessions.has(created.sessionId))
+    const file = JSON.parse(await fs.promises.readFile(timelinePath, 'utf8'))
+    t.alike(file, store.timeline, 'the file equals the in-memory timeline after close')
+    t.ok(file[file.length - 1].seq >= length, 'and holds every recorded packet')
+  } finally {
+    fs.promises.rename = rename
+    await engine.close().catch(() => {})
+    await fs.promises.rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('engine revives an extended session at its last grid and font size, across a restart', async (t) => {
   const dir = await temp()
   let engine = new SessionEngine({ userData: dir, ptyHost: new PtyHost() })

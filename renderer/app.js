@@ -9,6 +9,9 @@
   const api = window.zbterm
   // renderer/time-collapse.js, loaded before this file.
   const timeCollapse = window.zbtermTimeCollapse
+  // renderer/session-keys.js: the Ctrl+R / Ctrl+D guard and the neighbour
+  // shown after a delete by key (261125_speed-and-keys R3, R5, U1).
+  const sessionKeys = window.zbtermSessionKeys
   // renderer/plugins/, loaded before this file: the launch plugins a session
   // is composed of, and what they may ask about this machine (the platform,
   // each plugin's probe), which the main process answers once.
@@ -124,7 +127,7 @@
 
   const SCRUBBER_STEPS = 1000
   const TOAST_MS = 6000
-  const RESUME_HINT_TOAST = 'Press ^R or Enter to resume the session'
+  const RESUME_HINT_TOAST = 'Press ^R or Enter to resume the session, ^D to delete it'
   // Touchpad travel (in pixels) that counts as one Alt+wheel frame step.
   const FRAME_STEP_WHEEL_PX = 50
   // A join the share backend gave up on, in words (freenet-backend F9).
@@ -281,6 +284,12 @@
   const TIME_COLLAPSE_REBUILD_MS = 1000
   // Live output closer together than this is one burst to the collapse map.
   const LIVE_POINT_MERGE_MS = 100
+  // 261125_speed-and-keys P2: while the selected session prints, the
+  // scrubber's marks are redrawn at most this often (and once per frame
+  // otherwise), with a trailing redraw after the last chunk.
+  const SCRUBBER_OUTPUT_THROTTLE_MS = 250
+  // Gaps shorter than this are never idle marks (idleSegments' floor).
+  const IDLE_MIN_GAP_MS = 5000
   const WHEEL_SCRUB_SENSITIVITY = 0.1
   const ZBTERM_JOIN_PREFIX = 'zbterm://join/'
   const IDENTITY_POPUP_ID = 'identity-setup'
@@ -329,15 +338,18 @@
   const MIN_FIT_ROWS = 3
   const STARTUP_LOGO_ROWS = 30
   const STARTUP_LOGO_DELAY_MS = 0.75
-  const STARTUP_LOGO_SHADE = 105
   const MAX_GROUP_VIEWERS = 99
-  const STARTUP_LOGO_RAW_LINES = window.STARTUP_LOGO_RAW_LINES
-  const STARTUP_LOGO_LINES = paddedLogoLines(STARTUP_LOGO_RAW_LINES)
+  // The mark is a grid of square pixels (renderer/logo-ascii.js). A terminal
+  // cell is about twice as tall as it is wide, so each cell shows two of them,
+  // one above the other, as a half-block glyph: STARTUP_LOGO_LINES holds one
+  // ready-made escape sequence per cell.
+  const STARTUP_LOGO_LINES = logoCellLines(
+    window.STARTUP_LOGO_RAW_LINES,
+    window.STARTUP_LOGO_CELLS,
+    window.STARTUP_LOGO_COLORS
+  )
   const STARTUP_LOGO_WIDTH = Math.max(...STARTUP_LOGO_LINES.map((line) => line.length))
-  const STARTUP_LOGO_GREEN_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.green)
   const STARTUP_LOGO_GREEN_FG = hexToAnsiFg(window.STARTUP_LOGO_COLORS.green)
-  const STARTUP_LOGO_BLUE_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.blue)
-  const STARTUP_LOGO_BLACK_BG = hexToAnsiBg(window.STARTUP_LOGO_COLORS.black)
   // One source for the logo's green and the search cursor's border (261114 R10).
   document.documentElement.style.setProperty('--logo-green', window.STARTUP_LOGO_COLORS.green)
 
@@ -375,6 +387,15 @@
     // "Current session" section keeps while the arrows walk the list.
     searchCursor: null,
     searchAnchorId: null,
+    // 261125_speed-and-keys R6-R11: the search state. Set when the box takes
+    // the focus, cleared only by an exit (Esc, the terminal taking the focus,
+    // a new or joined session, Ctrl+1..9). While it is set the focus is in
+    // the box, or in a dialog or menu opened meanwhile.
+    searchActive: false,
+    // An error shown in the status line outranks the search line until the
+    // next key (design F14).
+    statusErrorShown: false,
+    searchStatusTimer: null,
     // "Input blocked" flashes so far (the debug server's search-state).
     inputBlockedFlashes: 0,
     sessionBufferSearchTimer: null,
@@ -395,8 +416,10 @@
     availability: { availableLength: 0, logLength: 0, gaps: [] },
     timelineSignal: {
       timeline: null,
+      length: 0,
       startTs: 0,
       activity: null,
+      activityLength: 0,
       history: null,
       historyAvailableLength: -1
     },
@@ -413,8 +436,23 @@
       builtAt: 0
     },
     // Output times of the live session since its timeline was loaded, for the
-    // collapse map: in live mode state.timeline does not grow (R5).
+    // collapse map (R5): in live mode state.timeline grows only when the
+    // cached one catches up after a quiet moment (P3).
     liveTimeline: { points: [], version: 0 },
+    // 261125_speed-and-keys P2: what the scrubber needs from the timeline,
+    // computed once per timeline array (reset in setTimeline, extended when
+    // the same array has grown): `hd` (sessionHasHd), the idle candidates
+    // (idleSegments) and the collapse map's sorted points (getTimeCollapseMap).
+    timelineDerived: {
+      timeline: null,
+      hdLength: 0,
+      hd: false,
+      idle: null,
+      collapse: null
+    },
+    // The scheduled scrubber redraw: a pending frame or timer, when it last
+    // ran and when the selected live session last printed.
+    scrubberDraw: { frame: 0, fallback: 0, timer: 0, lastRunAt: -Infinity, outputAt: -Infinity },
     // The time-label tip's text as last written (R4).
     timeLabelTipText: '',
     timeLabelTotalMs: 0,
@@ -429,6 +467,19 @@
     playbackClockTs: 0,
     playbackPlaying: false,
     playerReady: false,
+    // 261125_speed-and-keys P3: each session's timeline as fetched in slices
+    // after a lazy open, { entries, fetching, length } (length: the engine's
+    // as last heard); the only writer of a session's timeline (design F3-F6).
+    timelineCache: new Map(),
+    // A switch's generation: an await in selectSession, openPlayback or a
+    // timeline fetch whose switch is no longer the newest returns (U3).
+    switchSeq: 0,
+    // The session the newest switch asked for, until it is drawn: a held
+    // Ctrl+PgDn steps on from it, not from the one still drawing (U3).
+    switchTarget: null,
+    // The session whose frame was last drawn after a switch: Ctrl+R and
+    // Ctrl+D do nothing until the switch's target is drawn (design F1).
+    drawnId: null,
     startupPhase: 'booting',
     startupError: null,
     terminalStarting: null,
@@ -1157,10 +1208,6 @@
     const version = ++state.startupLogoVersion
     fitStartupLogoTerminal()
 
-    const slate = `\x1b[48;2;${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE}m`
-    const black = STARTUP_LOGO_BLACK_BG
-    const green = STARTUP_LOGO_GREEN_BG
-    const blue = STARTUP_LOGO_BLUE_BG
     const greenText = STARTUP_LOGO_GREEN_FG
     const blockHeight = STARTUP_LOGO_LINES.length + 3
     const startRow = Math.max(1, Math.floor((STARTUP_LOGO_ROWS - blockHeight) / 2) + 1 - 2)
@@ -1168,11 +1215,9 @@
     const cellsToDraw = []
 
     for (let rowIndex = 0; rowIndex < STARTUP_LOGO_LINES.length; rowIndex++) {
-      const cells = STARTUP_LOGO_LINES[rowIndex].padEnd(STARTUP_LOGO_WIDTH, '.')
+      const cells = STARTUP_LOGO_LINES[rowIndex]
       for (let colIndex = 0; colIndex < cells.length; colIndex++) {
-        const char = cells[colIndex]
-        const color = char === '-' ? slate : char === 'G' ? green : char === 'B' ? blue : black
-        cellsToDraw.push(`\x1b[${startRow + rowIndex};${startCol + colIndex}H${color} \x1b[0m`)
+        cellsToDraw.push(`\x1b[${startRow + rowIndex};${startCol + colIndex}H${cells[colIndex]}`)
       }
     }
     if (clear) await writeTerminal(`${TERMINAL_CLEAR}\x1b[?25l`)
@@ -1202,10 +1247,29 @@
     return writeTerminal(`\x1b[${row};${col}H${color}${text}\x1b[0m`)
   }
 
-  function paddedLogoLines(lines) {
+  // Pairs the mark's pixel rows into terminal rows: one escape sequence per
+  // cell, painting the upper pixel as the glyph's foreground and the lower one
+  // as its background. A transparent pixel leaves the terminal's own background.
+  function logoCellLines(lines, cells, colors) {
+    const hex = (char) => (cells[char] ? colors[cells[char]] : null)
     const width = Math.max(...lines.map((line) => line.length))
-    const blackLine = '.'.repeat(width + 4)
-    return [blackLine, ...lines.map((line) => `..${line.padEnd(width, '.')}..`), blackLine]
+    const out = []
+    for (let y = 0; y < lines.length; y += 2) {
+      const upper = lines[y].padEnd(width, ' ')
+      const lower = (lines[y + 1] || '').padEnd(width, ' ')
+      const row = []
+      for (let x = 0; x < width; x++) {
+        const top = hex(upper[x])
+        const bottom = hex(lower[x])
+        if (!top && !bottom) row.push(`${ANSI_RESET} `)
+        else if (top === bottom) row.push(`${hexToAnsiBg(top)} ${ANSI_RESET}`)
+        else if (!bottom) row.push(`${hexToAnsiFg(top)}\u2580${ANSI_RESET}`)
+        else if (!top) row.push(`${hexToAnsiFg(bottom)}\u2584${ANSI_RESET}`)
+        else row.push(`${hexToAnsiFg(top)}${hexToAnsiBg(bottom)}\u2580${ANSI_RESET}`)
+      }
+      out.push(row)
+    }
+    return out
   }
 
   function hexToAnsiBg(hex) {
@@ -1335,10 +1399,6 @@
   }
 
   function devLogoText(cols = STARTUP_LOGO_COLS) {
-    const slate = `\x1b[48;2;${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE};${STARTUP_LOGO_SHADE}m`
-    const black = STARTUP_LOGO_BLACK_BG
-    const green = STARTUP_LOGO_GREEN_BG
-    const blue = STARTUP_LOGO_BLUE_BG
     const terminalCols = Number.isFinite(cols) ? Math.floor(cols) : STARTUP_LOGO_COLS
     const lineWidth = Math.max(1, Math.min(STARTUP_LOGO_WIDTH, terminalCols - 1))
     const cropStart = Math.max(0, Math.floor((STARTUP_LOGO_WIDTH - lineWidth) / 2))
@@ -1347,19 +1407,9 @@
       `${' '.repeat(
         Math.max(0, Math.floor((terminalCols - Math.min(text.length, lineWidth)) / 2))
       )}${text.slice(0, lineWidth)}`
-    const logo = STARTUP_LOGO_LINES.map((line) => {
-      const visibleLine = line
-        .padEnd(STARTUP_LOGO_WIDTH, '.')
-        .slice(cropStart, cropStart + lineWidth)
-      let out = leftPad
-      for (const char of visibleLine) {
-        if (char === '-') out += `${slate} ${ANSI_RESET}`
-        else if (char === 'G') out += `${green} ${ANSI_RESET}`
-        else if (char === 'B') out += `${blue} ${ANSI_RESET}`
-        else out += `${black} ${ANSI_RESET}`
-      }
-      return out
-    })
+    const logo = STARTUP_LOGO_LINES.map(
+      (cells) => leftPad + cells.slice(cropStart, cropStart + lineWidth).join('')
+    )
     return [
       ...logo,
       '',
@@ -1391,35 +1441,59 @@
       event.preventDefault()
       els.search.select()
     })
-    els.search.addEventListener('blur', () => {
+    // 261125_speed-and-keys R6, F9: the box's blur while the search is on,
+    // when the focus lands neither in the terminal (its focusin ends the
+    // search) nor in a dialog or menu, puts the focus back in the box.
+    els.search.addEventListener('blur', (event) => {
       state.searchRestoreSelect = false
+      if (state.searchActive) {
+        const to = event.relatedTarget
+        if (!(to && els.terminal && els.terminal.contains(to))) scheduleSearchFocusReturn()
+      }
       syncSearchMode()
+    })
+    els.search.addEventListener('focus', () => {
+      if (!state.searchActive) {
+        state.searchActive = true
+        // The status line names the search from its first moment (R9).
+        updateSearchCount()
+      }
     })
     els.search.addEventListener('focus', syncSearchMode)
     els.search.addEventListener('input', syncSearchMode)
-    // The box's keys (R2, R3), left alone while an IME composes: Enter and
-    // Shift+Enter step through the matches, Esc clears (instead of
-    // type=search's own clear, so it happens in one place).
+    // R6: the terminal taking the focus (a click, a program's own focus)
+    // ends the search, its text kept for the box's next focus. clearSearch
+    // drops the flag before it focuses the terminal, so this cannot recurse.
+    if (els.terminal) {
+      els.terminal.addEventListener('focusin', () => {
+        if (state.searchActive) leaveSearchForTerminal()
+      })
+    }
+    // A dialog opened from search was closed (its overlay removed): the
+    // focus goes back to the box (R7).
+    if (window.MutationObserver) {
+      new window.MutationObserver((records) => {
+        if (!state.searchActive) return
+        if (records.some((record) => record.removedNodes.length)) scheduleSearchFocusReturn()
+      }).observe(document.body, { childList: true })
+    }
+    // The box's keys (R2, R3, 261125 R8), left alone while an IME composes:
+    // Enter and Shift+Enter step through the matches and nothing else (no
+    // resume, Q-1), Esc ends the search (instead of type=search's own clear,
+    // so it happens in one place), Up/Down walk the profiles.
     els.search.addEventListener('keydown', (event) => {
       state.searchRestoreSelect = false
-      if (event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        // 261115 R10: while the resume toast offers it, Enter resumes the
-        // offline session the walk is on, as ^R does; else it steps matches.
-        if (!event.shiftKey && state.toasts.has('resume-hint') && isOfflineResumable()) {
-          extendSession({ keepFocus: true }).catch(showError)
-          return
-        }
-        stepMatch(event.shiftKey ? -1 : 1).catch(showError)
-      } else if (event.key === 'Escape' && !event.shiftKey) {
-        event.preventDefault()
+      const action = sessionKeys.searchBoxKey(event)
+      if (!action) return
+      event.preventDefault()
+      if (action === 'older' || action === 'newer') {
+        stepMatch(action === 'newer' ? -1 : 1).catch(showError)
+      } else if (action === 'exit') {
         clearSearch()
-      } else if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !event.shiftKey) {
+      } else {
         // 261114 R10: the arrows move the selection through the list as
         // drawn; the caret never moves, also when nothing can move (U3).
-        event.preventDefault()
-        moveSearchSelection(event.key === 'ArrowDown' ? 1 : -1).catch(showError)
+        moveSearchSelection(action === 'next' ? 1 : -1).catch(showError)
       }
     })
     els.activeOnly.addEventListener('click', async () => {
@@ -1507,7 +1581,11 @@
     els.playPause.addEventListener('click', guard(togglePlay))
     els.speed.addEventListener('change', guard(changePlaybackSpeed))
     els.terminal.addEventListener('contextmenu', openTerminalMenu)
-    els.terminal.addEventListener('auxclick', guard(handleTerminalAuxClick))
+    // The press in the capture phase, before xterm's mousedown decides whether
+    // to report it; the release on the window, wherever it ends.
+    els.terminal.addEventListener('mousedown', terminalMiddleClick.mousedown, true)
+    window.addEventListener('mouseup', terminalMiddleClick.mouseup, true)
+    els.terminal.addEventListener('auxclick', guard(terminalMiddleClick.auxclick))
     document.addEventListener('pointerdown', (event) => {
       if (els.sizeLockMenu && !els.sizeLockMenu.hidden) {
         const onButton = event.target && event.target.closest && event.target.closest('#sizeLock')
@@ -1543,6 +1621,12 @@
     document.addEventListener(
       'keydown',
       (event) => {
+        // An error in the status line stays until the next key (F14); the
+        // search line, while the search is on, comes back after it.
+        if (state.statusErrorShown) {
+          state.statusErrorShown = false
+          if (state.searchActive) scheduleSearchStatus(0)
+        }
         if (isSearchHotkey(event)) {
           // As the side-pane key: with a dialog open it is left alone, not
           // acted on and not swallowed (261111_buffer-search U1).
@@ -1567,7 +1651,11 @@
           if (sidePaneBlocked()) return
           event.preventDefault()
           event.stopPropagation()
-          if (!event.repeat) guard(() => startNewSession(keyTrigger.id, els.newSession))()
+          if (event.repeat) return
+          // 261125 R6, F11: a new session ends the search first, so the
+          // keys typed next reach its shell, not the box.
+          endSearchForTerminal()
+          guard(() => startNewSession(keyTrigger.id, els.newSession))()
           return
         }
         const pinKey = pinShortcutKey(event)
@@ -1579,7 +1667,10 @@
           if (session && !sidePaneBlocked()) {
             event.preventDefault()
             event.stopPropagation()
-            if (!event.repeat) selectSession(session).catch(showError)
+            if (event.repeat) return
+            // 261125 R6, F11: an exit from the search; the terminal gets the focus.
+            endSearchForTerminal()
+            selectSession(session).catch(showError)
             return
           }
         }
@@ -1625,17 +1716,33 @@
             if (!event.repeat) showQuitPopup().catch(showError)
             return
           }
-          if (!event.shiftKey && String(event.key).toLowerCase() === 'r' && isOfflineResumable()) {
+          const offlineKey = !event.shiftKey && String(event.key).toLowerCase()
+          if (
+            (offlineKey === 'r' || offlineKey === 'd') &&
+            !sidePaneBlocked() &&
+            (offlineKeyTarget() || switchOntoClosedUndrawn())
+          ) {
+            // A dialog owns the window: both keys are left alone then. While
+            // a switch onto a closed session is not drawn, both do nothing
+            // (design F1); a held key acts once (F2).
             event.preventDefault()
             event.stopPropagation()
-            // From the search box (261114 R15) the focus and the arrow walk stay there.
-            extendSession({ keepFocus: document.activeElement === els.search }).catch(showError)
+            const target = offlineKeyTarget()
+            if (!target || event.repeat) return
+            // 261125 R7: in search the focus stays in the box.
+            const keepFocus = state.searchActive
+            if (offlineKey === 'r') {
+              // From the search box (261114 R15) the focus and the arrow walk stay there.
+              extendSession({ keepFocus }).catch(showError)
+            } else {
+              deleteSessionByKey(target, { keepFocus }).catch(showError)
+            }
             return
           }
           if (event.key === 'PageUp' || event.key === 'PageDown') {
             event.preventDefault()
             event.stopPropagation()
-            if (document.activeElement === els.search) {
+            if (state.searchActive) {
               // 261114 R14: in the search box they are Up and Down.
               if (!event.shiftKey) {
                 moveSearchSelection(event.key === 'PageUp' ? -1 : 1).catch(showError)
@@ -1781,10 +1888,17 @@
       hideTerminalPending()
       noteLiveOutput()
       takeLiveChunk({ sessionId, hd, end, data: bytes })
+      // The scrubber follows the output at most every SCRUBBER_OUTPUT_THROTTLE_MS
+      // (261125_speed-and-keys P2): its redraw is what slowed the echo.
+      state.scrubberDraw.outputAt = performance.now()
       updateLiveClock()
     })
     // A restarted core counts positions from 0 again.
-    api.on('engine:restarting', () => state.liveStream.clear())
+    api.on('engine:restarting', () => {
+      state.liveStream.clear()
+      // A fetch running across the restart stops applying slices (F5).
+      state.timelineCache = new Map()
+    })
     api.on('session:availability-changed', ({ sessionId }) => {
       scheduleJoinedAvailabilityRefresh(sessionId)
     })
@@ -1803,7 +1917,11 @@
       // extendSession() when it selects the session again.
       if (state.mode === 'live') {
         openPlayback(sessionId)
-          .then(() => showFailedStartNote(sessionId))
+          .then(() => {
+            showFailedStartNote(sessionId)
+            // 261125 R9, F12: the shown session closed: ^R and ^D join the line.
+            if (state.searchActive) updateSearchCount()
+          })
           .catch(showError)
       }
     })
@@ -1829,7 +1947,7 @@
       if (sessionId !== state.selectedId || state.mode !== 'live') return
       state.liveStream.hold(sessionId)
       api
-        .invoke('session.open', { sessionId })
+        .invoke('session.open', { sessionId, timeline: 'lazy' })
         .then((opened) => {
           if (sessionId !== state.selectedId || state.mode !== 'live') return
           state.restoring = !!opened.restoring
@@ -3010,7 +3128,11 @@
       ? state.sessions.filter((session) => session.sessionId !== current.sessionId)
       : state.sessions
     if (current) {
-      els.sessions.append(sessionSectionTitle('Current session'))
+      // 261125 R11: "Current session" only while its row is the one shown;
+      // once the walk has moved off it, "Search started here".
+      els.sessions.append(
+        sessionSectionTitle(sessionKeys.currentHeading(current.sessionId, state.selectedId))
+      )
       els.sessions.append(buildSessionRow(current))
     }
     if (searching && rows.length) els.sessions.append(sessionSectionTitle('Session name matches'))
@@ -3031,6 +3153,8 @@
     if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)
     markSearchCursor()
     noteSessionRowOrder()
+    // 261125 R9, F12: every list redraw redraws the search line.
+    if (state.searchActive) updateSearchCount()
   }
 
   // Last while searching (261113_ui-polish R3): every listed session (the
@@ -3191,7 +3315,7 @@
     row.dataset.sessionId = session.sessionId
     if (session.pending) row.classList.add('pending')
     if (session.sessionId === state.selectedId) row.classList.add('selected')
-    row.addEventListener('click', () => selectSession(session).catch(showError))
+    row.addEventListener('click', () => clickSessionRow(session, row).catch(showError))
     row.addEventListener('contextmenu', (event) => {
       event.preventDefault()
       openProfileMenu(session, { clientX: event.clientX, clientY: event.clientY }).catch(showError)
@@ -4140,6 +4264,40 @@
     note.textContent =
       'Ticked plugins are offered by "+ Add". New or changed files are read when this dialog or a profile dialog opens.'
     body.append(note)
+    // The Claude skill that writes, checks and installs command plugins
+    // (renderer/plugins/skill/), copied to ~/.claude/skills/zbterm-plugin/.
+    const skill = document.createElement('div')
+    skill.className = 'plugins-dialog-skill'
+    const skillButton = document.createElement('button')
+    skillButton.type = 'button'
+    skillButton.className = 'text-btn plugins-dialog-skill-install'
+    skillButton.title =
+      'Teach Claude Code to write command plugins: installs the zbterm-plugin skill'
+    skillButton.innerHTML =
+      '<i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> <span>Install the Claude skill</span>'
+    const skillStatus = document.createElement('span')
+    skillStatus.className = 'plugins-dialog-detail plugins-dialog-skill-status'
+    skillStatus.setAttribute('role', 'status')
+    skillStatus.textContent = 'Lets Claude Code write plugins for you'
+    skillButton.addEventListener('click', () => {
+      skillButton.disabled = true
+      api
+        .invoke('app.commandPlugins.installSkill')
+        .then((done) => {
+          skillStatus.classList.remove('plugins-dialog-error')
+          skillStatus.textContent = `${done.updated ? 'Updated' : 'Installed'} in ${done.displayDir}`
+          skillStatus.title = 'In Claude Code, ask for a ZBTerm plugin or type /zbterm-plugin'
+        })
+        .catch((err) => {
+          skillStatus.classList.add('plugins-dialog-error')
+          skillStatus.textContent = (err && err.message) || String(err)
+        })
+        .finally(() => {
+          skillButton.disabled = false
+        })
+    })
+    skill.append(skillButton, skillStatus)
+    body.append(skill)
     const saved = await showModal({
       title: 'Plugins',
       body,
@@ -5286,12 +5444,15 @@
   const NATIVE_MIDDLE_CLICK_PASTE =
     /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent)
 
-  async function handleTerminalAuxClick(event) {
-    if (event.button !== 1) return
-    if (NATIVE_MIDDLE_CLICK_PASTE) return
-    event.preventDefault()
-    await pasteToTerminal()
-  }
+  // While the program has mouse tracking on (vim's mouse=a, Claude Code), a
+  // middle click is reported to it and nothing is pasted, as in xterm: the
+  // program pastes by itself, so a paste here too arrived twice.
+  // Shift+middle click is not reported and pastes (renderer/middle-click.js).
+  const terminalMiddleClick = window.zbtermMiddleClick.createMiddleClick({
+    getTerm: () => state.term,
+    nativePaste: NATIVE_MIDDLE_CLICK_PASTE,
+    pasteClipboard: () => pasteToTerminal()
+  })
 
   function enablePausedTerminalSelection() {
     const selection = state.term?._core?._selectionService
@@ -5318,16 +5479,26 @@
     await selectSession(session)
   }
 
+  // Ctrl+PgUp/PgDn outside search (261125 R10): the previous/next row as
+  // drawn, the whole list, wrapping (no longer `state.sessions`, which the
+  // box's name filter used to narrow).
   async function switchSessionRelative(delta) {
     if (!state.sessions.length) return
     const selectable = state.sessions.filter((session) => !session.pending)
     if (!selectable.length) return
-    const currentIndex = selectable.findIndex((session) => session.sessionId === state.selectedId)
-    const nextIndex =
-      currentIndex === -1 ? 0 : (currentIndex + delta + selectable.length) % selectable.length
+    const byId = new Map(selectable.map((session) => [session.sessionId, session]))
+    let ids = sessionRowsInOrder()
+      .map((row) => row.id)
+      .filter((id) => byId.has(id))
+    if (!ids.length) ids = selectable.map((session) => session.sessionId)
+    // From the last requested target, not the one still drawing (U3): a held
+    // Ctrl+PgDn ends that many steps on.
+    const target = state.switchTarget
+    const from = target && ids.includes(target) ? target : state.selectedId
     // As the search walk (261114 R15, 261115 R9): an offline session is shown,
     // not resumed; the toast offers ^R or Enter.
-    const next = selectable[nextIndex]
+    const next = byId.get(sessionKeys.wrapStep(ids, from, delta))
+    if (!next) return
     await selectSession(next, { extend: false })
     if (next.sessionId === state.selectedId) revealSessionRow(next.sessionId)
     if (next.sessionId === state.selectedId) {
@@ -5405,6 +5576,8 @@
     // The listed entry, not the create result: a command that failed at once
     // is already inactive there, and selecting it must not extend it again.
     const created = state.sessions.find((item) => item.sessionId === session.sessionId) || session
+    // 261125 R6, F11: creating a session is an exit from the search.
+    endSearchForTerminal()
     await selectSession(created, { extend: false })
     showFailedStartNote(session.sessionId)
     return session
@@ -5413,12 +5586,19 @@
   // Entering a closed session of our own resumes it: the shell comes back and
   // the history keeps growing. Pass `{ extend: false }` to only look at it.
   async function selectSession(session, options = {}) {
+    if (state.perf) perfSwitchBegin(session.sessionId)
+    const seq = ++state.switchSeq
+    state.switchTarget = session.sessionId
+    state.drawnId = null
+    // A run scheduled for the session being left is not drawn (design F8).
+    cancelScrubberIndicators()
     // A click or any other selection ends an arrow-key walk (261114 R10).
     if (!options.keepFocus) {
       state.searchCursor = null
       state.searchAnchorId = null
     }
     await ensureTerminalReady()
+    if (switchStale(seq)) return
     if (session.pending) {
       selectPendingJoin(session)
       return
@@ -5452,7 +5632,8 @@
     renderSessions()
     if (state.term) {
       resetVisibleTerminal()
-      if (!options.keepFocus) state.term.focus()
+      // 261125 R7, F10: while the search is on the box keeps the focus.
+      if (!options.keepFocus && !state.searchActive) state.term.focus()
     }
     hideTerminalPending()
     if (session.active) {
@@ -5466,18 +5647,27 @@
       // Chunks that arrive before the frame is painted are held, then
       // written only past the frame's `through` (261114, design A).
       state.liveStream.hold(session.sessionId)
+      // The timeline is fetched after the draw (261125_speed-and-keys P3):
+      // the cached one meanwhile.
+      showCachedTimeline(session.sessionId)
       let opened
       try {
-        opened = await api.invoke('session.open', { sessionId: session.sessionId })
+        opened = await api.invoke('session.open', {
+          sessionId: session.sessionId,
+          timeline: 'lazy'
+        })
       } catch (err) {
         releaseLiveStream(session.sessionId)
+        if (switchStale(seq)) return
         throw err
       }
-      // Another session was selected meanwhile: this answer is stale.
-      if (state.selectedId !== session.sessionId || state.mode !== 'live') return
+      // Another switch began meanwhile: this answer is stale.
+      if (switchStale(seq) || state.selectedId !== session.sessionId || state.mode !== 'live') {
+        return
+      }
+      noteTimelineLength(session.sessionId, opened.timelineLength)
       state.restoring = !!opened.restoring
       state.hd = !!opened.hd
-      setTimeline(opened.timeline || [])
       state.availability = opened.availability || availabilityFromTimeline()
       configureScrubber({ value: SCRUBBER_STEPS, startTs: session.startedAt, endTs: Date.now() })
       if (opened.frame && opened.frame.data) {
@@ -5498,13 +5688,18 @@
           })
           .catch(() => {})
       }
+      if (!(await finishTimeline(session.sessionId, seq))) return
+      if (state.mode !== 'live') return
+      updateLiveClock()
+      flushScrubberIndicators()
     } else {
       state.restoring = false
-      await openPlayback(session.sessionId)
+      await openPlayback(session.sessionId, seq)
     }
   }
 
-  async function openPlayback(sessionId) {
+  // `seq`: the switch this belongs to; without one it is a switch of its own.
+  async function openPlayback(sessionId, seq = ++state.switchSeq) {
     cancelPendingSeek()
     stopPlaybackClock()
     if (isUnrecordedSession(sessionEntry(sessionId))) {
@@ -5514,39 +5709,184 @@
     clearLiveWrites({ ack: true })
     state.mode = 'playback'
     state.playbackGridLayout = null
+    // Ready once the timeline is in (design F7): until then play, step, seek
+    // and the scrubber are disabled, the frame and its position already shown.
     state.playerReady = false
     setStatus('playback')
+    showCachedTimeline(sessionId)
     updateTransportControls()
     let player
     try {
-      player = await api.invoke('player.open', { sessionId })
+      player = await api.invoke('player.open', { sessionId, timeline: 'lazy' })
     } catch (err) {
+      if (switchStale(seq)) return
       state.playerReady = false
       updateTransportControls()
       throw err
     }
-    state.playerReady = true
-    setTimeline(player.timeline)
+    if (switchStale(seq) || state.selectedId !== sessionId) return
+    noteTimelineLength(sessionId, player.timelineLength)
     state.availability = player.availability || availabilityFromTimeline()
     state.hd = !!player.hd
-    const active = !!(state.currentSession && state.currentSession.active)
-    const activeStartTs = active ? state.currentSession.startedAt : undefined
-    configureScrubber({
-      value: savedScrubberValue(sessionId, {
+    const configure = () => {
+      const active = !!(state.currentSession && state.currentSession.active)
+      const activeStartTs = active ? state.currentSession.startedAt : undefined
+      configureScrubber({
+        value: savedScrubberValue(sessionId, {
+          startTs: activeStartTs,
+          endTs: active ? Date.now() : undefined
+        }),
         startTs: activeStartTs,
         endTs: active ? Date.now() : undefined
-      }),
-      startTs: activeStartTs,
-      endTs: active ? Date.now() : undefined
-    })
+      })
+    }
+    configure()
     const failedStart = state.failedStart && state.failedStart.sessionId === sessionId
     const savedTs = failedStart ? undefined : state.playbackPositions.get(sessionId)
+    let frame = player.frame
     if (savedTs !== undefined && savedTs !== player.frame.tsMs) {
-      const frame = await api.invoke('player.seek', { sessionId, tsMs: savedTs })
-      renderFrame(frame)
-    } else {
-      renderFrame(player.frame)
+      frame = await api.invoke('player.seek', { sessionId, tsMs: savedTs })
+      if (switchStale(seq) || state.selectedId !== sessionId) return
     }
+    renderFrame(frame)
+    if (!(await finishTimeline(sessionId, seq))) return
+    if (state.mode !== 'playback') return
+    // The timeline is in: the scrubber's range, the shown frame's place on it.
+    configure()
+    const shown = state.playbackFrame || frame
+    state.playerReady = true
+    updatePlaybackClock(shown.tsMs)
+    updateTransportControls()
+    flushScrubberIndicators()
+  }
+
+  function switchStale(seq) {
+    return seq !== state.switchSeq
+  }
+
+  const TIMELINE_SLICE = 10000
+
+  function timelineCacheEntry(sessionId) {
+    let entry = state.timelineCache.get(sessionId)
+    if (!entry) {
+      entry = { entries: [], fetching: null, length: 0 }
+      state.timelineCache.set(sessionId, entry)
+    }
+    return entry
+  }
+
+  // The engine's timeline length as an open or a refresh last said.
+  function noteTimelineLength(sessionId, length) {
+    if (!Number.isFinite(length)) return
+    timelineCacheEntry(sessionId).length = length
+  }
+
+  function timelineBehind(sessionId) {
+    const entry = state.timelineCache.get(sessionId)
+    return !!entry && !entry.fetching && entry.entries.length !== entry.length
+  }
+
+  function timelineComplete(sessionId) {
+    const entry = state.timelineCache.get(sessionId)
+    return !!entry && !entry.fetching && entry.entries.length === entry.length
+  }
+
+  // A switch shows the cached timeline at once (the same array: its scrubber
+  // caches stay), empty when there is none yet.
+  // While its slices come in, the array grows in place under the scrubber,
+  // whose caches extend with it: no pass over the whole timeline at the end.
+  function showCachedTimeline(sessionId) {
+    const entries = timelineCacheEntry(sessionId).entries
+    if (state.timeline !== entries) setTimeline(entries)
+  }
+
+  // The shown timeline is the selected session's cache (not a placeholder).
+  function timelineIsCached() {
+    const entry = state.selectedId ? state.timelineCache.get(state.selectedId) : null
+    return !!entry && state.timeline === entry.entries
+  }
+
+  // The cache brought up to the engine's length: one fetch per session at a
+  // time, from the cached length (a live timeline grows), in slices between
+  // timers. False when a newer switch began or the fetch stopped.
+  async function ensureTimeline(sessionId, seq) {
+    let entry = timelineCacheEntry(sessionId)
+    while (entry.fetching) {
+      await entry.fetching.promise
+      if (switchStale(seq)) return false
+      entry = timelineCacheEntry(sessionId)
+    }
+    const token = {}
+    entry.fetching = token
+    token.promise = runTimelineFetch(sessionId, entry).finally(() => {
+      if (entry.fetching === token) entry.fetching = null
+    })
+    const done = await token.promise
+    return done && !switchStale(seq)
+  }
+
+  // A slice is applied only to the same cache entry (a restart, a clear or a
+  // delete replaces it: F5) and only at `from == length` (F3); the engine
+  // answers `reset` when the cached last entry is not its own (F4). It reads
+  // on until the length of its last answer (F6). Stops when its session is
+  // no longer the shown one.
+  async function runTimelineFetch(sessionId, entry) {
+    try {
+      let first = true
+      while (first || entry.entries.length !== entry.length) {
+        first = false
+        if (state.timelineCache.get(sessionId) !== entry || state.selectedId !== sessionId) {
+          return false
+        }
+        const from = entry.entries.length
+        const last = from ? entry.entries[from - 1] : null
+        const args = { sessionId, from, limit: TIMELINE_SLICE }
+        if (last) {
+          args.lastTsMs = last.tsMs
+          args.lastSeq = last.seq
+        }
+        const slice = await api.invoke('session.timeline', args)
+        if (state.timelineCache.get(sessionId) !== entry) return false
+        const got = Array.isArray(slice.entries) ? slice.entries : []
+        if (slice.reset) entry.entries = got
+        else if (slice.from === entry.entries.length) {
+          for (const item of got) entry.entries.push(item)
+        }
+        entry.length = Number.isFinite(slice.length) ? slice.length : entry.entries.length
+        if (state.selectedId === sessionId) {
+          if (slice.reset && state.timeline !== entry.entries) setTimeline(entry.entries)
+          if (state.timeline === entry.entries) scheduleScrubberIndicators()
+        }
+        if (!slice.reset && !got.length) break
+        if (entry.entries.length < entry.length) await sleep(0)
+      }
+      return entry.entries.length >= entry.length
+    } catch {
+      return false
+    }
+  }
+
+  // After the draw: the cached timeline caught up, then shown. False when a
+  // newer switch began or the session is no longer shown.
+  async function finishTimeline(sessionId, seq) {
+    const done = await ensureTimeline(sessionId, seq)
+    if (switchStale(seq) || state.selectedId !== sessionId) return false
+    // A fetch that failed leaves what it got: the view still opens on it.
+    const entry = state.timelineCache.get(sessionId)
+    if (entry && state.timeline !== entry.entries) setTimeline(entry.entries)
+    if (done && state.perf) perfTimelineDone(sessionId)
+    return true
+  }
+
+  // The shown session's timeline grew in the engine (a live tail, a joined
+  // refresh): the cache catches up without a switch.
+  async function catchUpTimeline(sessionId) {
+    const done = await ensureTimeline(sessionId, state.switchSeq)
+    if (!done || state.selectedId !== sessionId) return false
+    const entry = state.timelineCache.get(sessionId)
+    if (!entry) return false
+    if (state.timeline !== entry.entries) setTimeline(entry.entries)
+    return true
   }
 
   // The session looked up by id: the list's entry, else the open one.
@@ -5572,6 +5912,9 @@
     state.playerReady = false
     state.playbackFrame = null
     if (!wasShownLive && state.term) resetVisibleTerminal()
+    if (state.selectedId === sessionId) state.drawnId = sessionId
+    // 261125 R9, F12: a switch's end redraws the search line.
+    if (state.searchActive) updateSearchCount()
     hideTerminalPending()
     setStatus('ended, not recorded')
     updateTransportControls()
@@ -5588,6 +5931,8 @@
     resetVisibleTerminal()
     const version = state.renderVersion
     state.pendingSelectionRestore = keep
+    const drawnFor = state.selectedId
+    const drawnSeq = state.switchSeq
     if (state.mode === 'playback') {
       state.playbackFrame = frame
       state.liveFrame = null
@@ -5601,6 +5946,9 @@
     }
     state.term.write(frame.data || '', () => {
       refreshTerminal()
+      if (drawnSeq === state.switchSeq && drawnFor === state.selectedId) state.drawnId = drawnFor
+      if (state.searchActive) updateSearchCount()
+      if (state.perf) perfFrameWritten()
       if (version !== state.renderVersion || !keep) return
       state.pendingSelectionRestore = null
       if (selectBufferRange(keep)) state.selectionForced = keep.forced
@@ -5668,7 +6016,12 @@
         return
       }
       resetVisibleTerminal()
-      state.term.write(frame.data || '', refreshTerminal)
+      state.term.write(frame.data || '', () => {
+        refreshTerminal()
+        if (state.selectedId === sessionId) state.drawnId = sessionId
+        if (state.searchActive) updateSearchCount()
+        if (state.perf) perfFrameWritten()
+      })
       const out = state.liveStream.frame(sessionId, frame.through)
       for (const data of out.writes) {
         enqueueLiveWrite({ sessionId, hd: state.hd, data, acked: true })
@@ -5712,7 +6065,7 @@
     state.liveResyncs++
     state.liveStream.hold(sessionId)
     const resync = api
-      .invoke('session.open', { sessionId })
+      .invoke('session.open', { sessionId, timeline: 'lazy' })
       .then((opened) => {
         if (state.selectedId !== sessionId || state.mode !== 'live') return
         if (opened.frame && opened.frame.data) {
@@ -5751,7 +6104,13 @@
       !state.liveResync
     if (!live()) return
     const written = stream.written
-    const opened = await api.invoke('session.open', { sessionId, frame: false })
+    // Lazy (261125_speed-and-keys P3): the whole timeline rode on this every
+    // quiet moment (42 MB at 1M entries). The cached one catches up instead.
+    const opened = await api.invoke('session.open', { sessionId, frame: false, timeline: 'lazy' })
+    noteTimelineLength(sessionId, opened.timelineLength)
+    if (state.selectedId === sessionId && timelineBehind(sessionId)) {
+      catchUpTimeline(sessionId).catch(() => {})
+    }
     if (!live() || !Number.isFinite(opened.position) || opened.position <= written) return
     await sleep(LIVE_TAIL_CHECK_MS)
     if (!live() || stream.written !== written) return
@@ -5793,18 +6152,24 @@
 
   // `anchor` places the confirmation under that button (centred without one);
   // `confirm: false` deletes without asking.
+  // `sessionId` deletes that session (Ctrl+D: the one shown at the keypress)
+  // instead of the selected one; `after` replaces the empty screen shown once
+  // it is deleted. Resolves true when it was deleted.
   async function deleteSession(options = {}) {
-    if (!state.selectedId) return
-    const current = state.sessions.find((s) => s.sessionId === state.selectedId)
+    const targetId = options.sessionId || state.selectedId
+    if (!targetId) return false
+    // 261125 R3, R7: a row outside the box's name filter is named too.
+    const current =
+      state.sessions.find((s) => s.sessionId === targetId) || sessionEntryById(targetId)
     if (current && current.pending) {
       state.pendingJoins = state.pendingJoins.filter((join) => join.sessionId !== current.sessionId)
       state.sessions = state.sessions.filter((session) => session.sessionId !== current.sessionId)
       await showNoSessionSelected()
       renderSessions()
-      return
+      return true
     }
     // A template is never deleted without the warning (U2), Shift or not.
-    const held = triggersOf(await triggersHeldBy(state.selectedId))
+    const held = triggersOf(await triggersHeldBy(targetId))
     if (options.confirm !== false || held.length) {
       const restoreName =
         (held.length && state.templates[held[0].id] && state.templates[held[0].id].copy.name) ||
@@ -5818,21 +6183,71 @@
           ? `"${restoreName}" is the template for new sessions when you ${verbs}. It will be restored as "${restoreName}" the next time you ${verbs}.`
           : ''
       })
-      if (!confirmed) return
+      if (!confirmed) return false
     }
-    const sessionId = state.selectedId
+    const sessionId = targetId
     state.deletingSessionIds.add(sessionId)
     try {
       await api.invoke('session.delete', { sessionId })
     } finally {
       state.deletingSessionIds.delete(sessionId)
+      state.timelineCache.delete(sessionId)
     }
     await releaseDeletedTemplate(sessionId).catch(() => {})
     if (state.pinnedIds.includes(sessionId)) {
       await setPinnedIds(state.pinnedIds.filter((id) => id !== sessionId)).catch(() => {})
     }
     await refreshSessions()
-    await showNoSessionSelected()
+    if (options.after) await options.after(sessionId)
+    else await showNoSessionSelected()
+    return true
+  }
+
+  // Ctrl+D on the closed session shown (R3): the usual confirmation naming
+  // it, then the neighbouring row is shown, not resumed (R5, F13). Cancel
+  // deletes nothing and gives the focus back (U2).
+  async function deleteSessionByKey(sessionId, options = {}) {
+    const keepFocus = !!options.keepFocus
+    const rows = sessionRowsInOrder()
+    const at = keepFocus ? searchCursorIndex(rows) : -1
+    const candidates = sessionKeys.neighbourCandidates(
+      rows.map((row) => row.id),
+      sessionId,
+      at
+    )
+    const focusBack = () => {
+      if (keepFocus && els.search) els.search.focus()
+      else focusPrimaryTarget()
+    }
+    const deleted = await deleteSession({
+      sessionId,
+      after: async (deletedId) => {
+        // The user may have moved on while the confirmation was up.
+        if (state.selectedId && state.selectedId !== deletedId) return
+        // In search the drawn rows go past the box's name filter (P5).
+        const listed = []
+        for (const s of [...state.sessions, ...(state.unfilteredSessions || [])]) {
+          if (!s.pending && !listed.includes(s.sessionId)) listed.push(s.sessionId)
+        }
+        const drawn = sessionRowsInOrder().map((row) => row.id)
+        const nextId = sessionKeys.pickNeighbour(
+          candidates.filter((id) => drawn.includes(id)).concat(candidates),
+          listed,
+          deletedId
+        )
+        const next = nextId && sessionEntryById(nextId)
+        if (!next) {
+          await showNoSessionSelected()
+          return
+        }
+        await selectSession(next, { extend: false, keepFocus })
+        if (next.sessionId !== state.selectedId) return
+        revealSessionRow(next.sessionId)
+        if (isOfflineResumable()) showResumeHint()
+        else dismissToast('resume-hint')
+      }
+    })
+    if (!deleted || keepFocus) focusBack()
   }
 
   async function clearCaches(options = {}) {
@@ -5853,7 +6268,10 @@
     stopPlaybackClock()
     clearLiveWrites({ ack: true })
     clearPlaybackWrites()
+    // The cached timeline is replaced, not emptied: a fetch on it stops (F5).
+    state.timelineCache.delete(sessionId)
     const result = await api.invoke('session.clearCaches', { sessionId })
+    state.timelineCache.delete(sessionId)
     if (sessionId !== state.selectedId) return
     setTimeline(result.timeline || [])
     state.availability = { availableLength: 0, logLength: 0, gaps: [] }
@@ -5861,7 +6279,8 @@
     state.playbackPlaying = false
     configureScrubber({ value: SCRUBBER_STEPS, startTs: Date.now(), endTs: Date.now() })
     if (state.mode === 'live') state.liveStream.hold(sessionId)
-    const opened = await api.invoke('session.open', { sessionId })
+    const opened = await api.invoke('session.open', { sessionId, timeline: 'lazy' })
+    noteTimelineLength(sessionId, opened.timelineLength)
     if (sessionId !== state.selectedId) return
     if (!(opened.active && opened.frame)) releaseLiveStream(sessionId)
     if (opened.active && opened.frame) {
@@ -5881,7 +6300,9 @@
   async function extendSession(options) {
     const keepFocus = !!(options && options.keepFocus === true)
     if (!state.selectedId) return
-    const current = state.sessions.find((s) => s.sessionId === state.selectedId)
+    // 261125 R7: the kept entry too, so a session outside the box's name
+    // filter (a buffer or an unmatched row in search) resumes as well.
+    const current = selectedSessionEntry()
     if (!canExtendSession(current)) return
     const sessionId = state.selectedId
     dismissToast('resume-hint')
@@ -5897,7 +6318,7 @@
       // No geometry: the engine revives the shell at the grid the session was
       // last recorded at (not the playback view's), and selectSession() below
       // restores the font size it was last shown with before fitting.
-      const session = await api.invoke('session.extend', { sessionId })
+      const session = await api.invoke('session.extend', { sessionId, timeline: 'lazy' })
       await refreshSessions()
       const revived = state.sessions.find((item) => item.sessionId === session.sessionId) || session
       // `extend: false`: a command that died before the list refreshed is
@@ -6050,6 +6471,8 @@
       devLog('join link submitted')
     }
     const pending = addPendingJoin(result)
+    // 261125 R6, F11: joining a session is an exit from the search.
+    endSearchForTerminal()
     selectPendingJoin(pending)
     setStatus('joining shared session')
     api
@@ -6618,6 +7041,7 @@
         if (refreshControlsAfterSeek) updateTransportControls()
         else updateTransportControls()
       } else if (refreshControlsAfterSeek) updateTransportControls()
+      if (sessionId === state.selectedId) flushScrubberIndicators()
     }
   }
 
@@ -6710,13 +7134,17 @@
     const startTs = state.playbackStartTs
     const endTs = state.playbackEndTs
     stopPlaybackClock()
+    const seq = state.switchSeq
     state.mode = 'playback'
     state.playerReady = false
     setStatus('playback')
     updateTransportControls()
-    const player = await api.invoke('player.open', { sessionId })
+    const player = await api.invoke('player.open', { sessionId, timeline: 'lazy' })
+    if (switchStale(seq) || state.selectedId !== sessionId) return
+    noteTimelineLength(sessionId, player.timelineLength)
+    if (!(await finishTimeline(sessionId, seq))) return
+    if (state.mode !== 'playback') return
     state.playerReady = true
-    setTimeline(player.timeline)
     state.availability = player.availability || availabilityFromTimeline()
     const value = Number(els.scrubber.value)
     configureScrubber({
@@ -6906,7 +7334,9 @@
     const version = state.liveWrites.version
     state.liveWrites.active = true
     state.hd = hd
+    const echoed = state.perf ? perfEchoTake(chunks) : null
     state.term.write(concatUint8Arrays(chunks, bytes), () => {
+      if (echoed) perfEchoParsed(echoed)
       if (acks) ackSessionData(sessionId, acks)
       if (version !== state.liveWrites.version) return
       state.liveWrites.active = false
@@ -6971,9 +7401,11 @@
     // Timeline and availability only: the screen (a serialised 5000-line
     // mirror) is not used here, and building it every 350 ms during a flood
     // is what timed the worker out.
-    const opened = await api.invoke('session.open', { sessionId, frame: false })
+    const opened = await api.invoke('session.open', { sessionId, frame: false, timeline: 'lazy' })
     if (sessionId !== state.selectedId || !tracksAvailability()) return
-    if (opened.timeline) setTimeline(opened.timeline)
+    noteTimelineLength(sessionId, opened.timelineLength)
+    if (timelineBehind(sessionId)) await catchUpTimeline(sessionId)
+    if (sessionId !== state.selectedId || !tracksAvailability()) return
     state.availability = opened.availability || state.availability
     if (state.currentSession && opened.active !== undefined) {
       state.currentSession.active = !!opened.active
@@ -6991,13 +7423,14 @@
     const now = Date.now()
     state.playbackEndTs = now
     state.playbackClockTs = now
-    if (!state.timeline.length) {
+    if (!state.timeline.length && !timelineIsCached()) {
       setTimeline([{ seq: 0, tsMs: state.currentSession.startedAt || now }])
     }
     if (!tracksAvailability()) state.availability = availabilityFromTimeline()
+    // updateTimeLabels ends in updateTransportControls: once per chunk, not
+    // twice (261125_speed-and-keys P2).
     updateTimeLabels()
     if (!state.seek.dragging) els.scrubber.value = SCRUBBER_STEPS
-    updateTransportControls()
   }
 
   function updateActivePlaybackBounds() {
@@ -7006,7 +7439,9 @@
     const startedAt = state.currentSession.startedAt || state.playbackStartTs || now
     state.playbackStartTs = state.playbackStartTs || startedAt
     state.playbackEndTs = Math.max(state.playbackEndTs, now)
-    if (!state.timeline.length) setTimeline([{ seq: 0, tsMs: startedAt }])
+    if (!state.timeline.length && !timelineIsCached()) {
+      setTimeline([{ seq: 0, tsMs: startedAt }])
+    }
     if (!tracksAvailability()) state.availability = availabilityFromTimeline()
     state.playbackClockTs = clamp(
       state.playbackClockTs || startedAt,
@@ -7093,7 +7528,8 @@
     els.inputMode.hidden = !canShowInputMode || !canOfferSharing
     els.extendSession.hidden = hideSessionActions || !(canExtend || extending)
     els.hdToggle.disabled = !canToggleHd
-    els.scrubber.disabled = !hasSession || unrecorded
+    // 261125_speed-and-keys P3 (F7): a playback's scrubber waits for its timeline.
+    els.scrubber.disabled = !hasSession || unrecorded || (isPlayback && !state.playerReady)
     els.scrubber.title = unrecorded ? 'Not recorded' : ''
     syncUnrecordedDuration(hasSession && unrecorded ? current || state.currentSession : null)
 
@@ -7175,7 +7611,7 @@
     setButtonLabel(els.shareSession, 'fa-share-nodes', 'Share')
     els.shareSession.title = unrecorded ? 'Not recorded' : 'Share session'
     els.stepBack.title = unrecorded ? 'Not recorded' : 'Step back'
-    renderScrubberIndicators()
+    scheduleScrubberIndicators()
     syncOfflineSessionView(hasSession && isPlayback && !!current && !current.active)
     // A live session scrolled back in time gets the same screen, fainter.
     if (els.terminalWrap) {
@@ -7212,6 +7648,28 @@
   function isOfflineResumable() {
     if (state.mode !== 'playback' || !state.selectedId) return false
     return canExtendSession(selectedSessionEntry())
+  }
+
+  // The closed session Ctrl+R / Ctrl+D act on: as isOfflineResumable, and
+  // only once the switch onto it is drawn (design F1). Null: not ours.
+  function offlineKeyTarget() {
+    return sessionKeys.offlineKeyTarget({
+      mode: state.mode,
+      selectedId: state.selectedId,
+      session: selectedSessionEntry(),
+      switchTarget: state.switchTarget,
+      drawnId: state.drawnId
+    })
+  }
+
+  // A switch is still drawing onto a session that is not live: Ctrl+R and
+  // Ctrl+D are swallowed meanwhile, never sent to the session being left.
+  function switchOntoClosedUndrawn() {
+    const target = state.switchTarget || state.selectedId
+    if (!target) return false
+    if (!sessionKeys.switchUndrawn(state)) return false
+    const entry = state.sessions.find((session) => session.sessionId === target)
+    return !(entry && entry.active)
   }
 
   function showResumeHint() {
@@ -7286,8 +7744,21 @@
     }
   }
 
+  // Whether any recorded packet is HD. Runs on every transport update, so it
+  // looks only at entries it has not seen (261125_speed-and-keys P2).
   function sessionHasHd() {
-    return state.timeline.some((item) => item && item.hd)
+    const derived = timelineDerived()
+    const timeline = state.timeline
+    if (timeline.length < derived.hdLength) {
+      derived.hdLength = 0
+      derived.hd = false
+    }
+    for (let i = derived.hdLength; !derived.hd && i < timeline.length; i++) {
+      const item = timeline[i]
+      if (item && item.hd) derived.hd = true
+    }
+    derived.hdLength = timeline.length
+    return derived.hd
   }
 
   // An unrecorded session (design *Refuses*): live only, nothing to play back,
@@ -7483,13 +7954,7 @@
   }
 
   function canExtendSession(session) {
-    return !!(
-      session &&
-      !session.pending &&
-      !session.active &&
-      session.owner !== 'joined' &&
-      !session.isJoined
-    )
+    return sessionKeys.canExtendSession(session)
   }
 
   function addPendingJoin(result = {}) {
@@ -7642,15 +8107,62 @@
     return { availableLength: length, logLength: length, gaps: [] }
   }
 
+  // The scrubber's caches are kept per timeline array (261125_speed-and-keys
+  // P3): a switch back to a session whose cached timeline is the same array
+  // finds them built, instead of a pass over its whole history per switch.
+  const scrubberCaches = new WeakMap()
+
   function setTimeline(timeline) {
     state.timeline = Array.isArray(timeline) ? timeline : []
-    state.timelineSignal.timeline = null
-    state.timelineSignal.activity = null
-    state.timelineSignal.history = null
-    state.timelineSignal.historyAvailableLength = -1
     state.liveTimeline.points = []
     state.liveTimeline.version++
-    invalidateTimeCollapseMap()
+    let caches = scrubberCaches.get(state.timeline)
+    if (!caches) {
+      caches = {
+        signal: {
+          timeline: null,
+          length: 0,
+          startTs: 0,
+          activity: null,
+          activityLength: 0,
+          history: null,
+          historyAvailableLength: -1
+        },
+        derived: { timeline: null, hdLength: 0, hd: false, idle: null, collapse: null },
+        collapse: {
+          map: null,
+          timeline: null,
+          startTs: 0,
+          thresholdMs: 0,
+          liveVersion: -1,
+          liveCount: 0,
+          builtAt: 0
+        }
+      }
+      scrubberCaches.set(state.timeline, caches)
+    }
+    state.timelineSignal = caches.signal
+    state.timelineDerived = caches.derived
+    state.timeCollapseMap = caches.collapse
+    // The live output points start again empty: a kept collapse map stands
+    // only if it took in none.
+    if (caches.collapse.map && caches.collapse.liveCount === 0) {
+      caches.collapse.liveVersion = state.liveTimeline.version
+    } else invalidateTimeCollapseMap()
+  }
+
+  // The scrubber's per-timeline caches (state.timelineDerived), emptied when
+  // state.timeline is another array than the one they were computed from.
+  function timelineDerived() {
+    const derived = state.timelineDerived
+    if (derived.timeline !== state.timeline) {
+      derived.timeline = state.timeline
+      derived.hdLength = 0
+      derived.hd = false
+      derived.idle = null
+      derived.collapse = null
+    }
+    return derived
   }
 
   // Live output of the selected session, for the collapse map (R5).
@@ -9267,12 +9779,66 @@
     els.scrubberTip.hidden = true
   }
 
-  function renderScrubberIndicators() {
+  // The scrubber's marks are drawn by a scheduled run (261125_speed-and-keys
+  // P2, design F8): at most once per animation frame, and while the selected
+  // live session prints at most once per SCRUBBER_OUTPUT_THROTTLE_MS. A call
+  // while a run is pending changes nothing, so the pending run is the
+  // trailing one; it reads the state when it runs. A covered window gets no
+  // frames, so a timer stands in for the frame (as in debugSettle).
+  function scheduleScrubberIndicators() {
+    const draw = state.scrubberDraw
+    if (draw.frame || draw.fallback || draw.timer) return
+    const now = performance.now()
+    const wait =
+      now - draw.outputAt < SCRUBBER_OUTPUT_THROTTLE_MS
+        ? draw.lastRunAt + SCRUBBER_OUTPUT_THROTTLE_MS - now
+        : 0
+    if (wait > 0) {
+      draw.timer = window.setTimeout(() => {
+        draw.timer = 0
+        requestScrubberFrame()
+      }, wait)
+    } else requestScrubberFrame()
+  }
+
+  function requestScrubberFrame() {
+    const draw = state.scrubberDraw
+    draw.frame = window.requestAnimationFrame(runScheduledScrubberIndicators)
+    draw.fallback = window.setTimeout(runScheduledScrubberIndicators, 100)
+  }
+
+  function runScheduledScrubberIndicators() {
+    cancelScrubberIndicators()
+    state.scrubberDraw.lastRunAt = performance.now()
+    renderScrubberIndicators()
+  }
+
+  function cancelScrubberIndicators() {
+    const draw = state.scrubberDraw
+    if (draw.frame) window.cancelAnimationFrame(draw.frame)
+    if (draw.fallback) window.clearTimeout(draw.fallback)
+    if (draw.timer) window.clearTimeout(draw.timer)
+    draw.frame = 0
+    draw.fallback = 0
+    draw.timer = 0
+  }
+
+  // Now, for a user action that shows its result at once (the end of a
+  // switch or a seek): a pending run is dropped.
+  function flushScrubberIndicators() {
+    runScheduledScrubberIndicators()
+  }
+
+  // `probeEnd` (the perf probe only): redraw at the clock of an earlier draw.
+  function renderScrubberIndicators(probeEnd) {
     if (!els.scrubberIndicators) return
     els.scrubberIndicators.replaceChildren()
     if (!state.selectedId || !state.timeline.length) return
+    // A playback's range is not known until its timeline is in (P3).
+    if (state.mode === 'playback' && !state.playerReady) return
     const start = state.playbackStartTs
-    const end = currentPlaybackEndTs()
+    const end = probeEnd !== undefined ? probeEnd : currentPlaybackEndTs()
+    if (state.perf) state.perf.drawEnd = end
     const span = end - start
     if (span <= 0) return
     const collapseMap = getTimeCollapseMap(start, end)
@@ -9315,33 +9881,46 @@
     )
   }
 
+  // Extended in place when the same timeline array has grown (a sliced fetch,
+  // a live tail: 261125_speed-and-keys P3); rebuilt for another array, start
+  // or a shorter timeline.
   function timelineActivityMap(start, end) {
+    const signal = state.timelineSignal
+    const timeline = state.timeline
     if (
-      state.timelineSignal.timeline !== state.timeline ||
-      state.timelineSignal.startTs !== start ||
-      !state.timelineSignal.activity
+      signal.timeline !== timeline ||
+      signal.startTs !== start ||
+      !signal.activity ||
+      timeline.length < signal.activityLength
     ) {
-      state.timelineSignal.timeline = state.timeline
-      state.timelineSignal.startTs = start
-      state.timelineSignal.activity = signalMapFromPoints(
-        state.timeline.map((item) => ({ tsMs: item.tsMs || start, weight: 1 })),
-        start,
-        end
-      )
-      state.timelineSignal.history = null
-      state.timelineSignal.historyAvailableLength = -1
-    } else fillSignalTo(state.timelineSignal.activity, end)
-    return state.timelineSignal.activity
+      signal.timeline = timeline
+      signal.length = timeline.length
+      signal.startTs = start
+      signal.activity = createSignalMap(start)
+      signal.activityLength = 0
+      signal.history = null
+      signal.historyAvailableLength = -1
+    }
+    const map = signal.activity
+    for (let i = signal.activityLength; i < timeline.length; i++) {
+      const tsMs = timeline[i].tsMs || start
+      if (tsMs >= start && tsMs <= end) addSignalMeasurement(map, tsMs, 1)
+    }
+    signal.activityLength = timeline.length
+    fillSignalTo(map, end)
+    return map
   }
 
   function timelineHistoryMap(start, end, availableLength) {
     if (
       state.timelineSignal.timeline !== state.timeline ||
+      state.timelineSignal.length !== state.timeline.length ||
       state.timelineSignal.startTs !== start ||
       state.timelineSignal.historyAvailableLength !== availableLength ||
       !state.timelineSignal.history
     ) {
       state.timelineSignal.timeline = state.timeline
+      state.timelineSignal.length = state.timeline.length
       state.timelineSignal.startTs = start
       state.timelineSignal.historyAvailableLength = availableLength
       state.timelineSignal.history = signalMapFromPoints(
@@ -9357,6 +9936,7 @@
           start,
           end
         )
+        state.timelineSignal.activityLength = state.timeline.length
       }
     } else fillSignalTo(state.timelineSignal.history, end)
     return state.timelineSignal.history
@@ -9542,20 +10122,44 @@
     els.scrubberIndicators.append(item)
   }
 
+  // The gaps of at least `idleThreshold` between recorded packets (and from
+  // the last one to the end). The walk over the timeline is done once per
+  // timeline and start (idleCandidates): only gaps of IDLE_MIN_GAP_MS or more
+  // can ever qualify, and clamping both ends to `end` only shortens a gap, so
+  // the same marks come out of the few candidates (261125_speed-and-keys P2).
   function idleSegments(start, end) {
-    const points = state.timeline
-      .map((item) => clamp(item.tsMs || start, start, end))
-      .filter((tsMs, index, list) => index === 0 || tsMs !== list[index - 1])
-    if (!points.length) return []
-    const idleThreshold = Math.max(5000, (end - start) * 0.025)
+    if (!state.timeline.length) return []
+    const idle = idleCandidates(start)
+    const idleThreshold = Math.max(IDLE_MIN_GAP_MS, (end - start) * 0.025)
     const out = []
-    let previous = start
-    for (const point of points) {
-      if (point - previous >= idleThreshold) out.push({ startTs: previous, endTs: point })
-      previous = point
+    const gaps = idle.gaps
+    for (let i = 0; i < gaps.length; i += 2) {
+      const from = Math.min(gaps[i], end)
+      const to = Math.min(gaps[i + 1], end)
+      if (to - from >= idleThreshold) out.push({ startTs: from, endTs: to })
     }
+    const previous = Math.min(idle.last, end)
     if (end - previous >= idleThreshold) out.push({ startTs: previous, endTs: end })
     return out
+  }
+
+  // Pairs (from, to) of consecutive packet times, raised to `start`, at
+  // least IDLE_MIN_GAP_MS apart, the first `from` being `start`; extended
+  // when the same timeline array has grown.
+  function idleCandidates(start) {
+    const derived = timelineDerived()
+    const timeline = state.timeline
+    let idle = derived.idle
+    if (!idle || idle.start !== start || timeline.length < idle.length) {
+      idle = derived.idle = { start, length: 0, gaps: [], last: start }
+    }
+    for (let i = idle.length; i < timeline.length; i++) {
+      const point = Math.max(timeline[i].tsMs || start, start)
+      if (point - idle.last >= IDLE_MIN_GAP_MS) idle.gaps.push(idle.last, point)
+      idle.last = point
+    }
+    idle.length = timeline.length
+    return idle
   }
 
   function activityLevel(value, max) {
@@ -10915,11 +11519,38 @@
     return !!(els.search && els.search.value)
   }
 
-  // Search is on while the box holds text. A primary click in the terminal
-  // ends it as Esc does (R10), but the text is kept for the box's next focus.
+  // The terminal took the focus (a primary click, R10; any focusin while the
+  // search is on, 261125 R6): the search ends as Esc ends it, but the text is
+  // kept for the box's next focus.
   function leaveSearchForTerminal() {
-    if (!searchIsOn()) return
+    if (!state.searchActive && !searchIsOn()) return
     clearSearch({ remember: true })
+  }
+
+  // The other exits (261125 R6, F11: a new or joined session, Ctrl+1..9):
+  // the search ends, its text kept, and the terminal gets the focus.
+  function endSearchForTerminal() {
+    if (!state.searchActive && !searchIsOn()) return
+    clearSearch({ remember: true })
+  }
+
+  // 261125 R6, R7, F9: while the search is on, a focus that fell outside the
+  // box, the terminal, a dialog and a menu (a toolbar button, a row, a
+  // dialog's overlay removed) is put back in the box. A window that lost the
+  // OS focus keeps the box as its focused element: nothing to do then.
+  function scheduleSearchFocusReturn() {
+    setTimeout(returnSearchFocus, 0)
+  }
+
+  function returnSearchFocus() {
+    if (!state.searchActive || !els.search) return
+    const active = document.activeElement
+    if (active === els.search) return
+    if (active && els.terminal && els.terminal.contains(active)) return
+    if (active && openDialogPanel(active)) return
+    if (sidePaneBlocked() || anyMenuOpen()) return
+    if (!els.search.getClientRects().length) return
+    els.search.focus({ preventScroll: true })
   }
 
   // The box got the focus (a click, Ctrl+Shift+F) while empty: the text a
@@ -10940,6 +11571,8 @@
   // focus. On an empty box only the focus moves. `remember` keeps the text
   // for the box's next focus (a terminal click); Esc forgets it.
   function clearSearch({ remember = false } = {}) {
+    // Dropped first: the terminal's focusin below must not end it again.
+    state.searchActive = false
     const hadText = !!(els.search && els.search.value)
     state.searchRemembered = remember && hadText ? els.search.value : ''
     state.searchRestoreSelect = false
@@ -10964,7 +11597,7 @@
   // Esc hint in the empty box, the blue "x" in place of the magnifying glass,
   // and the arrow-key cursor's green border.
   function searchModeOn() {
-    return !!(els.search && (document.activeElement === els.search || els.search.value))
+    return !!(els.search && (state.searchActive || document.activeElement === els.search))
   }
 
   function syncSearchMode() {
@@ -11004,6 +11637,7 @@
   function sessionRowsInOrder() {
     const sectionOf = {
       'Current session': 'current',
+      'Search started here': 'current',
       'Session name matches': 'name',
       'Session buffer matches': 'buffer',
       'Other - unmatched sessions': 'other'
@@ -11050,6 +11684,29 @@
     return kept && kept.sessionId === id ? kept : null
   }
 
+  // A click on a row. In the terminal state it selects the session (and
+  // resumes a closed one, as before). In search (261125 R7) the row is shown,
+  // not resumed, as the arrows show it: the cursor goes onto it and the focus
+  // stays in the box (the blur rule has put it back by now).
+  async function clickSessionRow(session, row) {
+    if (!state.searchActive) return selectSession(session)
+    const entry = sessionEntryById(session.sessionId) || session
+    const hit = sessionRowsInOrder().find((item) => item.el === row)
+    if (!state.searchAnchorId && state.selectedId) state.searchAnchorId = state.selectedId
+    if (hit) state.searchCursor = { section: hit.section, id: hit.id }
+    markSearchCursor()
+    returnSearchFocus()
+    if (entry.pending || entry.sessionId === state.selectedId) {
+      if (entry.pending) await selectSession(entry, { keepFocus: true })
+      return
+    }
+    await selectSession(entry, { keepFocus: true, extend: false })
+    if (entry.sessionId === state.selectedId) {
+      if (isOfflineResumable()) showResumeHint()
+      else dismissToast('resume-hint')
+    }
+  }
+
   // Up/Down (and Ctrl+PgUp/PgDn, R14) in search mode: the cursor moves one row (staying at either end)
   // and its session is selected, the focus kept in the box. The "Current
   // session" section keeps the session it showed when the arrows began, so
@@ -11080,10 +11737,23 @@
   }
 
   // 261121 R4: the position N/M is in the status line (no longer beside the
-  // box's x), with how to step: Enter/Shift+Enter in the terminal's matches,
-  // the arrows through the profiles. Rewritten on every step and scan; when
-  // the search ends the status is cleared if it still holds our text.
-  const SEARCH_COUNT_HINT = '(In terminal Enter/Shift+Enter, in profiles ⬆️/⬇️ )'
+  // box's x). 261125_speed-and-keys R9 (replacing 261121's hint "(In terminal
+  // Enter/Shift+Enter, in profiles ⬆️/⬇️ )"): from the box's focus to the
+  // end of the search the status line names the search and its keys, with
+  // "[M / N]" in front when the shown session has matches and the ^R/^D keys
+  // while it is closed. One function draws it, from every list redraw, the
+  // end of a switch, a step or scan, and a session's exit (F12). Another
+  // status text shows for its moment and the line comes back; an error stays
+  // until the next key (F14); a refused join owns the line.
+  const SEARCH_STATUS_RETURN_MS = 2000
+
+  function scheduleSearchStatus(ms) {
+    clearTimeout(state.searchStatusTimer)
+    state.searchStatusTimer = setTimeout(() => {
+      state.searchStatusTimer = null
+      updateSearchCount()
+    }, ms)
+  }
 
   function updateSearchCount() {
     const el = els.searchCount
@@ -11091,9 +11761,9 @@
       el.textContent = ''
       el.hidden = true
     }
-    const bs = state.bufferSearch
-    const query = inSessionQuery()
-    if (!query || !bs) {
+    if (!state.searchActive) {
+      clearTimeout(state.searchStatusTimer)
+      state.searchStatusTimer = null
       if (state.searchCountStatus && els.status.textContent === state.searchCountStatus) {
         setStatus('')
         els.status.title = ''
@@ -11101,22 +11771,31 @@
       state.searchCountStatus = ''
       return
     }
-    const index = String(bs.index >= 0 ? bs.index + 1 : 0)
-    const total = String(bs.count)
-    const text = `${index} / ${total} ${SEARCH_COUNT_HINT}`
+    const bs = inSessionQuery() ? state.bufferSearch : null
+    const line = sessionKeys.searchStatus({
+      index: bs ? bs.index : -1,
+      total: bs ? bs.count : 0,
+      closed: isOfflineResumable()
+    })
+    const text = line.text
     state.searchCountStatus = text
-    // 261121 R14: "M / N": M bold cyan, the slash plain, N cyan.
-    if (els.status.textContent !== text && !state.identityRefusal) {
-      const m = document.createElement('span')
-      m.className = 'search-pos-index'
-      m.textContent = index
-      const n = document.createElement('span')
-      n.className = 'search-pos-total'
-      n.textContent = total
-      els.status.replaceChildren(m, document.createTextNode(' / '), n, ` ${SEARCH_COUNT_HINT}`)
+    if (state.statusErrorShown || state.identityRefusal) return
+    if (els.status.textContent !== text) {
+      if (line.position) {
+        // 261121 R14: M bold cyan, the slash plain, N cyan.
+        const m = document.createElement('span')
+        m.className = 'search-pos-index'
+        m.textContent = line.position[0]
+        const n = document.createElement('span')
+        n.className = 'search-pos-total'
+        n.textContent = line.position[1]
+        els.status.replaceChildren('[', m, ' / ', n, `] ${line.keys}`)
+      } else {
+        els.status.replaceChildren(line.keys)
+      }
       devLog(text)
     }
-    // A narrow status cell cuts the hint; the whole line is its tooltip.
+    // A narrow status cell cuts the line; the whole line is its tooltip.
     els.status.title = text
   }
 
@@ -11728,14 +12407,47 @@
     ) {
       return cache.map
     }
-    const points = state.timeline.map((item) => item.tsMs).concat(live.points)
-    cache.map = timeCollapse.buildTimeCollapseMap(points, startTs, endTs, thresholdMs)
+    cache.map =
+      collapseMapFromBase(startTs, endTs, thresholdMs, live.points) ||
+      timeCollapse.buildTimeCollapseMap(
+        state.timeline.map((item) => item.tsMs).concat(live.points),
+        startTs,
+        endTs,
+        thresholdMs
+      )
     cache.timeline = state.timeline
     cache.startTs = startTs
     cache.thresholdMs = thresholdMs
     cache.liveVersion = live.version
+    cache.liveCount = live.points.length
     cache.builtAt = performance.now()
     return cache.map
+  }
+
+  // A running session's map without sorting its loaded timeline again: the
+  // timeline's breakpoints are kept per timeline, start and threshold, and the
+  // live output after them is appended (261125_speed-and-keys P2). Null when
+  // the full build is needed (a playback's end is its last packet).
+  function collapseMapFromBase(startTs, endTs, thresholdMs, livePoints) {
+    const timeline = state.timeline
+    if (!timeline.length || !(timeline[timeline.length - 1].tsMs < endTs)) return null
+    const derived = timelineDerived()
+    let base = derived.collapse
+    if (
+      !base ||
+      base.startTs !== startTs ||
+      base.thresholdMs !== thresholdMs ||
+      base.length !== timeline.length
+    ) {
+      base = timeCollapse.timeCollapseBase(
+        timeline.map((item) => item.tsMs),
+        startTs,
+        thresholdMs
+      )
+      base.length = timeline.length
+      derived.collapse = base
+    }
+    return timeCollapse.extendTimeCollapseBase(base, livePoints, endTs)
   }
 
   function realToCompressed(map, tsMs) {
@@ -11775,6 +12487,8 @@
   }
 
   async function showNoSessionSelected() {
+    state.switchSeq++
+    state.switchTarget = null
     state.selectedId = null
     state.currentSession = null
     state.hd = false
@@ -11830,6 +12544,10 @@
     }
     els.status.textContent = text
     devLog(text)
+    // 261125 R9: in search the search line comes back after this text.
+    if (state.searchActive && text !== state.searchCountStatus) {
+      scheduleSearchStatus(SEARCH_STATUS_RETURN_MS)
+    }
   }
 
   // A short, self-dismissing notice for something the host refused to do.
@@ -11871,10 +12589,13 @@
 
   function showError(err) {
     if (isBenignBrowserError(err)) return
+    if (state.perf) state.perf.errors++
     console.error(err)
     state.startupError = err && err.message ? err.message : String(err)
     const code = err && err.code ? `${err.code}: ` : ''
     setStatus(`${code}${err.message || err}`)
+    // It outranks the search line until the next key (F14).
+    state.statusErrorShown = true
   }
 
   function isBenignBrowserError(err) {
@@ -11910,6 +12631,12 @@
     sessionEditorFocusClaim = null
     if (claim && claim.target.isConnected && performance.now() < claim.until) {
       claim.target.focus()
+      return
+    }
+    // 261125 R7, F10: the app's own focus returns go to the box while the
+    // search is on, text or no text.
+    if (state.searchActive && els.search) {
+      els.search.focus()
       return
     }
     if (state.term) state.term.focus()
@@ -12626,6 +13353,7 @@
     const children = container ? Array.from(container.children) : []
     const sectionOf = {
       'Current session': 'current',
+      'Search started here': 'current',
       'Session name matches': 'name',
       'Session buffer matches': 'buffer',
       'Other - unmatched sessions': 'other'
@@ -12875,12 +13603,296 @@
         els.terminal.contains(document.activeElement)
       ),
       selectedId: state.selectedId,
+      // 261125_speed-and-keys R6-R11: the search state, and whether the
+      // list is cut into search sections (it must never be while the
+      // terminal has the focus).
+      searchActive: !!state.searchActive,
+      sectionsDrawn: !!(els.sessions && els.sessions.querySelector('.session-section-title')),
+      statusErrorShown: !!state.statusErrorShown,
+      mode: state.mode || null,
       remembered: state.searchRemembered || '',
       inputBlockedFlashes: state.inputBlockedFlashes || 0,
       crossSession: state.bufferSearchCross === true,
       inSession: debugInSessionSearch(),
       sessions: debugSearchSessions()
     }
+  }
+
+  // perf (261125_speed-and-keys R1, R2): the kit's timing probe. Observation
+  // only, and free until "start": `state.perf` stays unset, so every hook is
+  // one test of it. "start" installs the listeners once and empties the
+  // buffers; "read" returns them. A switch is timed from its input event (a
+  // Ctrl+PgUp/PgDn, an arrow in the search box, a click on a row) to the
+  // first terminal render after its frame was written; an echo from a
+  // terminal keydown to the parsed live write that holds the typed character.
+  function debugPerf(action, options = {}) {
+    if (action === 'start') {
+      if (!state.perf) state.perf = perfInstall()
+      const p = state.perf
+      if (p.observer) p.observer.takeRecords()
+      p.longTasks = []
+      p.switches = []
+      p.echoes = []
+      p.echoMisses = 0
+      p.errors = 0
+      p.input = null
+      p.pending = null
+      p.timelineFor = null
+      p.keys = []
+      return { started: true, longTaskObserver: !!p.observer }
+    }
+    if (action !== 'read') return { error: `unknown perf action: ${action}` }
+    const p = state.perf
+    if (!p) return { on: false }
+    if (p.observer) perfTakeLongTasks(p, p.observer.takeRecords())
+    // With "refresh": the marks as they stand, then after a forced redraw at
+    // the clock the last draw used (a live scrubber's span grows with time).
+    const marks = perfMarksDigest()
+    const drawEnd = p.drawEnd === undefined ? null : p.drawEnd
+    if (options.refresh) renderScrubberIndicators(drawEnd === null ? undefined : drawEnd)
+    // The selected session's timeline as the renderer caches it, and the
+    // engine's length as last heard (261125_speed-and-keys P3).
+    const entry = state.selectedId ? state.timelineCache.get(state.selectedId) : null
+    const timeline = entry ? entry.entries : state.timeline || []
+    const last = timeline.length ? timeline[timeline.length - 1] : null
+    const frame = state.playbackFrame
+    return {
+      on: true,
+      longTasks: p.longTasks.slice(),
+      switches: p.switches.slice(),
+      echoes: p.echoes.slice(),
+      echoMisses: p.echoMisses,
+      errors: p.errors,
+      selectedId: state.selectedId || null,
+      mode: state.mode,
+      timeline: {
+        sessionId: state.selectedId || null,
+        cached: timeline.length,
+        engine: entry ? entry.length : timeline.length,
+        complete:
+          !p.pending &&
+          !!entry &&
+          timelineComplete(state.selectedId) &&
+          state.timeline === entry.entries &&
+          !(state.mode === 'playback' && !state.playerReady),
+        lastSeq: last ? last.seq : null,
+        lastTsMs: last ? last.tsMs : null
+      },
+      transport: {
+        disabled: !!(els.stepBack.disabled && els.stepForward.disabled && els.playPause.disabled),
+        playerReady: !!state.playerReady,
+        seq: frame && frame.seq !== undefined ? frame.seq : null
+      },
+      marks,
+      marksRefreshed: options.refresh ? perfMarksDigest() : null,
+      drawEnd
+    }
+  }
+
+  // playback-text (261125_speed-and-keys P3, R2's U4 check): plays a
+  // session's recording through the engine's player from `tsMs` at its
+  // fastest speed and returns the text of every packet the player sent, in
+  // the order sent, decoded as one stream; `startSeq` is where the seek left
+  // the player (packets after it follow). Reads the recording only; the
+  // player is paused at the end. `timeoutMs` (default 60 s) bounds the wait
+  // for the player's end.
+  async function debugPlaybackText(request) {
+    const sessionId = String(request.sessionId || '')
+    const tsMs = Number(request.tsMs)
+    const timeoutMs = Number.isFinite(request.timeoutMs) ? Number(request.timeoutMs) : 60000
+    const decoder = new TextDecoder()
+    let text = ''
+    let packets = 0
+    let bytes = 0
+    let resolveEnd = null
+    const ended = new Promise((resolve) => {
+      resolveEnd = resolve
+    })
+    const offData = api.on('player:data', (packet) => {
+      if (packet.sessionId !== sessionId) return
+      packets++
+      if (!packet.data) return
+      const chunk = new Uint8Array(packet.data)
+      bytes += chunk.byteLength
+      text += decoder.decode(chunk, { stream: true })
+    })
+    const offEnd = api.on('player:end', (event) => {
+      if (event && event.sessionId === sessionId) resolveEnd(true)
+    })
+    let frame = null
+    let done = false
+    let timer = 0
+    try {
+      frame = await api.invoke('player.seek', { sessionId, tsMs })
+      await api.invoke('player.play', { sessionId, speed: 8 })
+      done = await Promise.race([
+        ended,
+        new Promise((resolve) => {
+          timer = window.setTimeout(() => resolve(false), timeoutMs)
+        })
+      ])
+    } finally {
+      window.clearTimeout(timer)
+      offData()
+      offEnd()
+      await api.invoke('player.pause', { sessionId }).catch(() => {})
+    }
+    text += decoder.decode()
+    return { sessionId, startSeq: frame ? frame.seq : null, ended: done, packets, bytes, text }
+  }
+
+  function perfInstall() {
+    const p = {
+      longTasks: [],
+      switches: [],
+      echoes: [],
+      echoMisses: 0,
+      errors: 0,
+      // The timeStamp of the last switch input not yet taken by a switch.
+      input: null,
+      // The switch whose frame is not drawn yet: { sessionId, t0, cold }.
+      pending: null,
+      // The switch whose timeline is not complete yet.
+      timelineFor: null,
+      // Typed characters not echoed yet: { code, t0 }.
+      keys: [],
+      visited: new Set(),
+      observer: null
+    }
+    if (state.selectedId) p.visited.add(state.selectedId)
+    const types =
+      (window.PerformanceObserver && window.PerformanceObserver.supportedEntryTypes) || []
+    if (types.includes('longtask')) {
+      p.observer = new window.PerformanceObserver((list) => perfTakeLongTasks(p, list.getEntries()))
+      p.observer.observe({ entryTypes: ['longtask'] })
+    }
+    // On the window, in the capture phase: before the app's own handlers.
+    window.addEventListener(
+      'keydown',
+      (event) => {
+        if (event.isComposing) return
+        const arrow = event.key === 'ArrowUp' || event.key === 'ArrowDown'
+        if (event.ctrlKey && (event.key === 'PageUp' || event.key === 'PageDown')) {
+          p.input = event.timeStamp
+        } else if (arrow && event.target === els.search && !event.ctrlKey && !event.shiftKey) {
+          p.input = event.timeStamp
+        } else if (
+          event.key.length === 1 &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.metaKey &&
+          els.terminal.contains(event.target)
+        ) {
+          p.keys.push({ code: event.key.charCodeAt(0), t0: event.timeStamp })
+        }
+      },
+      true
+    )
+    window.addEventListener(
+      'click',
+      (event) => {
+        const target = event.target
+        if (target && target.closest && target.closest('.session-row')) p.input = event.timeStamp
+      },
+      true
+    )
+    return p
+  }
+
+  function perfTakeLongTasks(p, entries) {
+    for (const entry of entries) p.longTasks.push(Math.round(entry.duration))
+  }
+
+  function perfMs(t0) {
+    return Math.round((performance.now() - t0) * 10) / 10
+  }
+
+  // selectSession's first line: the switch takes the input that caused it. A
+  // switch with no input (the debug server's, a new session) is not timed.
+  function perfSwitchBegin(sessionId) {
+    const p = state.perf
+    const t0 = p.input
+    p.input = null
+    const fresh = t0 !== null && performance.now() - t0 < 10000
+    p.pending = fresh ? { sessionId, t0, cold: !p.visited.has(sessionId) } : null
+    // The switch's timeline: `timelineMs` is when it was complete (or drawn,
+    // whichever is later).
+    p.timelineFor = fresh ? { sessionId, t0, doneMs: null, record: null } : null
+    p.visited.add(sessionId)
+  }
+
+  function perfTimelineDone(sessionId) {
+    const w = state.perf.timelineFor
+    if (!w || w.sessionId !== sessionId || w.doneMs !== null) return
+    w.doneMs = perfMs(w.t0)
+    if (w.record) w.record.timelineMs = Math.max(w.record.ms, w.doneMs)
+  }
+
+  // The frame of the selected session was parsed: its switch ends at the
+  // next render (one second at most, should no render follow).
+  function perfFrameWritten() {
+    const p = state.perf
+    const s = p.pending
+    if (!s || s.sessionId !== state.selectedId || !state.term) return
+    p.pending = null
+    let done = false
+    let sub = null
+    let timer = 0
+    const finish = () => {
+      if (done) return
+      done = true
+      if (sub) sub.dispose()
+      window.clearTimeout(timer)
+      const ms = perfMs(s.t0)
+      const record = { sessionId: s.sessionId, ms, cold: s.cold, timelineMs: null }
+      const w = p.timelineFor
+      if (w && w.t0 === s.t0) {
+        w.record = record
+        if (w.doneMs !== null) record.timelineMs = Math.max(ms, w.doneMs)
+      }
+      p.switches.push(record)
+    }
+    sub = state.term.onRender(finish)
+    timer = window.setTimeout(finish, 1000)
+  }
+
+  // The typed characters these live chunks hold (their keydown times), taken
+  // off the waiting list; a key not echoed within 3 s is a miss.
+  function perfEchoTake(chunks) {
+    const p = state.perf
+    if (!p.keys.length) return null
+    const now = performance.now()
+    let hits = null
+    p.keys = p.keys.filter((key) => {
+      if (now - key.t0 > 3000) {
+        p.echoMisses++
+        return false
+      }
+      const held = (chunk) => chunk instanceof Uint8Array && chunk.indexOf(key.code) !== -1
+      if (!chunks.some(held)) return true
+      if (!hits) hits = []
+      hits.push(key.t0)
+      return false
+    })
+    return hits
+  }
+
+  function perfEchoParsed(hits) {
+    for (const t0 of hits) state.perf.echoes.push(perfMs(t0))
+  }
+
+  function perfMarksDigest() {
+    const box = els.scrubberIndicators
+    if (!box) return ''
+    let hash = 0
+    let count = 0
+    for (const el of box.children) {
+      count++
+      // The kinds in order, not their places: the live end moves with the clock.
+      const text = `${el.className}|`
+      for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0
+    }
+    return `${count}:${hash}`
   }
 
   // key-probe (261111_buffer-search U1, U3): "start" listens for keydown on
@@ -13172,6 +14184,8 @@
     const at = rows.findIndex((row) => row.el.classList.contains('search-cursor'))
     return {
       on: !!(els.app && els.app.classList.contains('searching')),
+      // 261125 R6: the search state flag itself.
+      active: !!state.searchActive,
       focused: document.activeElement === els.search,
       activeElement: document.activeElement
         ? document.activeElement.id || document.activeElement.tagName
@@ -13600,6 +14614,8 @@
     }
     if (command === 'live-seam') return debugLiveSeam(String(request.prefix || ''))
     if (command === 'key-probe') return debugKeyProbe(request.action, request)
+    if (command === 'perf') return debugPerf(request.action, request)
+    if (command === 'playback-text') return await debugPlaybackText(request)
     if (command === 'selection-log') {
       debugStartSelectionLog()
       const events = debugKit.log.slice()

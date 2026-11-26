@@ -31,6 +31,10 @@ const { FULL_CAPS, READ_HISTORY, VIEW_LIVE, hasCap } = require('./caps')
 const MAX_PACKET_BYTES = 64 * 1024
 const NORMAL_REPACK_MAX_MS = 1200
 const NORMAL_REPACK_MAX_BYTES = 64 * 1024
+// A live recording's timeline.json is rewritten at most this often
+// (scheduleTimelineFlush): the file is the whole timeline, 42 MB at a million
+// entries, and rewriting it per packet stalled live output (261125 P2b).
+const TIMELINE_FLUSH_MS = 1000
 
 class SessionStore {
   constructor(opts) {
@@ -49,6 +53,8 @@ class SessionStore {
     this.timelineDirty = false
     this._timelineFlushQueue = Promise.resolve()
     this._timelineTempCounter = 0
+    this._timelineFlushTimer = null
+    this._timelineFlushedAt = 0
     this.remote = !!opts.remote
     // A joined Freenet session (zxterm K17, ZBTerm D-40): the log is a local
     // cache of the packets the core verified, sealed under this device's own
@@ -884,6 +890,10 @@ class SessionStore {
       const timeline = JSON.parse(raw)
       if (Array.isArray(timeline)) {
         this.timeline = timeline
+        // Live appends rewrite the file at most once a second, so a crash
+        // can leave it behind the log: read only the packets it lacks.
+        // A joined session's callers extend it themselves (availableLength).
+        if (!this.remote && this._timelineEnd() < this.log.length) await this.extendTimeline()
         return
       }
     } catch (err) {
@@ -906,8 +916,13 @@ class SessionStore {
   // stores need this called before every playback op — history keeps
   // replicating in via Hypercore even while a Player stays open across seeks,
   // but nothing else advances `timeline`/`playbackLength` for those.
+  _timelineEnd() {
+    const last = this.timeline.length ? this.timeline[this.timeline.length - 1] : null
+    return last && Number.isFinite(last.seq) ? last.seq : 0
+  }
+
   async extendTimeline() {
-    const from = this.timeline.length ? this.timeline[this.timeline.length - 1].seq + 1 : 1
+    const from = this._timelineEnd() + 1
     const to = this.remote ? await this.availableLength() : this.log.length
     if (to < from) return
     for await (const packet of this.readRange(from, to, { wait: !this.remote })) {
@@ -930,6 +945,27 @@ class SessionStore {
     return { before: packets.length, after: repacked.length }
   }
 
+  // The live recording's flush: at most one write per TIMELINE_FLUSH_MS, the
+  // last one always made (a trailing timer). Whatever needs the file current
+  // now (finalize, close, a history copy's end, a truncation) calls
+  // flushTimeline() instead, which also satisfies a pending timer.
+  scheduleTimelineFlush(onError) {
+    if (!this.timelineDirty || this._timelineFlushTimer) return
+    const wait = Math.max(0, this._timelineFlushedAt + TIMELINE_FLUSH_MS - Date.now())
+    this._timelineFlushTimer = setTimeout(() => {
+      this._timelineFlushTimer = null
+      this.flushTimeline().catch((err) => {
+        if (onError) onError(err)
+      })
+    }, wait)
+    if (typeof this._timelineFlushTimer.unref === 'function') this._timelineFlushTimer.unref()
+  }
+
+  _cancelTimelineFlush() {
+    if (this._timelineFlushTimer) clearTimeout(this._timelineFlushTimer)
+    this._timelineFlushTimer = null
+  }
+
   async flushTimeline() {
     this._timelineFlushQueue = this._timelineFlushQueue.then(
       () => this._flushTimelineNow(),
@@ -941,6 +977,7 @@ class SessionStore {
   async _flushTimelineNow() {
     if (!this.timelineDirty) return
     this.timelineDirty = false
+    this._timelineFlushedAt = Date.now()
     // Mid-copy the in-memory timeline can run ahead of the log; on disk it
     // never does, so a crash mid-copy leaves a consistent recording.
     const timeline = this.pendingHistoryLength
@@ -997,6 +1034,7 @@ class SessionStore {
   }
 
   async close() {
+    this._cancelTimelineFlush()
     try {
       await this.flushTimeline()
     } finally {
@@ -1008,6 +1046,7 @@ class SessionStore {
   // directory lock until closed, and would make every later open of this
   // session fail with "File descriptor could not be locked".
   async _abandon() {
+    this._cancelTimelineFlush()
     await this._closeCores().catch(() => {})
   }
 

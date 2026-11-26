@@ -129,9 +129,21 @@
     // `close(script)` renders the scope, whose commands are `script`, into the
     // one command its parent scope runs; the root scope has none.
     // `interactiveShell` is the command that leaves the scope's shell open.
-    constructor(kind, opts = {}) {
+    // `sameMachine`: the scope wraps the rest of the chain on the machine
+    // its parent runs on (a terminal multiplexer, `ubt run`), so the steps
+    // offered there by machine (Change Directory and SSH locally, Change
+    // Remote Directory after SSH) are offered inside it too; it inherits the
+    // parent's shell unless given one. `machine` is the scope that opened
+    // the machine: the root, an SSH scope, or the scope itself.
+    // `takesCwd`: the scope's `close` passes `this.cwd` on itself (a
+    // `--cwd` option); without it a directory set inside a nested scope
+    // becomes a `cd` at the start of its script.
+    constructor(kind, opts = {}, parent = null) {
+      const same = !!(opts.sameMachine && parent)
       this.kind = kind
-      this.shell = opts.shell || 'posix'
+      this.shell = opts.shell || (same ? parent.shell : 'posix')
+      this.machine = same ? parent.machine : this
+      this.takesCwd = !!opts.takesCwd
       this.data = opts.data || {}
       this.close = opts.close || null
       this.owner = opts.owner || null
@@ -161,9 +173,14 @@
     }
 
     // The scope's commands as one script; `child` is the command of the
-    // scope opened inside this one, which then runs last.
-    script(child) {
+    // scope opened inside this one, which then runs last. `nested`: this is
+    // not the root scope, whose directory the PTY host starts in.
+    script(child, nested = false) {
       const entries = [...this.commands]
+      if (nested && this.cwd && !this.takesCwd) {
+        const cd = this.shell === 'cmd' ? 'cd /d' : 'cd'
+        entries.unshift({ text: `${cd} ${quotePath(this.cwd, this.shell)}`, loose: false })
+      }
       if (child) entries.push({ text: child, loose: false })
       else if (entries.length && this.interactive) {
         entries.push({ text: this.interactiveShell, loose: false })
@@ -202,7 +219,7 @@
     }
 
     pushScope(kind, opts = {}) {
-      const scope = new LaunchScope(kind, opts)
+      const scope = new LaunchScope(kind, opts, this.scope)
       this.scopes.push(scope)
       return scope
     }
@@ -226,7 +243,7 @@
     render() {
       let child = ''
       for (let i = this.scopes.length - 1; i > 0; i--) {
-        child = this.scopes[i].close(this.scopes[i].script(child))
+        child = this.scopes[i].close(this.scopes[i].script(child, true))
       }
       const root = this.scopes[0]
       return { cwd: root.cwd, command: root.script(child) }

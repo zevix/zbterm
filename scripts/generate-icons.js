@@ -25,19 +25,15 @@ const ASCII_SOURCE = path.join(ROOT, 'renderer', 'logo-ascii.js')
 const SVG_OUT = path.join(ROOT, 'renderer', 'logo.svg')
 const SIZES = [16, 32, 64, 128, 256, 512]
 
-// Terminal cells are about twice as tall as they are wide, so two horizontal
-// cells make up one SVG unit while one vertical cell makes up one unit. That is
-// what keeps the ASCII rendering square-ish in a terminal and the SVG square-ish
-// on screen.
-const CELLS_PER_UNIT_X = 2
+// Every character of the grid is one square pixel, one SVG unit on a side.
+// Which palette entry each character paints comes from STARTUP_LOGO_CELLS in
+// the same file; a character mapped to null is transparent.
 
-// Which palette entry of STARTUP_LOGO_COLORS each cell character paints.
-const CELL_COLORS = {
-  '.': 'black',
-  '-': 'grey',
-  G: 'green',
-  B: 'blue'
-}
+// The mark is pixel art, so a raster is made by painting it at a whole number
+// of device pixels per cell and scaling that down: rasterizing the SVG straight
+// to a small size lands cell edges between pixels and drops the pear's bars
+// unevenly.
+const RASTER_CELL_PX = 24
 
 const ICON_DIR = path.join(ROOT, 'build', 'icon')
 const PNG_MASTER = path.join(ROOT, 'build', 'icon.png')
@@ -65,8 +61,8 @@ main().catch((err) => {
 })
 
 async function main() {
-  const { lines, colors } = loadAsciiLogo()
-  const svgText = svgFromAscii(lines, colors)
+  const { lines, cells, colors } = loadAsciiLogo()
+  const svgText = svgFromAscii(lines, cells, colors)
   fs.writeFileSync(SVG_OUT, svgText)
 
   const svg = Buffer.from(svgText, 'utf8')
@@ -79,7 +75,7 @@ async function main() {
   // the three containers can never drift from each other.
   const pngs = new Map()
   for (const size of SIZES) {
-    const buffer = await renderSquare(svg, size, cols / CELLS_PER_UNIT_X, rows)
+    const buffer = await renderSquare(svg, size, cols, rows)
     pngs.set(size, buffer)
     fs.writeFileSync(path.join(ICON_DIR, `icon-${size}x${size}.png`), buffer)
   }
@@ -104,11 +100,16 @@ function loadAsciiLogo() {
   new Function('window', source)(window)
 
   const lines = window.STARTUP_LOGO_RAW_LINES
+  const cells = window.STARTUP_LOGO_CELLS
   const colors = window.STARTUP_LOGO_COLORS
-  if (!Array.isArray(lines) || lines.length === 0 || !colors) {
+  if (!Array.isArray(lines) || lines.length === 0 || !cells || !colors) {
     throw new Error(
-      'renderer/logo-ascii.js must define STARTUP_LOGO_RAW_LINES and STARTUP_LOGO_COLORS'
+      'renderer/logo-ascii.js must define STARTUP_LOGO_RAW_LINES, STARTUP_LOGO_CELLS and STARTUP_LOGO_COLORS'
     )
+  }
+  // The terminal splash pairs rows into half-block cells.
+  if (lines.length % 2 !== 0) {
+    throw new Error(`renderer/logo-ascii.js has ${lines.length} rows, expected an even number`)
   }
   for (const [index, line] of lines.entries()) {
     if (line.length !== lines[0].length) {
@@ -117,31 +118,30 @@ function loadAsciiLogo() {
       )
     }
     for (const char of line) {
-      if (!CELL_COLORS[char]) {
+      if (!Object.prototype.hasOwnProperty.call(cells, char)) {
         throw new Error(
           `renderer/logo-ascii.js line ${index + 1} uses unknown cell character ${JSON.stringify(char)}`
         )
       }
-      if (!colors[CELL_COLORS[char]]) {
+      if (cells[char] !== null && !colors[cells[char]]) {
         throw new Error(
-          `renderer/logo-ascii.js has no ${CELL_COLORS[char]} entry in STARTUP_LOGO_COLORS`
+          `renderer/logo-ascii.js has no ${cells[char]} entry in STARTUP_LOGO_COLORS`
         )
       }
     }
   }
-  return { lines, colors }
+  return { lines, cells, colors }
 }
 
 // One <rect> per maximal block of same-colored cells. Runs are found per row and
 // then merged downwards, so a solid bar is a single rect rather than one rect
 // per cell - that keeps the SVG small and keeps editors like Inkscape usable on
 // it if anyone wants to inspect the output.
-function svgFromAscii(lines, colors) {
-  const cellW = 1 / CELLS_PER_UNIT_X
-  const width = (lines[0].length * cellW).toString()
+function svgFromAscii(lines, cells, colors) {
+  const width = lines[0].length.toString()
   const height = lines.length.toString()
 
-  const runs = lines.map(rowRuns)
+  const runs = lines.map((line) => rowRuns(line, cells))
   const merged = runs.map(() => new Set())
   const rects = []
   for (let y = 0; y < runs.length; y++) {
@@ -156,25 +156,16 @@ function svgFromAscii(lines, colors) {
         merged[y + h].add(below.start)
         h++
       }
-      rects.push(
-        rect(
-          run.start * cellW,
-          y,
-          (run.end - run.start + 1) * cellW,
-          h,
-          colors[CELL_COLORS[run.char]]
-        )
-      )
+      rects.push(rect(run.start, y, run.end - run.start + 1, h, colors[cells[run.char]]))
     }
   }
 
-  // The background is a full-canvas rect rather than per-cell rects so the
-  // black cells cost nothing, and shape-rendering keeps the cell grid from
-  // developing hairline seams when rasterized at icon sizes.
+  // Transparent cells get no rect, which is what rounds the tile's corners.
+  // shape-rendering keeps the cell grid from developing hairline seams when
+  // rasterized.
   return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!-- Auto-generated by scripts/generate-icons.js from renderer/logo-ascii.js. Do not edit by hand. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" shape-rendering="crispEdges">
-${rect(0, 0, Number(width), Number(height), colors.black)}
 ${rects.join('\n')}
 </svg>
 `
@@ -188,8 +179,8 @@ function num(value) {
   return Number(value.toFixed(4)).toString()
 }
 
-// Maximal runs of a single non-background character within one row.
-function rowRuns(line) {
+// Maximal runs of a single non-transparent character within one row.
+function rowRuns(line, cells) {
   const runs = []
   let start = -1
   for (let x = 0; x <= line.length; x++) {
@@ -198,22 +189,30 @@ function rowRuns(line) {
       runs.push({ start, end: x - 1, char: line[start] })
       start = -1
     }
-    if (start === -1 && char && char !== '.') start = x
+    if (start === -1 && char && cells[char] !== null) start = x
   }
   return runs
 }
 
-function renderSquare(svg, size, unitsW, unitsH) {
-  const logoH = Math.round((size * unitsH) / unitsW)
+async function renderSquare(svg, size, unitsW, unitsH) {
+  const logoW = Math.round(size * Math.min(1, unitsW / unitsH))
+  const logoH = Math.round(size * Math.min(1, unitsH / unitsW))
   const padTop = Math.floor((size - logoH) / 2)
+  const padLeft = Math.floor((size - logoW) / 2)
 
-  return sharp(svg, { density: Math.ceil((size / unitsW) * 96) })
-    .resize(size, logoH, { fit: 'fill' })
+  // An SVG unit is 1/96 inch, so at 96 dpi one cell is one pixel.
+  const crisp = await sharp(svg, { density: 96 * RASTER_CELL_PX })
+    .resize(unitsW * RASTER_CELL_PX, unitsH * RASTER_CELL_PX, { fit: 'fill', kernel: 'nearest' })
+    .png()
+    .toBuffer()
+
+  return sharp(crisp)
+    .resize(logoW, logoH, { fit: 'fill', kernel: 'lanczos3' })
     .extend({
       top: padTop,
       bottom: size - logoH - padTop,
-      left: 0,
-      right: 0,
+      left: padLeft,
+      right: size - logoW - padLeft,
       background: { r: 0, g: 0, b: 0, alpha: 0 }
     })
     .png()

@@ -22,17 +22,11 @@ main().catch((err) => {
 
 async function main() {
   const options = parseOptions(process.argv.slice(2))
-  const { lines: rawLogoRows, colors: svgColors } = loadGeneratedLogo()
-  const colors = {
-    black: ansiBg(hexToRgb(svgColors.black)),
-    green: ansiBg(hexToRgb(svgColors.green)),
-    blue: ansiBg(hexToRgb(svgColors.blue)),
-    greenText: ansiFg(hexToRgb(svgColors.green))
-  }
-  const logoRows = paddedLogoRows(rawLogoRows)
+  const { lines, cells, colors: svgColors } = loadGeneratedLogo()
+  const colors = { greenText: ansiFg(hexToRgb(svgColors.green)) }
+  const logoRows = logoCellRows(lines, cells, svgColors)
   const logoWidth = Math.max(...logoRows.map((row) => row.length))
 
-  const slate = `\x1b[48;2;${options.shade};${options.shade};${options.shade}m`
   const rows = process.stdout.rows || 24
   const cols = process.stdout.columns || 80
   const blockHeight = logoRows.length + CAPTION_ROWS
@@ -41,12 +35,9 @@ async function main() {
 
   process.stdout.write('\x1b[2J\x1b[H\x1b[?25l')
   for (let rowIndex = 0; rowIndex < logoRows.length; rowIndex++) {
-    const cells = logoRows[rowIndex].padEnd(logoWidth, '.')
+    const cells = logoRows[rowIndex]
     for (let colIndex = 0; colIndex < cells.length; colIndex++) {
-      const color = colorForChar(cells[colIndex])
-      process.stdout.write(
-        `\x1b[${startRow + rowIndex};${startCol + colIndex}H${ansiForLogoColor(color, slate, colors)} \x1b[0m`
-      )
+      process.stdout.write(`\x1b[${startRow + rowIndex};${startCol + colIndex}H${cells[colIndex]}`)
       if (options.delayMs) await delay(options.delayMs)
     }
   }
@@ -71,10 +62,18 @@ function loadGeneratedLogo() {
   const window = {}
   new Function('window', source)(window)
 
-  if (!Array.isArray(window.STARTUP_LOGO_RAW_LINES) || !window.STARTUP_LOGO_COLORS) {
+  if (
+    !Array.isArray(window.STARTUP_LOGO_RAW_LINES) ||
+    !window.STARTUP_LOGO_CELLS ||
+    !window.STARTUP_LOGO_COLORS
+  ) {
     throw new Error('renderer/logo-ascii.js is malformed')
   }
-  return { lines: window.STARTUP_LOGO_RAW_LINES, colors: window.STARTUP_LOGO_COLORS }
+  return {
+    lines: window.STARTUP_LOGO_RAW_LINES,
+    cells: window.STARTUP_LOGO_CELLS,
+    colors: window.STARTUP_LOGO_COLORS
+  }
 }
 
 function hexToRgb(hex) {
@@ -100,8 +99,7 @@ function parseOptions(args) {
       0,
       Number.MAX_SAFE_INTEGER,
       false
-    ),
-    shade: parseNumberOption(args, ['--shade'], 105, 0, 255, true)
+    )
   }
 }
 
@@ -114,24 +112,32 @@ function parseNumberOption(args, names, fallback, min, max, round) {
   return Math.max(min, Math.min(max, normalized))
 }
 
-function colorForChar(char) {
-  if (char === '-') return 'slate'
-  if (char === 'G') return 'green'
-  if (char === 'B') return 'blue'
-  return 'black'
-}
-
-function ansiForLogoColor(color, slate, colors) {
-  if (color === 'slate') return slate
-  if (color === 'green') return colors.green
-  if (color === 'blue') return colors.blue
-  return colors.black
-}
-
-function paddedLogoRows(rows) {
-  const width = Math.max(...rows.map((row) => row.length))
-  const blackRow = '.'.repeat(width + 4)
-  return [blackRow, ...rows.map((row) => `..${row.padEnd(width, '.')}..`), blackRow]
+// The mark is a grid of square pixels; a terminal cell is about twice as tall
+// as it is wide, so each cell shows two of them, one above the other, as a
+// half-block glyph: the upper pixel is the foreground, the lower one the
+// background. A transparent pixel leaves the terminal's own background. Same
+// pairing as logoCellLines in renderer/app.js.
+function logoCellRows(lines, cells, colors) {
+  const rgb = (char) => (cells[char] ? hexToRgb(colors[cells[char]]) : null)
+  const width = Math.max(...lines.map((line) => line.length))
+  const reset = '\x1b[0m'
+  const out = []
+  for (let y = 0; y < lines.length; y += 2) {
+    const upper = lines[y].padEnd(width, ' ')
+    const lower = (lines[y + 1] || '').padEnd(width, ' ')
+    const row = []
+    for (let x = 0; x < width; x++) {
+      const top = rgb(upper[x])
+      const bottom = rgb(lower[x])
+      if (!top && !bottom) row.push(`${reset} `)
+      else if (top && bottom && top.join() === bottom.join()) row.push(`${ansiBg(top)} ${reset}`)
+      else if (!bottom) row.push(`${ansiFg(top)}\u2580${reset}`)
+      else if (!top) row.push(`${ansiFg(bottom)}\u2584${reset}`)
+      else row.push(`${ansiFg(top)}${ansiBg(bottom)}\u2580${reset}`)
+    }
+    out.push(row)
+  }
+  return out
 }
 
 function drawCenteredText(row, text, cols, opts = {}) {

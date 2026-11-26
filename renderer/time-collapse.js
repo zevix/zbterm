@@ -48,6 +48,55 @@
     return map
   }
 
+  // The part of buildTimeCollapseMap that a long timeline fixes once: the
+  // breakpoints from `startTs` over the points after it (261125_speed-and-keys
+  // P2: a running session rebuilds its map every second, and at a million
+  // points the sort alone was a long task).
+  function timeCollapseBase(points, startTs, thresholdMs) {
+    let maxPointTs = -Infinity
+    for (const tsMs of points) if (tsMs > maxPointTs) maxPointTs = tsMs
+    const inside = new Set([startTs])
+    for (const tsMs of points) if (tsMs > startTs) inside.add(tsMs)
+    const sorted = Array.from(inside).sort((a, b) => a - b)
+    const breakpoints = [{ realTs: sorted[0], compTs: 0 }]
+    let compTs = 0
+    for (let i = 1; i < sorted.length; i++) {
+      compTs += Math.min(sorted[i] - sorted[i - 1], thresholdMs)
+      breakpoints.push({ realTs: sorted[i], compTs })
+    }
+    return { startTs, thresholdMs, breakpoints, maxPointTs, lastTs: sorted[sorted.length - 1] }
+  }
+
+  // buildTimeCollapseMap(base's points + `more`, base.startTs, endTs,
+  // base.thresholdMs), built from the base; null when that needs the full
+  // build: the end is not after every base point, or a point of `more`
+  // falls before the base's last (`more` is a running session's output,
+  // later than its loaded timeline and in order).
+  function extendTimeCollapseBase(base, more, endTs) {
+    if (endTs <= base.startTs || base.lastTs >= endTs) return null
+    const thresholdMs = base.thresholdMs
+    const breakpoints = base.breakpoints.slice()
+    let maxPointTs = base.maxPointTs
+    let last = breakpoints[breakpoints.length - 1]
+    for (const tsMs of more) {
+      if (tsMs > maxPointTs) maxPointTs = tsMs
+      if (!(tsMs > base.startTs && tsMs < endTs) || tsMs === last.realTs) continue
+      if (tsMs < last.realTs) return null
+      last = { realTs: tsMs, compTs: last.compTs + Math.min(tsMs - last.realTs, thresholdMs) }
+      breakpoints.push(last)
+    }
+    const map = {
+      breakpoints,
+      interior: breakpoints.length,
+      compressedSpan: 0,
+      endTs,
+      maxPointTs,
+      complete: endTs > maxPointTs
+    }
+    setTimeCollapseEnd(map, endTs, thresholdMs)
+    return map
+  }
+
   function setTimeCollapseEnd(map, endTs, thresholdMs) {
     const bp = map.breakpoints
     bp.length = map.interior
@@ -151,6 +200,8 @@
 
   const api = {
     buildTimeCollapseMap,
+    timeCollapseBase,
+    extendTimeCollapseBase,
     retargetTimeCollapseMap,
     realToCompressed,
     compressedToReal,

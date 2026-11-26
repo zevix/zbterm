@@ -416,6 +416,88 @@ test('the renderer loads the plugin files Node does, in the same order', (t) => 
     // 2026-11-21 (261121_dialog-and-command-plugins): samples/ holds the user
     // command plugins copied to the plugins directory, not loaded from here.
     if (file === 'samples') continue
+    // skill/ is the zbterm-plugin Claude skill (a doc and a Node CLI).
+    if (file === 'skill') continue
     t.ok(scripts.includes(file), `${file} is loaded`)
   }
+})
+
+// 2026-11-24: command plugins that wrap the rest of the chain on the same
+// machine (a terminal multiplexer, `ubt run TREE -- ...`).
+test('a same-machine wrapper: indented steps, SSH inside it, its directory', (t) => {
+  const file = 'test-wrappers.js'
+  const ran = launch.runFile(file, () => {
+    const wrapper = (id, takesCwd, head) =>
+      class extends launch.LaunchPlugin {
+        static id = id
+        static title = id
+        apply(ctx) {
+          const parent = ctx.scope
+          const scope = ctx.pushScope(id, {
+            sameMachine: true,
+            takesCwd,
+            close: (script) => {
+              const args = [head]
+              if (takesCwd && scope.cwd) {
+                args.push('--cwd', launch.quotePath(scope.cwd, parent.shell))
+              }
+              if (script) args.push('--', 'sh', '-c', launch.quote(script, parent.shell))
+              return args.join(' ')
+            }
+          })
+        }
+      }
+    launch.register(wrapper('test-mux', true, 'mux'))
+    launch.register(wrapper('test-ubt', false, 'ubt run tree'))
+  })
+  t.teardown(() => launch.unregisterFrom(file))
+  t.is(ran.error, '')
+  const mux = { plugin: 'test-mux', config: {} }
+  const ubt = { plugin: 'test-ubt', config: {} }
+  const own = (list) => ids(list).filter((id) => !id.startsWith('test-'))
+
+  t.alike(
+    own(launch.addable(steps(mux), LINUX)),
+    ['cd', 'shell', 'ssh'],
+    'inside the wrapper: what this machine offers'
+  )
+  t.alike(own(launch.addable(steps(mux, ssh('box')), LINUX)), ['shell', 'ssh-cd'])
+  t.alike(
+    own(launch.addable(steps(mux, ssh('box'), remoteCd('/srv'), ubt), LINUX)),
+    ['shell', 'ssh-cd'],
+    'a wrapper opened after SSH is on the remote machine'
+  )
+  const { ctx, trace } = launch.run(steps(mux, ssh('box'), remoteCd('/srv'), ubt, shell('claude')))
+  t.alike(
+    trace.map((entry) => [entry.kind, entry.depth, entry.scope.machine.kind]),
+    [
+      ['local', 1, 'local'],
+      ['test-mux', 2, 'local'],
+      ['ssh', 3, 'ssh'],
+      ['ssh', 3, 'ssh'],
+      ['test-ubt', 4, 'ssh']
+    ],
+    'each step knows its scope, its depth (the indent) and its machine'
+  )
+  t.is(ctx.scope.shell, 'posix', 'a same-machine scope keeps its parent shell')
+  t.alike(launch.compile(steps(mux, ssh('box'), remoteCd('/srv'), ubt, shell('claude')), LINUX), {
+    cwd: '',
+    command: `mux -- sh -c 'ssh -t box '\\''cd /srv && ubt run tree -- sh -c claude'\\'''`
+  })
+  t.alike(
+    compile(mux, cd('~/src'), shell('make')),
+    { cwd: '', command: `mux --cwd ~/src -- sh -c make` },
+    'takesCwd: the wrapper passes the directory on'
+  )
+  t.alike(
+    compile(ubt, cd('~/src')),
+    { cwd: '', command: `ubt run tree -- sh -c 'cd ~/src && exec "$SHELL"'` },
+    'otherwise the directory is a cd at the start of the inner script'
+  )
+  t.alike(
+    compile(cd('/work'), mux),
+    { cwd: '/work', command: 'mux' },
+    'before it: the PTY starts there'
+  )
+  t.absent(launch.canRemove(steps(mux, ssh('box')), 0, LINUX), 'SSH cannot lose its wrapper')
 })

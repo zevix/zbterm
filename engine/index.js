@@ -126,6 +126,8 @@ const ARCHIVE_PROFILES = {
 class SessionEngine extends EventEmitter {
   constructor(opts = {}) {
     super()
+    // A scheduled timeline.json write that failed (scheduleTimelineFlush).
+    this._timelineFlushError = (err) => this.emit('engine:error', EngineError.from(err).toJSON())
     const base = opts.userData || path.join(os.tmpdir(), 'zbterm-dev')
     this.profileManager =
       opts.profileManager || new ProfileManager(path.join(base, 'zbterm-profiles'))
@@ -288,8 +290,13 @@ class SessionEngine extends EventEmitter {
     try {
       if (method === 'ping') return { ok: true, pong: true }
       if (method === 'session.create') return await this.createSession(args)
-      if (method === 'session.extend') return await this.extendSession(args.sessionId, args)
-      if (method === 'session.open') return await this.openSession(args.sessionId, args)
+      if (method === 'session.extend') {
+        return lazyTimeline(await this.extendSession(args.sessionId, args), args)
+      }
+      if (method === 'session.open') {
+        return lazyTimeline(await this.openSession(args.sessionId, args), args)
+      }
+      if (method === 'session.timeline') return await this.timelineSlice(args)
       if (method === 'session.close') return await this.closeSession(args.sessionId)
       if (method === 'session.delete') return await this.deleteSession(args.sessionId)
       if (method === 'session.rename') return await this.renameSession(args.sessionId, args.name)
@@ -306,7 +313,9 @@ class SessionEngine extends EventEmitter {
       if (method === 'session.setHd') return this.setHd(args.sessionId, args.enabled)
       if (method === 'session.removeHd') return await this.removeHd(args.sessionId)
       if (method === 'session.clearCaches') return await this.clearCaches(args.sessionId)
-      if (method === 'player.open') return await this.openPlayer(args.sessionId)
+      if (method === 'player.open') {
+        return lazyTimeline(await this.openPlayer(args.sessionId), args)
+      }
       if (method === 'player.seek') return await this.playerSeek(args.sessionId, args.tsMs)
       if (method === 'player.play') {
         return this.playerPlay(args.sessionId, args.speed, args.collapse)
@@ -755,6 +764,23 @@ class SessionEngine extends EventEmitter {
     })
   }
 
+  // `session.timeline` (261125_speed-and-keys P3): a slice of the timeline a
+  // lazy open left out. Lock-free for a store that is held (live, joined,
+  // open in a player), so a slice never waits behind a seek; else the store
+  // is opened for the read. The caller's last cached entry is checked
+  // against the engine's at `from - 1`: a timeline that was cleared or
+  // rebuilt since answers `reset: true` with entries from 0 (design F4).
+  async timelineSlice(args = {}) {
+    const sessionId = args.sessionId
+    if (!sessionId) throw new EngineError(CODES.E_INTERNAL, 'Session id is required')
+    const held =
+      this.sessions.get(sessionId) ||
+      this.remoteSessions.get(sessionId) ||
+      this.players.get(sessionId)
+    if (held && held.store) return sliceTimeline(held.store.timeline, args)
+    return await this._withStore(sessionId, async (store) => sliceTimeline(store.timeline, args))
+  }
+
   async extendSession(sessionId) {
     if (!sessionId) throw new EngineError(CODES.E_INTERNAL, 'Session id is required')
     // A shell that just exited stays registered until _onPtyExit has closed
@@ -1186,7 +1212,7 @@ class SessionEngine extends EventEmitter {
     runtime.appendQueue = runtime.appendQueue
       .then(() => runtime.store.appendResize(cols, rows, { hd: runtime.hd, tsMs }))
       .then(() => runtime.archiveMirror.resize(cols, rows))
-      .then(() => runtime.store.flushTimeline())
+      .then(() => runtime.store.scheduleTimelineFlush(this._timelineFlushError))
     // Mid-restore the resize is queued behind the replay like live output;
     // the pty already has the new size, so do not hold the caller for it.
     if (runtime.restoring) return true
@@ -1934,11 +1960,12 @@ class SessionEngine extends EventEmitter {
       .then(() => runtime.archiveMirror.write(data.toString('utf8')))
       .then(async () => {
         // When appends queue up (a flood), only the newest one queued
-        // rewrites timeline.json and tells viewers, for all of them at once;
-        // one rewrite of the whole file and one timeline message per packet
-        // was most of what kept the queue behind.
+        // tells viewers, for all of them at once. timeline.json is the whole
+        // timeline: it is rewritten at most once a second (exit, close and
+        // shutdown flush it at once; a load catches a stale file up from the
+        // log), never per packet (261125 P2b).
         if (seq !== runtime.appendSeq) return
-        await runtime.store.flushTimeline()
+        runtime.store.scheduleTimelineFlush(this._timelineFlushError)
         this.share.broadcastTimeline(sessionId)
       })
       .catch((err) => this.emit('engine:error', EngineError.from(err).toJSON()))
@@ -3135,6 +3162,41 @@ function isFontSize(value) {
  * instead of an error. The ceiling bounds the cell allocation a caller can ask
  * the core to make.
  */
+// `timeline: 'lazy'` on session.open, session.extend and player.open
+// (261125_speed-and-keys P3, design Q-2): the answer carries the timeline's
+// length instead of the timeline, which the caller reads in slices with
+// `session.timeline`. Without the option the answer is as it always was.
+function lazyTimeline(result, args) {
+  if (!args || args.timeline !== 'lazy' || !result || typeof result !== 'object') return result
+  if (!('timeline' in result)) return result
+  const { timeline, ...rest } = result
+  return { ...rest, timelineLength: Array.isArray(timeline) ? timeline.length : 0 }
+}
+
+const TIMELINE_SLICE_DEFAULT = 10000
+const TIMELINE_SLICE_MAX = 50000
+
+function sliceTimeline(timeline, args = {}) {
+  const list = Array.isArray(timeline) ? timeline : []
+  const length = list.length
+  let from = Number.isInteger(args.from) && args.from > 0 ? args.from : 0
+  const limit =
+    Number.isInteger(args.limit) && args.limit > 0
+      ? Math.min(args.limit, TIMELINE_SLICE_MAX)
+      : TIMELINE_SLICE_DEFAULT
+  let reset = false
+  if (from > 0) {
+    const prev = from <= length ? list[from - 1] : null
+    const tsDiffers = Number.isFinite(args.lastTsMs) && (!prev || prev.tsMs !== args.lastTsMs)
+    const seqDiffers = Number.isFinite(args.lastSeq) && (!prev || prev.seq !== args.lastSeq)
+    if (!prev || tsDiffers || seqDiffers) {
+      reset = true
+      from = 0
+    }
+  }
+  return { entries: list.slice(from, from + limit), from, length, reset }
+}
+
 function viewportFrom(args = {}) {
   const { cols, rows } = args
   const unset = (value) => value === undefined || value === null || value === 0

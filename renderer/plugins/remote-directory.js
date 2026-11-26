@@ -42,7 +42,8 @@
     static icon = 'fa-folder-tree'
 
     static isAvailable(ctx) {
-      return ctx.scope.kind === 'ssh'
+      // Also inside a same-machine wrapper opened after SSH.
+      return ctx.scope.machine.kind === 'ssh'
     }
 
     static defaults() {
@@ -116,8 +117,8 @@
       // Read when asked, not when the step was drawn: the SSH step may have
       // been edited since.
       const ctx = ui.context()
-      const target = ctx.scope.data.target
-      const sshError = ctx.scope.owner.validate(ctx)
+      const target = ctx.scope.machine.data.target
+      const sshError = ctx.scope.machine.owner.validate(ctx)
       // Whatever was asked before is out of date from here on.
       const request = (this._request = {})
       browser.hidden = false

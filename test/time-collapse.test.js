@@ -3,6 +3,8 @@
 const test = require('brittle')
 const {
   buildTimeCollapseMap,
+  timeCollapseBase,
+  extendTimeCollapseBase,
   retargetTimeCollapseMap,
   realToCompressed,
   compressedToReal,
@@ -106,4 +108,41 @@ test('live points keep a burst to its first and last time', (t) => {
   const all = buildTimeCollapseMap([0, 10, 20, 30, 1000, 1010, 4000], 0, 4000, TH)
   const kept = buildTimeCollapseMap(points, 0, 4000, TH)
   t.is(kept.compressedSpan, all.compressedSpan)
+})
+
+// 261125_speed-and-keys P2: a running session's map from the timeline's
+// cached breakpoints plus its live output is the full build's map.
+test('a map extended from a base equals the full build', (t) => {
+  let seed = 7
+  const rand = (n) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed % n
+  }
+  for (let round = 0; round < 50; round++) {
+    const startTs = 1000 + rand(3) * 500
+    const timeline = []
+    let ts = 0
+    for (let i = 0; i < 40; i++) {
+      ts += rand(4) === 0 ? 3000 + rand(9000) : rand(600)
+      timeline.push(ts)
+    }
+    const live = []
+    let liveTs = ts + rand(2)
+    for (let i = 0; i < 10; i++) {
+      liveTs += rand(3) === 0 ? 2500 + rand(5000) : rand(300)
+      live.push(liveTs)
+    }
+    const endTs = liveTs + rand(4000)
+    const base = timeCollapseBase(timeline, startTs, TH)
+    const extended = extendTimeCollapseBase(base, live, endTs)
+    const full = buildTimeCollapseMap(timeline.concat(live), startTs, endTs, TH)
+    t.alike(extended, full, `round ${round}`)
+  }
+})
+
+test('an extended map defers to the full build when it cannot be exact', (t) => {
+  const base = timeCollapseBase([0, 1000, 5000], 0, TH)
+  t.is(extendTimeCollapseBase(base, [6000], 5000), null, 'end not after the last point')
+  t.is(extendTimeCollapseBase(base, [3000], 9000), null, 'a live point inside the base')
+  t.ok(extendTimeCollapseBase(base, [5000, 6000], 9000), 'a live point equal to the last')
 })

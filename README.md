@@ -66,26 +66,33 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   terminal, and does nothing while a dialog is open). Its text filters the
   session list by name and highlights every match in the selected session's
   buffer, scrollback and full-screen programs included (past 2000 matching
-  rows, those within three screens of the view), with the position "M / N"
-  in the status line (M bold, both in cyan; "(In terminal Enter/Shift+Enter,
-  in profiles ⬆️/⬇️ )"); the part of each name under "Session name matches"
-  that matches is cyan. Two small toggles just left of the box's "x", "Aa"
-  (Match case) and "ab" (Match whole word: no letter, digit or "_" may touch
-  the match), narrow every one of these searches; they are cyan while on and
-  are remembered across restarts.
-  Enter and Shift+Enter step to the next and previous match and scroll it
-  into view, and Esc (or the blue "x" at the box's right end, shown while the
-  box has the focus or holds text) clears the box, the highlights and the
-  filter and returns to the terminal; while the box holds text, Esc ends the
-  search from the terminal too (it reaches the shell again once the search is
-  over). Up and Down (or Ctrl+PgUp and Ctrl+PgDn)
-  select the previous and next session in the list, marked with a green
-  border, while the focus stays in the box; an ended session reached this way
-  is only shown, not resumed, with the "Press ^R or Enter to resume the
-  session" hint, and Ctrl+R in the box (or Enter, while that hint shows)
-  resumes it. In playback it searches the frame on screen and follows
-  each seek. While the side pane is shown, the box is as wide as the pane and,
-  under the name matches, a "Session buffer matches" section lists every live
+  rows, those within three screens of the view). The part of each name under
+  "Session name matches" that matches is cyan. Two small toggles just left of
+  the box's "x", "Aa" (Match case) and "ab" (Match whole word: no letter, digit
+  or "_" may touch the match), narrow every one of these searches; they are
+  cyan while on and are remembered across restarts.
+  The keyboard has two states. *Search* lasts while the box has the focus:
+  the status line then always reads "Search: ⬆️/⬇️ profiles · Enter/Shift+Enter
+  matches · Esc exit", with the position "[M / N]" in front when the shown
+  session has matches (M bold, both in cyan) and "· ^R resume · ^D delete" at
+  the end while it is an ended one. Enter and Shift+Enter step to the older and
+  newer match and scroll it into view, and nothing else (they never resume);
+  Up and Down (or Ctrl+PgUp and Ctrl+PgDn) move to the previous and next row
+  as drawn, without wrapping, marked with a green border, showing each session
+  (an ended one only shown, not resumed, with the "Press ^R or Enter to resume
+  the session, ^D to delete it" hint); Ctrl+R resumes and Ctrl+D deletes the
+  ended session shown; a click on a row shows it. All of these, a toolbar
+  button, Ctrl+Shift+B and a dialog or menu opened meanwhile keep the focus
+  in the box. While the walk has left the first row its heading reads "Search
+  started here" instead of "Current session". Esc (or the blue "x" at the
+  box's right end) clears the box, the highlights and the filter and returns
+  to the terminal. *Terminal* is every other moment: the list is plain and no
+  match is highlighted. A click in the terminal (or anything else that gives
+  it the focus), a new or joined session and Ctrl+1 to Ctrl+9 end the search
+  too, but keep its text: the box's next focus puts it back, selected
+- In playback the search covers the frame on screen and follows each seek.
+  While the side pane is shown, the box is as wide as the pane and, under the
+  name matches, a "Session buffer matches" section lists every live
   session (own or joined) whose buffer holds the text, most matches first,
   with "N matches" in cyan; rows appear as each session's search finishes.
   With the pane collapsed, the box is as wide as the top bar's left group and
@@ -101,9 +108,9 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - High-res mode for more frequent screen updates, togglable at any time
 - Encryption of data at rest and in transit
 - Ctrl+PgUp and Ctrl+PgDn outside the search box switch to the previous and
-  next session in the list, scrolling the list so the selected one stays in
-  view; an ended session reached that way is only shown, not resumed, with
-  the same hint
+  next session in the list as drawn, the whole list, wrapping round at either
+  end, scrolling the list so the selected one stays in view; an ended session
+  reached that way is only shown, not resumed, with the same hint
 - Drag a session to another place in the list: over a row's left icon a drag
   handle shows. Pressing it lifts the row out of the list; it follows the
   mouse anywhere in the window, a bold dashed line marks the gap it will land
@@ -135,9 +142,12 @@ For detailed architecture see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - The settings menu's "Edit new profile defaults…" items open the profile
   dialog with its Advanced section shown
 - Ended sessions can be resumed at any time by the host: Ctrl+R (or
-  Enter) in an offline session, the Resume button, or Resume in the profile's
+  Enter in the terminal, not in the search box) in an offline session, the Resume button, or Resume in the profile's
   right-click menu. The new shell starts on a fresh line
   under the old screen; a full-screen program redraws in place
+- Ctrl+D in an ended session (wherever Ctrl+R would resume it) deletes it,
+  after the usual confirmation, and shows the next session in the list, not
+  resumed; in a live session Ctrl+D is the program's, as always
 - Unrecorded sessions: untick "Record session" in the New or Copy dialog and
   the session runs live with nothing of its output stored. It cannot be
   shared, played back or copied with history (those controls read "Not
@@ -356,10 +366,12 @@ leaves you with a `zbterm` that cannot start. Always run `npm install` from
 the repo root.
 
 **Changing the logo.** [`renderer/logo-ascii.js`](renderer/logo-ascii.js) is the
-single source of truth for the mark — the blue Freenet rabbit's head on the
-green Pear pear: a grid of cells (`.` background, `-` scanline grey, `G` accent
-green, `B` Freenet blue) plus the palette in `STARTUP_LOGO_COLORS`. The
-terminal splash draws it directly. Edit it, then run:
+single source of truth for the mark — the head of the blue Freenet rabbit on the
+green striped Pear pear, which doubles as the rabbit's body. It is a grid of
+square pixels, one character each: `STARTUP_LOGO_CELLS` names the palette entry
+a character paints (a space is transparent) and `STARTUP_LOGO_COLORS` holds the
+palette. The terminal splash draws it directly, two pixel rows to a character
+cell with half-block glyphs, so keep the row count even. Edit it, then run:
 
 ```sh
 npm run icons
@@ -370,7 +382,7 @@ That regenerates every other form of the logo — the vector
 `build/icon/`, the 512px master `build/icon.png`, the Windows `build/icon.ico`
 and the macOS `build/icon.icns`. None of those are edited by hand. Palette
 colours are read out of `STARTUP_LOGO_COLORS` rather than hardcoded, so a
-recoloured logo propagates on its own. `npm run logo` prints the result in your
+recoloured logo propagates on its own (the UI's accent green is its `green`). `npm run logo` prints the result in your
 terminal. Building the `.ico` needs ImageMagick (`magick`); everything else
 needs only the `sharp` devDependency.
 
@@ -535,6 +547,17 @@ starting point:
 
 An id must be unique: one a built-in or another file already holds is
 refused. The built-in ids are `cd`, `shell`, `ssh` and `ssh-cd`.
+
+**Having Claude write one.** The Plugins dialog's **Install the Claude skill**
+button copies the `zbterm-plugin` skill into `~/.claude/skills/zbterm-plugin/`
+(under `$CLAUDE_CONFIG_DIR` when that is set) for
+[Claude Code](https://claude.com/claude-code). Then ask Claude Code for a
+plugin ("make a ZBTerm plugin that attaches to a docker container") or type
+`/zbterm-plugin`: it writes the file, checks what its step compiles to, puts
+it in the directory above and ticks it in `commands.json`. The skill carries a
+copy of the app's launch code, so press the button again after an update. In
+a ZBTerm checkout the same skill is the project's own
+(`.claude/skills/zbterm-plugin`, a link to `renderer/plugins/skill/`).
 
 ## Storage <a name="storage"></a>
 

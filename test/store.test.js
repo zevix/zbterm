@@ -292,6 +292,110 @@ test('store timeline flushes tolerate concurrent callers in the same millisecond
   )
 })
 
+// 261125 P2b: a live recording rewrote the whole timeline.json per packet.
+test('store live timeline flushes are coalesced to one write a second, the last one kept', async (t) => {
+  const dir = await temp()
+  const device = await loadOrCreateLocalDevice({ root: dir })
+  const store = await SessionStore.create(path.join(dir, 'corestore'), device, {
+    name: 'test',
+    cols: 80,
+    rows: 24
+  })
+  const timelinePath = path.join(store.dir, 'timeline.json')
+  const rename = fs.promises.rename
+  const writes = []
+  fs.promises.rename = function (from, to) {
+    if (to === timelinePath) writes.push(Date.now())
+    return rename.apply(this, arguments)
+  }
+  t.teardown(async () => {
+    fs.promises.rename = rename
+    await store.close().catch(() => {})
+    await fs.promises.rm(dir, { recursive: true, force: true })
+  })
+
+  const started = Date.now()
+  let appended = 0
+  while (Date.now() - started < 2500) {
+    await store.appendData(b4a.from('line ' + appended++ + '\r\n'))
+    store.scheduleTimelineFlush()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  const elapsed = Date.now() - started
+  t.ok(appended > 100, `a burst of ${appended} appends`)
+  t.ok(
+    writes.length <= Math.ceil(elapsed / 1000) + 1,
+    `${writes.length} writes of timeline.json in ${elapsed} ms`
+  )
+  for (let i = 1; i < writes.length; i++) {
+    t.ok(writes[i] - writes[i - 1] >= 900, `writes ${writes[i] - writes[i - 1]} ms apart`)
+  }
+
+  // The trailing write is guaranteed without a close.
+  await new Promise((resolve) => setTimeout(resolve, 1200))
+  const trailing = JSON.parse(await fs.promises.readFile(timelinePath, 'utf8'))
+  t.alike(trailing, store.timeline, 'the trailing write holds the whole timeline')
+
+  await store.appendData(b4a.from('last'))
+  store.scheduleTimelineFlush()
+  const length = store.log.length
+  await store.close()
+  const final = JSON.parse(await fs.promises.readFile(timelinePath, 'utf8'))
+  t.alike(final, store.timeline, 'after close the file equals the in-memory timeline')
+  t.is(final[final.length - 1].seq, length)
+})
+
+test('store catches a timeline.json left behind the log up from the log', async (t) => {
+  const dir = await temp()
+  const device = await loadOrCreateLocalDevice({ root: dir })
+  const root = path.join(dir, 'corestore')
+  const store = await SessionStore.create(root, device, { name: 'test', cols: 80, rows: 24 })
+  t.teardown(() => fs.promises.rm(dir, { recursive: true, force: true }))
+  for (let i = 0; i < 20; i++) await store.appendData(b4a.from('chunk ' + i))
+  const sessionId = store.sessionId
+  const expected = store.timeline.slice()
+  await store.close()
+
+  // A crash between two coalesced writes: the file holds an older timeline,
+  // with a mark the log does not have, so a rebuild would show.
+  const timelinePath = path.join(root, sessionId, 'timeline.json')
+  const stale = expected.slice(0, 8).map((entry) => ({ ...entry, stale: true }))
+  await fs.promises.writeFile(timelinePath, JSON.stringify(stale))
+
+  const read = []
+  const readRange = SessionStore.prototype.readRange
+  SessionStore.prototype.readRange = function (from, to, opts) {
+    read.push([from, to])
+    return readRange.call(this, from, to, opts)
+  }
+  let reopened
+  try {
+    reopened = await SessionStore.open(root, sessionId, device)
+  } finally {
+    SessionStore.prototype.readRange = readRange
+  }
+  t.alike(
+    reopened.timeline.map((entry) => entry.seq),
+    expected.map((entry) => entry.seq),
+    'every logged packet is in the timeline'
+  )
+  t.alike(
+    reopened.timeline.map((entry) => entry.tsMs),
+    expected.map((entry) => entry.tsMs)
+  )
+  t.ok(
+    reopened.timeline.slice(0, 8).every((entry) => entry.stale),
+    'the part on disk is kept, not rebuilt'
+  )
+  t.alike(read, [[9, expected.length]], 'only the missing range is read')
+  await reopened.close()
+  t.alike(
+    JSON.parse(await fs.promises.readFile(timelinePath, 'utf8')).map((entry) => entry.seq),
+    expected.map((entry) => entry.seq),
+    'the caught-up timeline is written back'
+  )
+})
+
 async function appendRawPacket(store, plain) {
   const seq = store.log.length + 1
   const full = {

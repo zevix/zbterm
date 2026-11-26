@@ -461,3 +461,89 @@ test('C9: an unreadable commands.json is reported and kept as .bad on Save (F9)'
   fs.rmSync(choice)
   t.alike(readChoiceState(dir), { choice: { builtin: null, commands: [] }, error: '' })
 })
+
+// The "zbterm-plugin" Claude skill: one source (renderer/plugins/skill/), the
+// project's own skill through a link, and what the Plugins dialog installs.
+test('the Claude skill: linked into the project, installed self-contained', (t) => {
+  const { spawnSync } = require('child_process')
+  const { skillTarget, skillFiles } = commandPlugins._test
+  const source = path.join(__dirname, '..', 'renderer', 'plugins', 'skill')
+  const link = path.join(__dirname, '..', '.claude', 'skills', 'zbterm-plugin')
+  t.is(fs.realpathSync(link), fs.realpathSync(source), 'the project skill is the shipped one')
+  t.ok(/^---\nname: zbterm-plugin\n/.test(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')))
+
+  t.is(skillTarget({}, '/home/u'), path.join('/home/u', '.claude', 'skills', 'zbterm-plugin'))
+  t.is(
+    skillTarget({ CLAUDE_CONFIG_DIR: '/c' }, '/home/u'),
+    path.join('/c', 'skills', 'zbterm-plugin')
+  )
+
+  const names = skillFiles().map(([, to]) => to.split(path.sep).join('/'))
+  for (const name of [
+    'SKILL.md',
+    'scripts/zbterm-plugin.js',
+    'lib/launch-core.js',
+    'lib/index.js',
+    'lib/ssh.js',
+    'lib/samples/sample_custom_command.js'
+  ]) {
+    t.ok(names.includes(name), name)
+  }
+
+  const home = scratch(t)
+  const target = path.join(home, '.claude', 'skills', 'zbterm-plugin')
+  const first = commandPlugins.installSkill(target)
+  t.is(first.dir, target)
+  t.is(first.updated, false)
+  t.is(first.files, names.length)
+  // Again: the shipped files are replaced, the user's own file stays.
+  fs.writeFileSync(path.join(target, 'SKILL.md'), 'stale')
+  fs.writeFileSync(path.join(target, 'notes.txt'), 'mine')
+  t.is(commandPlugins.installSkill(target).updated, true)
+  t.ok(
+    fs.readFileSync(path.join(target, 'SKILL.md'), 'utf8').startsWith('---\nname: zbterm-plugin')
+  )
+  t.is(fs.readFileSync(path.join(target, 'notes.txt'), 'utf8'), 'mine')
+
+  // The installed script runs on its own `lib/`, outside the sources: it
+  // checks a plugin, then installs and enables it in a new directory, which
+  // it seeds with the samples as the app would.
+  const script = path.join(target, 'scripts', 'zbterm-plugin.js')
+  const plugins = path.join(home, 'plugins', 'commands')
+  const run = (...args) =>
+    spawnSync(process.execPath, [script, ...args, '--dir', plugins], {
+      cwd: home,
+      env: { ...process.env, ZBTERM_REPO: '' },
+      encoding: 'utf8',
+      timeout: 30000
+    })
+  const mine = path.join(home, 'my_tmux.js')
+  fs.writeFileSync(
+    mine,
+    fs
+      .readFileSync(path.join(SAMPLES_DIR, 'tmux_session.js'), 'utf8')
+      .replace('sample-tmux-session', 'my-tmux')
+  )
+  const checked = run('check', mine)
+  t.is(checked.status, 0, checked.stderr)
+  t.ok(checked.stdout.includes('command: tmux new-session -A -s work-2'), 'compiles the step')
+  const bad = path.join(home, 'bad.js')
+  fs.writeFileSync(bad, fs.readFileSync(mine, 'utf8').replace('my-tmux', 'shell'))
+  t.is(run('check', bad).status, 1, 'a taken id fails the check')
+
+  const installed = run('install', mine)
+  t.is(installed.status, 0, installed.stderr)
+  t.alike(readChoice(plugins).commands, ['sample_custom_command.js', 'my_tmux.js'])
+  t.alike(
+    fs
+      .readdirSync(plugins)
+      .filter((file) => file.endsWith('.js'))
+      .sort(),
+    ['my_tmux.js', ...sampleFiles()]
+  )
+  if (process.platform !== 'win32') {
+    t.is(fs.statSync(path.join(plugins, 'my_tmux.js')).mode & 0o777, 0o644)
+  }
+  t.is(run('disable', 'my_tmux.js').status, 0)
+  t.alike(readChoice(plugins).commands, ['sample_custom_command.js'])
+})

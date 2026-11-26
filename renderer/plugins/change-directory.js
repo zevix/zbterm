@@ -1,6 +1,7 @@
 // "Change Directory": where the local shell starts, or a `cd` once commands
-// have already run. Local only: inside another scope (after SSH, say) that
-// scope's own directory plugin takes over.
+// have already run. Local only: on another machine (after SSH, say) that
+// scope's own directory plugin takes over. Inside a same-machine wrapper the
+// directory is the wrapper's `scope.cwd` (launch-core.js LaunchScope).
 ;(() => {
   const node = typeof module === 'object' && module && module.exports
   const launch = node ? require('./launch-core.js') : window.zbtermLaunch
@@ -11,7 +12,7 @@
     static icon = 'fa-folder-open'
 
     static isAvailable(ctx) {
-      return ctx.scope.kind === 'local'
+      return ctx.scope.machine.kind === 'local'
     }
 
     static defaults() {

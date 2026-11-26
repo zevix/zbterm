@@ -692,8 +692,20 @@ test('buffer-search: the matcher loads before app.js; the count sits in the box;
   }
   t.ok(js.includes('allowProposedApi: true'), 'decorations are proposed API')
   t.ok(js.includes('window.zbtermScanBuffer'), 'app.js uses the shared matcher')
-  t.ok(js.includes("event.key === 'Escape' && !event.shiftKey"), 'Esc in the box')
-  t.ok(js.includes('event.preventDefault()\n        clearSearch()'), 'no native type=search clear')
+  // Changed 2026-11-25 (261125_speed-and-keys R8): the box's keys are read by
+  // renderer/session-keys.js::searchBoxKey; the box prevents the default of
+  // every key it handles, Esc included, before ending the search.
+  const keys = await fs.promises.readFile(path.join(rendererDir, 'session-keys.js'), 'utf8')
+  t.ok(
+    keys.includes("if (event.shiftKey) return null\n    if (event.key === 'Escape') return 'exit'"),
+    'Esc in the box'
+  )
+  t.ok(
+    /if \(!action\) return\n\s+event\.preventDefault\(\)[\s\S]{0,200}\} else if \(action === 'exit'\) \{\n\s+clearSearch\(\)/.test(
+      js
+    ),
+    'no native type=search clear'
+  )
 })
 
 test('buffer-search: the buffer-match section, its cyan in both themes, alternate-screen highlights', async (t) => {
@@ -717,11 +729,12 @@ test('buffer-search: the buffer-match section, its cyan in both themes, alternat
   // Changed 2026-11-13 (261113_ui-polish R3, R13): only "Other - unmatched sessions" and the
   // reorder guard's bookkeeping follow the buffer section.
   // 261121: markSearchCursor() now runs between the unmatched section and the reorder guard.
+  // Changed 2026-11-25 (261125_speed-and-keys R9, F12): the search line is redrawn last.
   t.ok(
     body
       .trim()
       .endsWith(
-        'renderSessionBufferSection()\n    if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)\n    markSearchCursor()\n    noteSessionRowOrder()'
+        'renderSessionBufferSection()\n    if (searching && crossSessionShown()) renderUnmatchedSessionSection(current, rows)\n    markSearchCursor()\n    noteSessionRowOrder()\n    // 261125 R9, F12: every list redraw redraws the search line.\n    if (state.searchActive) updateSearchCount()'
       ),
     'the section is rendered last'
   )
@@ -752,10 +765,14 @@ test('buffer-search: a terminal click ends the search and keeps its text; the se
   // R11: while searching, "Current session" (the selected one, always), then
   // "Session name matches" (only when there are some), then the buffer section.
   const render = body('renderSessions')
-  t.ok(render.includes("sessionSectionTitle('Current session')"), 'current session heading')
+  // Changed 2026-11-25 (261125_speed-and-keys R11): the top heading is
+  // "Current session" only while its row is the one shown, else "Search
+  // started here" (renderer/session-keys.js::currentHeading).
+  const heading = 'sessionKeys.currentHeading(current.sessionId, state.selectedId)'
+  t.ok(render.includes(heading), 'current session heading')
   t.ok(render.includes("sessionSectionTitle('Session name matches')"), 'name heading')
   t.ok(
-    render.indexOf("'Current session'") < render.indexOf("'Session name matches'"),
+    render.indexOf(heading) < render.indexOf("'Session name matches'"),
     'current before name matches'
   )
   t.absent(js.includes('selectedFirst('), 'no reordering of the rows')
@@ -824,9 +841,13 @@ test('261121: name matches cyan, Esc ends a search anywhere, N/M in the status',
     /searchIsOn\(\) &&\s+document\.activeElement !== els\.search/.test(js),
     'R3: outside the box'
   )
+  // Changed 2026-11-25 (261125_speed-and-keys R9): the hint is replaced by
+  // the search line, drawn from renderer/session-keys.js::searchStatus.
+  const keys = await fs.promises.readFile(path.join(dir, 'session-keys.js'), 'utf8')
+  t.absent(js.includes('(In terminal Enter/Shift+Enter'), 'R4: the old hint is gone')
   t.ok(
-    js.includes("'(In terminal Enter/Shift+Enter, in profiles ⬆️/⬇️ )'"),
-    'R4: the hint as the user wrote it'
+    keys.includes("'Search: ⬆️/⬇️ profiles · Enter/Shift+Enter matches · Esc exit'"),
+    'R4 → 261125 R9: the search line names the state and its keys'
   )
   t.ok(js.includes('state.searchCountStatus = text'), 'R4: the count goes to the status line')
 })
@@ -888,7 +909,10 @@ test('261121: M / N styled, match case and whole word toggles, loading profiles'
     const at = html.indexOf(`${sel} {`)
     return at < 0 ? '' : html.slice(at, html.indexOf('}', at))
   }
-  t.ok(js.includes('const text = `${index} / ${total} ${SEARCH_COUNT_HINT}`'), 'R14: "M / N"')
+  // Changed 2026-11-25 (261125_speed-and-keys R9): "[M / N]" in front of the
+  // search line (renderer/session-keys.js::searchStatus).
+  const keys = await fs.promises.readFile(path.join(dir, 'session-keys.js'), 'utf8')
+  t.ok(keys.includes('`[${position[0]} / ${position[1]}] ${keys}`'), 'R14: "M / N"')
   t.ok(/match-cyan[\s\S]*font-weight: 700/.test(rule('.status .search-pos-index')), 'R14: M')
   t.ok(/match-cyan[\s\S]*font-weight: 400/.test(rule('.status .search-pos-total')), 'R14: N')
   for (const [id, tip] of [
@@ -914,4 +938,74 @@ test('261121: M / N styled, match case and whole word toggles, loading profiles'
     ),
     'R16: the list does not wait for the share backends and peer records'
   )
+})
+
+test('speed-and-keys P4: Ctrl+D beside Ctrl+R, the toast names both', async (t) => {
+  const rendererDir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(rendererDir, 'app.js'), 'utf8')
+  const html = await fs.promises.readFile(path.join(rendererDir, 'index.html'), 'utf8')
+  t.ok(
+    js.includes(
+      "const RESUME_HINT_TOAST = 'Press ^R or Enter to resume the session, ^D to delete it'"
+    ),
+    'R4: the resume toast names ^D'
+  )
+  t.ok(html.includes('<script src="session-keys.js"></script>'), 'index.html loads the guard')
+  t.ok(html.indexOf('session-keys.js') < html.indexOf('<script src="app.js">'), 'before app.js')
+  t.ok(
+    js.includes("(offlineKey === 'r' || offlineKey === 'd') &&"),
+    'Ctrl+D shares the Ctrl+R branch'
+  )
+  t.ok(js.includes('!sidePaneBlocked() &&'), 'a dialog leaves both keys alone')
+  t.ok(js.includes('if (!target || event.repeat) return'), 'F1/F2: undrawn or held: nothing')
+  t.ok(js.includes('deleteSessionByKey(target, { keepFocus })'), 'the id taken at the keypress')
+  t.ok(js.includes('await selectSession(next, { extend: false, keepFocus })'), 'R5: not resumed')
+})
+
+// 261125_speed-and-keys P5 (R6-R11): string-level checks of the two search
+// states; the behaviour is proved on a packaged build by
+// docs/projects/261125_speed-and-keys/acceptance/R6_search_states.sh.
+test('261125: two search states, the focus kept in the box, one meaning per key', async (t) => {
+  const dir = path.join(__dirname, '..', 'renderer')
+  const js = await fs.promises.readFile(path.join(dir, 'app.js'), 'utf8')
+  const body = (name) => {
+    const at = js.search(new RegExp(`\\n  (async )?function ${name}\\(`))
+    return at < 0 ? '' : js.slice(at, js.indexOf('\n  }\n', at))
+  }
+  t.ok(js.includes('searchActive: false'), 'R6: one flag')
+  // R6: the terminal's focusin ends the search, the flag dropped first (no recursion).
+  t.ok(
+    /els\.terminal\.addEventListener\('focusin', \(\) => \{\s+if \(state\.searchActive\) leaveSearchForTerminal\(\)/.test(
+      js
+    ),
+    'R6: focusin'
+  )
+  const clear = body('clearSearch')
+  t.ok(clear.indexOf('state.searchActive = false') >= 0, 'R6: clearSearch drops the flag')
+  t.ok(
+    clear.indexOf('state.searchActive = false') < clear.indexOf('state.term.focus()'),
+    'before the focus'
+  )
+  // F9: the blur rule; R7: the focus returns go to the box.
+  t.ok(js.includes('scheduleSearchFocusReturn()'), 'F9: the blur rule')
+  t.ok(body('focusPrimaryTarget').includes('state.searchActive && els.search'), 'R7: focus returns')
+  t.ok(
+    js.includes('if (!options.keepFocus && !state.searchActive) state.term.focus()'),
+    'R7: a switch'
+  )
+  t.ok(body('clickSessionRow').includes('{ keepFocus: true, extend: false }'), 'R7: a row click')
+  // R8 (Q-1, changing 261115 R10's box half): Enter in the box never resumes.
+  t.absent(js.includes("state.toasts.has('resume-hint') && isOfflineResumable()"), 'R8: no resume')
+  t.ok(js.includes('sessionKeys.searchBoxKey(event)'), 'R8: the box keys')
+  // F11: the exits.
+  t.ok(body('createSession').includes('endSearchForTerminal()'), 'F11: a new session')
+  t.ok(body('joinSharedSession').includes('endSearchForTerminal()'), 'F11: a join')
+  // R10: outside search the drawn rows, wrapping.
+  t.ok(body('switchSessionRelative').includes('sessionRowsInOrder()'), 'R10: drawn rows')
+  t.ok(
+    body('switchSessionRelative').includes('sessionKeys.wrapStep(ids, from, delta)'),
+    'R10: wraps'
+  )
+  // F14: an error outranks the search line.
+  t.ok(body('showError').includes('state.statusErrorShown = true'), 'F14')
 })

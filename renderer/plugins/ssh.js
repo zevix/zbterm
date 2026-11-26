@@ -293,7 +293,7 @@
     static isAvailable(ctx) {
       // One hop: a second SSH inside the first would need remote browsing
       // through a jump host. An ssh_config ProxyJump alias covers that case.
-      if (ctx.scope.kind !== 'local') return false
+      if (ctx.scope.machine.kind !== 'local') return false
       return !(ctx.facts.ssh && ctx.facts.ssh.available === false)
     }
 

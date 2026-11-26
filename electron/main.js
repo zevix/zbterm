@@ -1720,6 +1720,8 @@ ipcMain.handle('zbterm:invoke', async (evt, method, args) => {
       sendToAll('zbterm:event', { name: 'commandPlugins:changed', data: choice })
       return choice
     }
+    // The "zbterm-plugin" Claude skill, into ~/.claude/skills/.
+    if (method === 'app.commandPlugins.installSkill') return commandPlugins.installSkill()
     if (method === 'app.commandPlugins.open') {
       const error = await shell.openPath(commandPlugins.dir())
       if (error) throw new Error(error)

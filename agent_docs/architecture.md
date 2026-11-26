@@ -85,6 +85,13 @@ read it for the wiring; below are only the non-obvious facts.
   that directory is missing) and serves `app.commandPlugins.list/save/open`;
   the renderer runs the user's files with `new Function`, and a throwing file
   is caught in `launch-core.js::runFile`, never in the window's error handler.
+  `renderer/plugins/skill/` is the `zbterm-plugin` Claude skill (SKILL.md and
+  `scripts/zbterm-plugin.js`, a Node CLI, not renderer code): the project's
+  own skill through the link `.claude/skills/zbterm-plugin`, and what
+  `app.commandPlugins.installSkill` copies to `~/.claude/skills/zbterm-plugin/`
+  together with `lib/` = every `renderer/plugins/*.js` and `samples/`. The
+  script loads `lib/index.js` there, so `index.js` and what it requires must
+  stay loadable from a flat copy of that directory (relative requires only).
 - **A stall is usually the network, not the code, and the two look identical.**
   Exercise real replication against a local `hyperdht/testnet`
   (`test/backends/conformance-pear.test.js`'s pattern) or a throwaway local-mode

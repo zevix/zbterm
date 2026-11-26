@@ -985,6 +985,13 @@
         margin-left: auto;
       }
 
+      .plugins-dialog-skill {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 4px;
+      }
+
       /* C9: a commands.json that could not be read. */
       .plugins-dialog-choice-error {
         color: var(--danger, #e5534b);
@@ -1067,13 +1074,13 @@
         padding-top: 7px;
       }
 
-      /* A step inside another one's scope (the remote steps after SSH) sits
-         under it. */
-      .launch-step:not([data-scope='local']) > .session-editor-label {
-        padding-left: 14px;
+      /* A step inside another one's scope (the remote steps after SSH, the
+         steps a wrapper runs) sits under it, one level per scope. */
+      .launch-step:not([data-depth='0']) > .session-editor-label {
+        padding-left: calc(14px * var(--launch-depth, 1));
       }
 
-      .launch-step:not([data-scope='local']) > .session-editor-label::before {
+      .launch-step:not([data-depth='0']) > .session-editor-label::before {
         content: '\21B3\00A0';
         color: var(--muted);
       }
@@ -3382,6 +3389,8 @@
     <script src="buffer-search.js"></script>
     <script src="search-highlights.js"></script>
     <script src="live-stream.js"></script>
+    <script src="middle-click.js"></script>
+    <script src="session-keys.js"></script>
     <script src="demo-overlay.js"></script>
     <script src="plugins/launch-core.js"></script>
     <script src="plugins/change-directory.js"></script>
